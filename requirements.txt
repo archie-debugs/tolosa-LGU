@@ -1,0 +1,6 @@
+fastapi==0.110.0
+uvicorn==0.28.0
+flet==0.21.2
+sqlalchemy==2.0.28
+pydantic==2.6.4
+qrcode==7.4.2
