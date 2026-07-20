@@ -1,12 +1,17 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 import uuid
 import qrcode
 import io
+import re
 from fastapi.responses import StreamingResponse
 from .database import engine, Base, get_db
 from . import models
+
+# Import document parsing libraries
+from docx import Document as DocxDocument
+from pypdf import PdfReader
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
@@ -15,6 +20,86 @@ def get_password_hash(password):
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
+
+# Helper function to extract text from documents
+def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
+    """Extract text from .docx or .pdf files"""
+    text = ""
+    
+    if filename.lower().endswith('.docx'):
+        try:
+            doc = DocxDocument(io.BytesIO(file_bytes))
+            text = "\n".join([para.text for para in doc.paragraphs])
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error parsing DOCX: {str(e)}")
+    
+    elif filename.lower().endswith('.pdf'):
+        try:
+            pdf_reader = PdfReader(io.BytesIO(file_bytes))
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error parsing PDF: {str(e)}")
+    
+    else:
+        raise HTTPException(status_code=400, detail="Only .docx and .pdf files are supported")
+    
+    return text
+
+# Helper function to parse document content
+def parse_document_content(text: str) -> dict:
+    """Parse extracted text to extract title, item_type, and committee"""
+    lines = text.split('\n')
+    
+    # Determine item type
+    item_type = "Committee Report"  # default
+    text_upper = text.upper()
+    
+    if "ORDINANCE" in text_upper:
+        item_type = "Ordinance"
+    elif "RESOLUTION" in text_upper:
+        item_type = "Resolution"
+    
+    # Extract committee
+    committee = "General Committee"  # default
+    committee_patterns = [
+        r"committee\s+on\s+([^\n,]+)",
+        r"assigned\s+to\s*:\s*([^\n,]+)",
+        r"committee\s+of\s+([^\n,]+)",
+    ]
+    
+    for pattern in committee_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            committee = match.group(1).strip()
+            # Capitalize properly
+            committee = " ".join([word.capitalize() for word in committee.split()])
+            break
+    
+    # Extract title - get first substantial line after headers
+    title = "Untitled Document"
+    for line in lines:
+        line = line.strip()
+        # Skip empty lines and common headers
+        if line and len(line) > 5 and not any(header in line.upper() for header in 
+            ["ORDINANCE", "RESOLUTION", "COMMITTEE ON", "ASSIGNED TO", "PROPOSED", "BE IT"]):
+            title = line[:100]  # Limit to 100 chars
+            break
+    
+    # If title is still default, extract from document type lines
+    if title == "Untitled Document":
+        for line in lines:
+            line = line.strip()
+            if ("ORDINANCE" in line.upper() or "RESOLUTION" in line.upper()) and len(line) > 10:
+                title = line[:100]
+                break
+    
+    return {
+        "title": title,
+        "item_type": item_type,
+        "committee": committee
+    }
+
 
 # Auto-generate the SQLite database and empty tables on launch
 try:
@@ -62,6 +147,27 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
 
     return {"message": "Login successful", "username": user.username}
 
+# Route: Parse document template and extract metadata
+@app.post("/legislative/parse")
+async def parse_document(file: UploadFile = File(...)):
+    """Parse uploaded .docx or .pdf document to extract title, type, and committee"""
+    try:
+        file_bytes = await file.read()
+        
+        # Extract text from file
+        text = extract_text_from_file(file_bytes, file.filename)
+        
+        # Parse content
+        parsed_data = parse_document_content(text)
+        
+        return parsed_data
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error parsing document: {str(e)}")
+
+
 # Route 1: Register a new Legislative Document
 @app.post("/legislative/register")
 def register_item(title: str, item_type: str, committee: str, db: Session = Depends(get_db)):
@@ -75,7 +181,7 @@ def register_item(title: str, item_type: str, committee: str, db: Session = Depe
     db.add(new_item)
     db.commit()
     db.refresh(new_item)
-    return {"message": f"{item_type} Registered Successfully", "tracking_uuid": unique_id}
+    return {"message": f"{item_type} Registered Successfully", "id": new_item.id, "tracking_uuid": unique_id}
 
 # Route 2: Generate and stream a downloadable QR code image matching the document UUID
 @app.get("/legislative/qrcode/{tracking_uuid}")
