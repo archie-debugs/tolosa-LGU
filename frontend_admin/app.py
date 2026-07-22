@@ -4,15 +4,27 @@ import base64
 import os
 import sys
 import asyncio
+import time
 import urllib3
+from flet_runtime.uploads import build_upload_url
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Fix for Windows asyncio event loop bug on shutdown
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# Use the default Windows Proactor event loop policy so Flet can launch the desktop app subprocess.
+# The selector policy prevents asyncio subprocess creation on Windows in this environment.
+# if sys.platform == 'win32':
+#     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
+UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
+UPLOAD_SECRET_KEY = os.getenv("FLET_SECRET_KEY", "sb_tolosa_tracking_secret")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.environ["FLET_SECRET_KEY"] = UPLOAD_SECRET_KEY
+os.environ["FLET_UPLOAD_DIR"] = UPLOAD_DIR
+os.environ["FLET_UPLOAD_HANDLER_ENDPOINT"] = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
+print(f"FLET_UPLOAD_DIR={UPLOAD_DIR}")
+print(f"FLET_SECRET_KEY={UPLOAD_SECRET_KEY}")
+UPLOAD_ENDPOINT = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
 
 def main(page: ft.Page):
     page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
@@ -27,6 +39,7 @@ def main(page: ft.Page):
     
     # Data storage for all documents
     all_documents = []
+    pending_upload_filename = None
 
     # --- UI COMPONENTS ---
     title_input = ft.TextField(label="Document / Ordinance Title", hint_text="Enter full legislative title...", width=500)
@@ -120,50 +133,208 @@ def main(page: ft.Page):
             page.snack_bar = ft.SnackBar(ft.Text(f"Connection error: {ex}"), open=True)
             page.update()
 
+    def _resolve_uploaded_file_path(path_candidate: str, filename: str) -> str | None:
+        candidates = []
+        if path_candidate:
+            if os.path.isabs(path_candidate):
+                candidates.append(path_candidate)
+            else:
+                candidates.append(os.path.join(UPLOAD_DIR, os.path.basename(path_candidate)))
+        candidates.append(os.path.join(UPLOAD_DIR, filename))
+
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                return os.path.abspath(candidate)
+
+        for root, _, files in os.walk(UPLOAD_DIR):
+            if filename in files:
+                return os.path.join(root, filename)
+
+        return None
+
+    def _debug_upload_dir():
+        try:
+            return sorted(os.listdir(UPLOAD_DIR))
+        except Exception as exc:
+            return [f"ERROR: {exc}"]
+
+    def _process_uploaded_file(filename: str, file_path: str):
+        with open(file_path, 'rb') as f:
+            file_bytes = f.read()
+
+        if not filename.lower().endswith(('.docx', '.pdf')):
+            page.snack_bar = ft.SnackBar(ft.Text("Only .docx and .pdf files are supported."), open=True)
+            page.update()
+            return
+
+        files = {'file': (filename, file_bytes)}
+        response = requests.post(f"{BACKEND_URL}/legislative/parse", files=files, verify=False)
+
+        if response.status_code == 200:
+            parsed_data = response.json()
+            title_input.value = parsed_data.get("title", "")
+            type_dropdown.value = parsed_data.get("item_type", "Ordinance")
+            committee_input.value = parsed_data.get("committee", "")
+            page.snack_bar = ft.SnackBar(
+                ft.Text("✓ Document template parsed successfully! Form auto-filled."),
+                open=True,
+                bgcolor=ft.colors.GREEN,
+            )
+            update_table_view()
+            page.update()
+        else:
+            error_msg = response.json().get("detail", response.text)
+            page.snack_bar = ft.SnackBar(ft.Text(f"Parse error: {error_msg}"), open=True)
+            page.update()
+
+    def _try_process_pending_upload():
+        nonlocal pending_upload_filename
+        if not pending_upload_filename:
+            return False
+        uploaded_path = _resolve_uploaded_file_path(None, pending_upload_filename)
+        if uploaded_path:
+            pending_upload_filename = None
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Upload complete: {os.path.basename(uploaded_path)}. Parsing document..."),
+                open=True,
+            )
+            page.update()
+            _process_uploaded_file(os.path.basename(uploaded_path), uploaded_path)
+            return True
+        return False
+
+    def handle_file_upload(e):
+        """Handle browser upload progress and errors for FilePicker."""
+        nonlocal pending_upload_filename
+
+        print(f"handle_file_upload event: file_name={getattr(e,'file_name',None)} progress={getattr(e,'progress',None)} error={getattr(e,'error',None)}")
+
+        if e.error:
+            pending_upload_filename = None
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Upload error: {e.error}"),
+                open=True,
+                bgcolor=ft.colors.RED_400,
+            )
+            page.update()
+            return
+
+        progress_value = e.progress
+        if progress_value is not None:
+            progress_text = ""
+            try:
+                if isinstance(progress_value, float) and 0 <= progress_value <= 1:
+                    progress_text = f"Upload progress: {int(progress_value * 100)}%"
+                elif isinstance(progress_value, int) and progress_value >= 0:
+                    progress_text = f"Upload progress: {progress_value}%"
+                else:
+                    progress_text = f"Uploaded {int(progress_value)} bytes"
+            except Exception:
+                progress_text = f"Upload progress: {progress_value}"
+
+            page.snack_bar = ft.SnackBar(
+                ft.Text(progress_text),
+                open=True,
+            )
+            page.update()
+
+        if not e.file_name:
+            return
+
+        uploaded_path = _resolve_uploaded_file_path(None, e.file_name)
+        if uploaded_path:
+            pending_upload_filename = None
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Upload complete: {e.file_name}. Parsing document..."),
+                open=True,
+            )
+            page.update()
+            _process_uploaded_file(e.file_name, uploaded_path)
+            return
+
+        # Retry a few times because browser upload may finish after the first event.
+        if pending_upload_filename == e.file_name:
+            for _ in range(5):
+                time.sleep(0.25)
+                uploaded_path = _resolve_uploaded_file_path(None, e.file_name)
+                if uploaded_path:
+                    pending_upload_filename = None
+                    page.snack_bar = ft.SnackBar(
+                        ft.Text(f"Upload complete: {e.file_name}. Parsing document..."),
+                        open=True,
+                    )
+                    page.update()
+                    _process_uploaded_file(e.file_name, uploaded_path)
+                    return
+
+        page.snack_bar = ft.SnackBar(
+            ft.Text(
+                f"Upload still pending for {e.file_name}. If this repeats, verify FLET_SECRET_KEY and upload_dir settings."
+            ),
+            open=True,
+            bgcolor=ft.colors.YELLOW_700,
+        )
+        page.update()
+        return
+
     def handle_file_import(e):
         """Handle document template import and auto-fill form fields"""
-        if not file_picker.result or not file_picker.result.files:
+        nonlocal pending_upload_filename
+
+        if not getattr(e, "files", None):
             page.snack_bar = ft.SnackBar(ft.Text("No file selected."), open=True)
             page.update()
             return
-        
-        try:
-            file_path = file_picker.result.files[0].path
-            filename = os.path.basename(file_path)
-            
-            # Check file extension
-            if not (filename.lower().endswith('.docx') or filename.lower().endswith('.pdf')):
-                page.snack_bar = ft.SnackBar(ft.Text("Only .docx and .pdf files are supported."), open=True)
-                page.update()
+
+        picked = e.files[0]
+        filename = picked.name or "document"
+        raw_path = getattr(e, "path", None) or getattr(picked, "path", None)
+
+        if raw_path:
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Selected {filename}. raw_path={raw_path}. Uploading..."),
+                open=True,
+            )
+        else:
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Selected {filename}. Uploading to browser server..."),
+                open=True,
+            )
+        page.update()
+
+        if raw_path:
+            resolved_path = _resolve_uploaded_file_path(raw_path, filename)
+            if resolved_path:
+                _process_uploaded_file(os.path.basename(resolved_path), resolved_path)
+                pending_upload_filename = None
                 return
-            
-            # Read file and send to backend
-            with open(file_path, 'rb') as f:
-                files = {'file': (filename, f)}
-                response = requests.post(f"{BACKEND_URL}/legislative/parse", files=files, verify=False)
-            
-            if response.status_code == 200:
-                parsed_data = response.json()
-                
-                # Auto-fill form fields
-                title_input.value = parsed_data.get("title", "")
-                type_dropdown.value = parsed_data.get("item_type", "Ordinance")
-                committee_input.value = parsed_data.get("committee", "")
-                
-                page.snack_bar = ft.SnackBar(
-                    ft.Text("✓ Document template parsed successfully! Form auto-filled."),
-                    open=True,
-                    bgcolor=ft.colors.GREEN
-                )
+
+        # If no raw_path, we are running in browser mode and must request
+        # signed upload URLs and instruct the runtime to perform the upload.
+        if not raw_path:
+            try:
+                expires_seconds = 60 * 60
+                upload_objs = []
+                names = []
+                for fmeta in e.files:
+                    fname = fmeta.name or filename
+                    # build a signed upload URL for the runtime upload handler
+                    upload_url = build_upload_url(UPLOAD_ENDPOINT, fname, expires_seconds, UPLOAD_SECRET_KEY)
+                    upload_objs.append(ft.FilePickerUploadFile(name=fname, upload_url=upload_url, method="PUT"))
+                    names.append(fname)
+
+                # instruct the FilePicker runtime to upload selected files
+                file_picker.upload(upload_objs)
+
+                page.snack_bar = ft.SnackBar(ft.Text(f"Uploading {', '.join(names)}..."), open=True)
                 page.update()
-            else:
-                error_msg = response.json().get("detail", "Unknown error")
-                page.snack_bar = ft.SnackBar(ft.Text(f"Parse error: {error_msg}"), open=True)
+            except Exception as exc:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Upload start failed: {exc}"), open=True)
                 page.update()
-        
-        except Exception as ex:
-            page.snack_bar = ft.SnackBar(ft.Text(f"Error importing document: {str(ex)}"), open=True)
-            page.update()
+
+        pending_upload_filename = filename
+        _try_process_pending_upload()
+        return
 
     def submit_form(e):
         if not title_input.value or not committee_input.value:
@@ -212,7 +383,9 @@ def main(page: ft.Page):
         
         data_table.rows.clear()
         
-        for doc in all_documents:
+        docs_to_render = list(all_documents)
+
+        for doc in docs_to_render:
             # Check if search term is NUMERIC (all digits) - treat as ID search
             is_numeric_search = search_term and search_term.isdigit()
             
@@ -293,10 +466,9 @@ def main(page: ft.Page):
     def load_dashboard():
         nonlocal all_documents
         
-        # Connect file picker callback
+        # Connect file picker callbacks
         file_picker.on_result = handle_file_import
-        
-        # Reconnect filter callbacks to update_table_view
+        file_picker.on_upload = handle_file_upload
         search_field.on_change = lambda e: update_table_view()
         type_filter.on_change = lambda e: update_table_view()
         status_filter.on_change = lambda e: update_table_view()
@@ -455,4 +627,4 @@ def main(page: ft.Page):
     show_login()
 
 if __name__ == "__main__":
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER)
+    ft.app(target=main, view=ft.AppView.WEB_BROWSER, upload_dir=UPLOAD_DIR)
