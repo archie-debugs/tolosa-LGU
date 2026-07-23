@@ -161,17 +161,7 @@ def main(page: ft.Page):
         url = f"data:application/json;base64,{data}"
         page.launch_url(url)
 
-    def _doc_copy_json(e, doc):
-        import json
-
-        json_str = json.dumps(doc, indent=2)
-        try:
-            page.set_clipboard(json_str)
-            page.snack_bar = ft.SnackBar(ft.Text("Document metadata copied to clipboard."), open=True)
-            page.update()
-        except Exception as exc:
-            page.snack_bar = ft.SnackBar(ft.Text(f"Copy failed: {exc}"), open=True)
-            page.update()
+    # Copy metadata action removed by user request
 
     def _resolve_uploaded_file_path(path_candidate: str, filename: str) -> str | None:
         candidates = []
@@ -451,9 +441,8 @@ def main(page: ft.Page):
                                 ft.DataCell(
                                     ft.Row([
                                         ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
-                                        ft.IconButton(icon=ft.icons.PRINT, tooltip="Print", on_click=lambda e, d=doc: _doc_print(e, d)),
-                                        ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download JSON", on_click=lambda e, d=doc: _doc_download(e, d)),
-                                        ft.IconButton(icon=ft.icons.CONTENT_COPY, tooltip="Copy JSON", on_click=lambda e, d=doc: _doc_copy_json(e, d)),
+                                        ft.IconButton(icon=ft.icons.PRINT, tooltip="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
+                                        ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
                                     ], spacing=2)
                                 ),
                             ]
@@ -491,9 +480,8 @@ def main(page: ft.Page):
                         ft.DataCell(
                             ft.Row([
                                 ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
-                                ft.IconButton(icon=ft.icons.PRINT, tooltip="Print", on_click=lambda e, d=doc: _doc_print(e, d)),
-                                ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download JSON", on_click=lambda e, d=doc: _doc_download(e, d)),
-                                ft.IconButton(icon=ft.icons.CONTENT_COPY, tooltip="Copy JSON", on_click=lambda e, d=doc: _doc_copy_json(e, d)),
+                                ft.IconButton(icon=ft.icons.PRINT, tooltip="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
+                                ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
                             ], spacing=2)
                         ),
                     ]

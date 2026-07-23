@@ -5,6 +5,7 @@ import uuid
 import qrcode
 import io
 import re
+import os
 from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 from .database import engine, Base, get_db
