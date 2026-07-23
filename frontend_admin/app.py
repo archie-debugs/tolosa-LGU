@@ -235,6 +235,256 @@ def main(page: ft.Page):
         url = f"data:application/json;base64,{data}"
         page.launch_url(url)
 
+    def render_shell(title_text: str, subtitle_text: str, content_view):
+        """Build the shared admin shell with a fixed header and a left navigation rail."""
+        body_height = max((page.window_height or 900) - 170, 520)
+
+        header = ft.Container(
+            padding=ft.padding.all(20),
+            bgcolor=ft.colors.WHITE,
+            border_radius=24,
+            content=ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=28, color=ft.colors.WHITE),
+                        padding=14,
+                        bgcolor=ft.colors.BLUE_900,
+                        border_radius=18,
+                    ),
+                    ft.Column(
+                        [
+                            ft.Text(
+                                "LGU Tolosa - Sangguniang Bayan Tracking Dashboard",
+                                size=24,
+                                weight=ft.FontWeight.BOLD,
+                                color=ft.colors.BLUE_900,
+                            ),
+                            ft.Text(
+                                "Track, register, preview, and manage legislative records from one workspace.",
+                                size=13,
+                                color=ft.colors.BLUE_GREY_600,
+                            ),
+                        ],
+                        spacing=2,
+                        expand=True,
+                    ),
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text("Logged in as", size=11, color=ft.colors.BLUE_GREY_500),
+                                ft.Text(current_user, size=14, weight=ft.FontWeight.W_600),
+                            ],
+                            spacing=0,
+                            horizontal_alignment=ft.CrossAxisAlignment.END,
+                        ),
+                        padding=ft.padding.symmetric(horizontal=14, vertical=10),
+                        bgcolor=ft.colors.BLUE_GREY_50,
+                        border_radius=16,
+                    ),
+                    ft.IconButton(icon=ft.icons.LOGOUT, tooltip="Log out", on_click=lambda e: logout_user()),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=16,
+            ),
+        )
+
+        nav = ft.NavigationRail(
+            height=body_height,
+            selected_index=0,
+            label_type=ft.NavigationRailLabelType.ALL,
+            min_width=92,
+            min_extended_width=220,
+            leading=ft.Container(
+                padding=ft.padding.only(top=8, bottom=12),
+                content=ft.Column(
+                    [
+                        ft.Container(
+                            content=ft.Icon(ft.icons.DASHBOARD, color=ft.colors.BLUE_900),
+                            padding=10,
+                            bgcolor=ft.colors.BLUE_GREY_50,
+                            border_radius=14,
+                        ),
+                        ft.Text("Admin", size=13, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=8,
+                ),
+            ),
+            destinations=[
+                ft.NavigationRailDestination(
+                    icon=ft.icons.LIST_ALT_OUTLINED,
+                    selected_icon=ft.icons.LIST_ALT,
+                    label="Documents",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.icons.GROUP_OUTLINED,
+                    selected_icon=ft.icons.GROUP,
+                    label="Committees",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.icons.PEOPLE_OUTLINED,
+                    selected_icon=ft.icons.PEOPLE,
+                    label="Users & Roles",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.icons.HISTORY_OUTLINED,
+                    selected_icon=ft.icons.HISTORY,
+                    label="Audit Logs",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.icons.SETTINGS_OUTLINED,
+                    selected_icon=ft.icons.SETTINGS,
+                    label="Settings",
+                ),
+            ],
+        )
+
+        content_holder = ft.Container(
+            expand=True,
+            padding=0,
+            content=content_view,
+        )
+
+        def switch_view(e):
+            current_index = e.control.selected_index
+            if current_index == 0:
+                content_holder.content = registry_view()
+            elif current_index == 1:
+                content_holder.content = committees_view()
+            elif current_index == 2:
+                content_holder.content = users_roles_view()
+            elif current_index == 3:
+                content_holder.content = audit_logs_view()
+            else:
+                content_holder.content = settings_view()
+            page.update()
+
+        nav.on_change = switch_view
+
+        page.clean()
+        page.horizontal_alignment = ft.CrossAxisAlignment.START
+        page.vertical_alignment = ft.MainAxisAlignment.START
+        page.add(
+            ft.Column(
+                [
+                    header,
+                    ft.Row(
+                        [
+                            ft.Container(
+                                width=240,
+                                height=body_height,
+                                padding=ft.padding.only(top=8, right=8),
+                                content=nav,
+                                bgcolor=ft.colors.WHITE,
+                                border_radius=24,
+                            ),
+                            ft.Container(
+                                expand=True,
+                                height=body_height,
+                                padding=ft.padding.only(top=8),
+                                content=ft.Container(
+                                    expand=True,
+                                    height=body_height,
+                                    padding=20,
+                                    bgcolor=ft.colors.WHITE,
+                                    border_radius=24,
+                                    content=content_holder,
+                                ),
+                            ),
+                        ],
+                        expand=True,
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                    ),
+                ],
+                spacing=16,
+                expand=True,
+            )
+        )
+
+    def empty_state(title: str, subtitle: str, icon, accent_color):
+        return ft.Container(
+            expand=True,
+            alignment=ft.alignment.center,
+            content=ft.Column(
+                [
+                    ft.Container(
+                        content=ft.Icon(icon, size=54, color=accent_color),
+                        padding=16,
+                        bgcolor=ft.colors.BLUE_GREY_50,
+                        border_radius=20,
+                    ),
+                    ft.Text(title, size=22, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                    ft.Text(subtitle, size=14, color=ft.colors.BLUE_GREY_600, text_align=ft.TextAlign.CENTER),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=10,
+            ),
+        )
+
+    def registry_view():
+        return ft.Column(
+            [
+                surface_card(
+                    ft.Column(
+                        [
+                            section_header(
+                                "Registry",
+                                "Active Legislative Tracker & Document Registration",
+                                ft.icons.LIST_ALT,
+                                ft.colors.BLUE_800,
+                            ),
+                            ft.Divider(height=1),
+                            ft.Row([title_input, import_button], spacing=16),
+                            ft.Row([type_dropdown, committee_input, submit_button], spacing=16),
+                            ft.Container(height=6),
+                            ft.Row([search_field, type_filter, status_filter], spacing=15),
+                            ft.Container(height=4),
+                            ft.Container(
+                                content=data_table,
+                                bgcolor=ft.colors.BLUE_GREY_50,
+                                border_radius=18,
+                                padding=12,
+                            ),
+                        ],
+                        spacing=16,
+                    ),
+                )
+            ],
+            expand=True,
+        )
+
+    def committees_view():
+        return empty_state(
+            "Committees",
+            "Committee Management & Assigned Files will live here. Drop your committee list, assignments, and workflows into this view.",
+            ft.icons.GROUP,
+            ft.colors.GREEN_700,
+        )
+
+    def users_roles_view():
+        return empty_state(
+            "Users & Roles",
+            "RBAC for Admin, Secretariat, SBM members, and the Mayor's Office.",
+            ft.icons.PEOPLE,
+            ft.colors.INDIGO_700,
+        )
+
+    def audit_logs_view():
+        return empty_state(
+            "Audit Logs",
+            "System activity, record history, and user actions will appear here.",
+            ft.icons.HISTORY,
+            ft.colors.ORANGE_700,
+        )
+
+    def settings_view():
+        return empty_state(
+            "Settings",
+            "Templates, municipality headers, backups, and configuration tools belong here.",
+            ft.icons.SETTINGS,
+            ft.colors.BLUE_GREY_700,
+        )
+
     # Copy metadata action removed by user request
 
     def _resolve_uploaded_file_path(path_candidate: str, filename: str) -> str | None:
@@ -589,104 +839,7 @@ def main(page: ft.Page):
         
         # Initial population of table
         update_table_view()
-        
-        page.clean()
-        page.horizontal_alignment = ft.CrossAxisAlignment.START
-        page.vertical_alignment = ft.MainAxisAlignment.START
-        page.add(
-            ft.Column(
-                [
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=28, color=ft.colors.WHITE),
-                                    padding=14,
-                                    bgcolor=ft.colors.BLUE_900,
-                                    border_radius=18,
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.Text(
-                                            "LGU Tolosa - Sangguniang Bayan Tracking Dashboard",
-                                            size=24,
-                                            weight=ft.FontWeight.BOLD,
-                                            color=ft.colors.BLUE_900,
-                                        ),
-                                        ft.Text(
-                                            "Track, register, preview, and print legislative records from one clean workspace.",
-                                            size=13,
-                                            color=ft.colors.BLUE_GREY_600,
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
-                                ft.Container(
-                                    content=ft.Column(
-                                        [
-                                            ft.Text("Logged in as", size=11, color=ft.colors.BLUE_GREY_500),
-                                            ft.Text(current_user, size=14, weight=ft.FontWeight.W_600),
-                                        ],
-                                        spacing=0,
-                                        horizontal_alignment=ft.CrossAxisAlignment.END,
-                                    ),
-                                    padding=ft.padding.symmetric(horizontal=14, vertical=10),
-                                    bgcolor=ft.colors.BLUE_GREY_50,
-                                    border_radius=16,
-                                ),
-                                ft.IconButton(icon=ft.icons.LOGOUT, tooltip="Log out", on_click=lambda e: logout_user()),
-                            ],
-                            alignment=ft.MainAxisAlignment.START,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=16,
-                        ),
-                        padding=24,
-                        bgcolor=ft.colors.WHITE,
-                        border_radius=28,
-                    ),
-                    surface_card(
-                        ft.Column(
-                            [
-                                section_header(
-                                    "Register New Proposed Resolution / Ordinance",
-                                    "Import a template, auto-fill the form, then register the record.",
-                                    ft.icons.DOCUMENT_SCANNER,
-                                    ft.colors.BLUE_800,
-                                ),
-                                ft.Divider(height=1),
-                                ft.Row([title_input, import_button], spacing=16),
-                                ft.Row([type_dropdown, committee_input, submit_button], spacing=16),
-                            ],
-                            spacing=16,
-                        ),
-                    ),
-                    surface_card(
-                        ft.Column(
-                            [
-                                section_header(
-                                    "Active Legislative Document Records Tracker",
-                                    "Search by title, UUID, or filter by type and status.",
-                                    ft.icons.TABLE_VIEW,
-                                    ft.colors.GREEN_700,
-                                ),
-                                ft.Divider(height=1),
-                                ft.Row([search_field, type_filter, status_filter], spacing=15),
-                                ft.Container(height=4),
-                                ft.Container(
-                                    content=data_table,
-                                    bgcolor=ft.colors.BLUE_GREY_50,
-                                    border_radius=18,
-                                    padding=12,
-                                ),
-                            ],
-                            spacing=16,
-                        ),
-                    ),
-                ],
-                spacing=20,
-            )
-        )
+        render_shell("Registry", "Active Legislative Tracker & Document Registration", registry_view())
         page.update()
 
     def logout_user():
