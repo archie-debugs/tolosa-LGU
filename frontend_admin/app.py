@@ -30,6 +30,7 @@ UPLOAD_ENDPOINT = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
 def main(page: ft.Page):
     page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
     page.theme_mode = ft.ThemeMode.LIGHT
+    page.bgcolor = ft.colors.BLUE_GREY_50
     page.scroll = ft.ScrollMode.AUTO
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
@@ -42,6 +43,38 @@ def main(page: ft.Page):
     all_documents = []
     pending_upload_filename = None
     last_uploaded_filename = None
+
+    def surface_card(content, width=None, padding=24, expand=False):
+        return ft.Container(
+            content=content,
+            width=width,
+            expand=expand,
+            padding=padding,
+            bgcolor=ft.colors.WHITE,
+            border_radius=24,
+        )
+
+    def section_header(title, subtitle, icon, accent_color):
+        return ft.Row(
+            [
+                ft.Container(
+                    content=ft.Icon(icon, color=accent_color, size=24),
+                    padding=10,
+                    bgcolor=ft.colors.BLUE_GREY_50,
+                    border_radius=14,
+                ),
+                ft.Column(
+                    [
+                        ft.Text(title, size=18, weight=ft.FontWeight.BOLD),
+                        ft.Text(subtitle, size=13, color=ft.colors.BLUE_GREY_600),
+                    ],
+                    spacing=2,
+                    expand=True,
+                ),
+            ],
+            spacing=14,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
 
     # --- UI COMPONENTS ---
     title_input = ft.TextField(label="Document / Ordinance Title", hint_text="Enter full legislative title...", width=500)
@@ -561,24 +594,98 @@ def main(page: ft.Page):
         page.horizontal_alignment = ft.CrossAxisAlignment.START
         page.vertical_alignment = ft.MainAxisAlignment.START
         page.add(
-            ft.Column([
-                ft.Row([
-                    ft.Icon(ft.icons.ACCOUNT_BALANCE, size=40, color=ft.colors.BLUE_800),
-                    ft.Text("LGU Tolosa - Sangguniang Bayan Tracking Dashboard", size=26, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_800),
-                    ft.Container(expand=True),
-                    ft.Text(f"Logged in as: {current_user}", size=14, italic=True),
-                    ft.IconButton(icon=ft.icons.LOGOUT, on_click=lambda e: logout_user())
-                ], alignment=ft.MainAxisAlignment.START),
-                ft.Divider(height=10, thickness=2),
-                ft.Text("Register New Proposed Resolution / Ordinance", size=18, weight=ft.FontWeight.W_600),
-                ft.Row([title_input, import_button]),
-                ft.Row([type_dropdown, committee_input, submit_button]),
-                ft.Container(height=20),
-                ft.Text("Active Legislative Document Records Tracker", size=18, weight=ft.FontWeight.W_600),
-                ft.Row([search_field, type_filter, status_filter], spacing=15),
-                ft.Container(height=10),
-                data_table
-            ], spacing=20)
+            ft.Column(
+                [
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Container(
+                                    content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=28, color=ft.colors.WHITE),
+                                    padding=14,
+                                    bgcolor=ft.colors.BLUE_900,
+                                    border_radius=18,
+                                ),
+                                ft.Column(
+                                    [
+                                        ft.Text(
+                                            "LGU Tolosa - Sangguniang Bayan Tracking Dashboard",
+                                            size=24,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.colors.BLUE_900,
+                                        ),
+                                        ft.Text(
+                                            "Track, register, preview, and print legislative records from one clean workspace.",
+                                            size=13,
+                                            color=ft.colors.BLUE_GREY_600,
+                                        ),
+                                    ],
+                                    spacing=2,
+                                    expand=True,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("Logged in as", size=11, color=ft.colors.BLUE_GREY_500),
+                                            ft.Text(current_user, size=14, weight=ft.FontWeight.W_600),
+                                        ],
+                                        spacing=0,
+                                        horizontal_alignment=ft.CrossAxisAlignment.END,
+                                    ),
+                                    padding=ft.padding.symmetric(horizontal=14, vertical=10),
+                                    bgcolor=ft.colors.BLUE_GREY_50,
+                                    border_radius=16,
+                                ),
+                                ft.IconButton(icon=ft.icons.LOGOUT, tooltip="Log out", on_click=lambda e: logout_user()),
+                            ],
+                            alignment=ft.MainAxisAlignment.START,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=16,
+                        ),
+                        padding=24,
+                        bgcolor=ft.colors.WHITE,
+                        border_radius=28,
+                    ),
+                    surface_card(
+                        ft.Column(
+                            [
+                                section_header(
+                                    "Register New Proposed Resolution / Ordinance",
+                                    "Import a template, auto-fill the form, then register the record.",
+                                    ft.icons.DOCUMENT_SCANNER,
+                                    ft.colors.BLUE_800,
+                                ),
+                                ft.Divider(height=1),
+                                ft.Row([title_input, import_button], spacing=16),
+                                ft.Row([type_dropdown, committee_input, submit_button], spacing=16),
+                            ],
+                            spacing=16,
+                        ),
+                    ),
+                    surface_card(
+                        ft.Column(
+                            [
+                                section_header(
+                                    "Active Legislative Document Records Tracker",
+                                    "Search by title, UUID, or filter by type and status.",
+                                    ft.icons.TABLE_VIEW,
+                                    ft.colors.GREEN_700,
+                                ),
+                                ft.Divider(height=1),
+                                ft.Row([search_field, type_filter, status_filter], spacing=15),
+                                ft.Container(height=4),
+                                ft.Container(
+                                    content=data_table,
+                                    bgcolor=ft.colors.BLUE_GREY_50,
+                                    border_radius=18,
+                                    padding=12,
+                                ),
+                            ],
+                            spacing=16,
+                        ),
+                    ),
+                ],
+                spacing=20,
+            )
         )
         page.update()
 
@@ -621,23 +728,25 @@ def main(page: ft.Page):
         signup_link = ft.TextButton("Don't have an account? Sign Up", on_click=lambda e: show_signup())
 
         page.add(
-            ft.Card(
-                content=ft.Container(
-                    content=ft.Column([
-                        ft.Icon(ft.icons.ACCOUNT_BALANCE, size=50, color=ft.colors.BLUE_800),
-                        ft.Text("LGU Tolosa - Sangguniang Bayan", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_800),
-                        ft.Text("Legislative Tracking System Login", size=14, color=ft.colors.GREY_600),
-                        ft.Container(height=10),
-                        username_field,
-                        password_field,
-                        ft.Container(height=10),
-                        login_btn,
-                        signup_link
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=40,
-                    width=380,
-                    alignment=ft.alignment.center
-                )
+            surface_card(
+                ft.Column([
+                    ft.Container(
+                        content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=52, color=ft.colors.BLUE_800),
+                        padding=14,
+                        bgcolor=ft.colors.BLUE_GREY_50,
+                        border_radius=20,
+                    ),
+                    ft.Text("LGU Tolosa - Sangguniang Bayan", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                    ft.Text("Legislative Tracking System Login", size=14, color=ft.colors.BLUE_GREY_600),
+                    ft.Container(height=4),
+                    username_field,
+                    password_field,
+                    ft.Container(height=6),
+                    login_btn,
+                    signup_link
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
+                width=420,
+                padding=36,
             )
         )
         page.update()
@@ -682,24 +791,26 @@ def main(page: ft.Page):
         back_to_login = ft.TextButton("Already have an account? Log In", on_click=lambda e: show_login())
 
         page.add(
-            ft.Card(
-                content=ft.Container(
-                    content=ft.Column([
-                        ft.Icon(ft.icons.PERSON_ADD, size=50, color=ft.colors.GREEN_700),
-                        ft.Text("Create Administrator Account", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_700),
-                        ft.Text("Sangguniang Bayan Registry", size=14, color=ft.colors.GREY_600),
-                        ft.Container(height=10),
-                        reg_username,
-                        reg_password,
-                        reg_confirm_password,
-                        ft.Container(height=10),
-                        register_btn,
-                        back_to_login
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=40,
-                    width=380,
-                    alignment=ft.alignment.center
-                )
+            surface_card(
+                ft.Column([
+                    ft.Container(
+                        content=ft.Icon(ft.icons.PERSON_ADD, size=52, color=ft.colors.GREEN_700),
+                        padding=14,
+                        bgcolor=ft.colors.GREEN_50,
+                        border_radius=20,
+                    ),
+                    ft.Text("Create Administrator Account", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_800),
+                    ft.Text("Sangguniang Bayan Registry", size=14, color=ft.colors.BLUE_GREY_600),
+                    ft.Container(height=4),
+                    reg_username,
+                    reg_password,
+                    reg_confirm_password,
+                    ft.Container(height=6),
+                    register_btn,
+                    back_to_login
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
+                width=420,
+                padding=36,
             )
         )
         page.update()
