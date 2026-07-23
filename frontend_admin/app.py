@@ -19,6 +19,17 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
 UPLOAD_SECRET_KEY = os.getenv("FLET_SECRET_KEY", "sb_tolosa_tracking_secret")
+DEFAULT_WORKFLOW_STEPS = [
+    "Draft",
+    "First Reading",
+    "Committee Referral",
+    "Public Hearing",
+    "Second Reading",
+    "Third/Final Reading",
+    "Transmitted to Mayor",
+    "Approved/Vetoed",
+    "Published/Enacted",
+]
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.environ["FLET_SECRET_KEY"] = UPLOAD_SECRET_KEY
 os.environ["FLET_UPLOAD_DIR"] = UPLOAD_DIR
@@ -43,6 +54,21 @@ def main(page: ft.Page):
     all_documents = []
     pending_upload_filename = None
     last_uploaded_filename = None
+    workflow_steps = list(DEFAULT_WORKFLOW_STEPS)
+    workflow_editor_column = ft.Column(spacing=10)
+    workflow_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
+    workflow_summary = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
+
+    def refresh_display_ids():
+        def sort_key(doc):
+            try:
+                return int(doc.get("id", 0))
+            except Exception:
+                return 0
+
+        all_documents.sort(key=sort_key)
+        for index, doc in enumerate(all_documents, start=1):
+            doc["display_id"] = index
 
     def surface_card(content, width=None, padding=24, expand=False):
         return ft.Container(
@@ -130,6 +156,178 @@ def main(page: ft.Page):
         value="All",
         on_change=lambda e: None  # Will be set in load_dashboard
     )
+
+    def sync_status_filter_options():
+        status_filter.options = [ft.dropdown.Option("All")] + [ft.dropdown.Option(step) for step in workflow_steps]
+        if status_filter.value not in ["All", *workflow_steps]:
+            status_filter.value = "All"
+
+    def refresh_workflow_summary():
+        if workflow_steps:
+            workflow_summary.value = "Current lifecycle: " + " → ".join(workflow_steps)
+        else:
+            workflow_summary.value = "No workflow steps configured yet."
+
+    def next_workflow_step_label():
+        base_label = "New Milestone"
+        existing_labels = {str(step).strip().lower() for step in workflow_steps}
+        if base_label.lower() not in existing_labels:
+            return base_label
+
+        suffix = 2
+        while f"{base_label} {suffix}".lower() in existing_labels:
+            suffix += 1
+        return f"{base_label} {suffix}"
+
+    def rebuild_workflow_editor():
+        workflow_editor_column.controls = []
+        if not workflow_steps:
+            workflow_editor_column.controls.append(
+                ft.Container(
+                    padding=16,
+                    border_radius=16,
+                    bgcolor=ft.colors.BLUE_GREY_50,
+                    content=ft.Text("No steps yet. Add a milestone to start building the workflow."),
+                )
+            )
+            refresh_workflow_summary()
+            return
+
+        for index, step in enumerate(workflow_steps):
+            workflow_editor_column.controls.append(
+                ft.Container(
+                    padding=14,
+                    border_radius=16,
+                    bgcolor=ft.colors.BLUE_GREY_50,
+                    content=ft.Row(
+                        [
+                            ft.Container(
+                                width=38,
+                                height=38,
+                                alignment=ft.alignment.center,
+                                border_radius=12,
+                                bgcolor=ft.colors.WHITE,
+                                content=ft.Text(str(index + 1), weight=ft.FontWeight.BOLD),
+                            ),
+                            ft.TextField(
+                                label=f"Milestone {index + 1}",
+                                value=step,
+                                expand=True,
+                                on_change=lambda e, idx=index: update_workflow_step(idx, e.control.value),
+                            ),
+                            ft.IconButton(
+                                icon=ft.icons.ARROW_UPWARD,
+                                tooltip="Move up",
+                                on_click=lambda e, idx=index: move_workflow_step(idx, -1),
+                            ),
+                            ft.IconButton(
+                                icon=ft.icons.ARROW_DOWNWARD,
+                                tooltip="Move down",
+                                on_click=lambda e, idx=index: move_workflow_step(idx, 1),
+                            ),
+                            ft.IconButton(
+                                icon=ft.icons.DELETE_OUTLINE,
+                                tooltip="Remove milestone",
+                                icon_color=ft.colors.RED_700,
+                                on_click=lambda e, idx=index: remove_workflow_step(idx),
+                            ),
+                        ],
+                        spacing=10,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                )
+            )
+
+        refresh_workflow_summary()
+
+    def update_workflow_step(index: int, value: str):
+        if 0 <= index < len(workflow_steps):
+            workflow_steps[index] = value.strip()
+            refresh_workflow_summary()
+
+    def add_workflow_step(e=None):
+        workflow_steps.append(next_workflow_step_label())
+        rebuild_workflow_editor()
+        page.update()
+
+    def remove_workflow_step(index: int):
+        if 0 <= index < len(workflow_steps):
+            workflow_steps.pop(index)
+            rebuild_workflow_editor()
+            page.update()
+
+    def move_workflow_step(index: int, direction: int):
+        target_index = index + direction
+        if 0 <= index < len(workflow_steps) and 0 <= target_index < len(workflow_steps):
+            workflow_steps[index], workflow_steps[target_index] = workflow_steps[target_index], workflow_steps[index]
+            rebuild_workflow_editor()
+            page.update()
+
+    def load_workflow_config():
+        nonlocal workflow_steps
+        try:
+            response = requests.get(f"{BACKEND_URL}/workflow/config", verify=False)
+            if response.status_code == 200:
+                payload = response.json()
+                workflow_steps = payload.get("statuses", list(DEFAULT_WORKFLOW_STEPS)) or list(DEFAULT_WORKFLOW_STEPS)
+        except Exception:
+            workflow_steps = list(DEFAULT_WORKFLOW_STEPS)
+
+        sync_status_filter_options()
+        rebuild_workflow_editor()
+
+    def save_workflow_config(e=None):
+        cleaned_steps = [step.strip() for step in workflow_steps if str(step).strip()]
+        if not cleaned_steps:
+            workflow_notice.value = "Add at least one milestone before saving."
+            page.update()
+            return
+
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/workflow/config",
+                json={"statuses": cleaned_steps},
+                verify=False,
+            )
+            if response.status_code == 200:
+                payload = response.json()
+                workflow_steps[:] = payload.get("statuses", cleaned_steps)
+                sync_status_filter_options()
+                rebuild_workflow_editor()
+                workflow_notice.value = "Workflow saved successfully."
+            else:
+                workflow_notice.value = f"Save failed: {response.text}"
+        except Exception as exc:
+            workflow_notice.value = f"Save error: {exc}"
+
+        page.update()
+
+    def reset_workflow_config(e=None):
+        try:
+            response = requests.post(f"{BACKEND_URL}/workflow/reset", verify=False)
+            if response.status_code == 200:
+                payload = response.json()
+                workflow_steps[:] = payload.get("statuses", list(DEFAULT_WORKFLOW_STEPS))
+                sync_status_filter_options()
+                rebuild_workflow_editor()
+                workflow_notice.value = "Workflow reset to the default milestone sequence."
+            else:
+                workflow_notice.value = f"Reset failed: {response.text}"
+        except Exception as exc:
+            workflow_notice.value = f"Reset error: {exc}"
+
+        page.update()
+
+    audit_logs_table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("Time", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Actor", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Action", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Target", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Details", weight=ft.FontWeight.BOLD)),
+        ],
+        rows=[],
+    )
     
     data_table = ft.DataTable(
         columns=[
@@ -138,6 +336,7 @@ def main(page: ft.Page):
             ft.DataColumn(ft.Text("Type", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Committee", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Current Status", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Milestone Path", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
         ],
         rows=[]
@@ -152,6 +351,14 @@ def main(page: ft.Page):
         title=ft.Text("Document Preview"),
         content=ft.Container(width=700, height=500)
     )
+
+    delete_dialog = ft.AlertDialog(
+        title=ft.Text("Delete Legislative Record"),
+        content=ft.Text(""),
+        actions=[],
+    )
+    page.overlay.append(delete_dialog)
+    pending_delete_doc = None
 
     # --- ACTIONS ---
     def view_qr_code(e, uuid_code):
@@ -234,6 +441,136 @@ def main(page: ft.Page):
         data = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
         url = f"data:application/json;base64,{data}"
         page.launch_url(url)
+
+    def advance_document_status(doc):
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/legislative/advance/{quote(doc['uuid'])}",
+                params={"actor": current_user or "system", "location": "Admin Dashboard"},
+                verify=False,
+            )
+            if response.status_code == 200:
+                payload = response.json()
+                new_stage = payload.get("current_stage", doc.get("status", ""))
+                doc["status"] = new_stage
+                update_table_view()
+                page.snack_bar = ft.SnackBar(ft.Text(payload.get("message", f"Advanced to {new_stage}")), open=True)
+                page.update()
+                return
+
+            page.snack_bar = ft.SnackBar(ft.Text(f"Advance failed: {response.text}"), open=True)
+            page.update()
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Advance error: {exc}"), open=True)
+            page.update()
+
+    def delete_document_record(doc):
+        try:
+            response = requests.delete(
+                f"{BACKEND_URL}/legislative/delete/{quote(doc['uuid'])}",
+                params={"actor": current_user or "system", "location": "Admin Dashboard"},
+                verify=False,
+            )
+            if response.status_code == 200:
+                all_documents[:] = [item for item in all_documents if item.get("uuid") != doc.get("uuid")]
+                refresh_display_ids()
+                update_table_view()
+                page.snack_bar = ft.SnackBar(ft.Text(response.json().get("message", "Record deleted")), open=True)
+                page.update()
+                return
+
+            page.snack_bar = ft.SnackBar(ft.Text(f"Delete failed: {response.text}"), open=True)
+            page.update()
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Delete error: {exc}"), open=True)
+            page.update()
+
+    def confirm_delete_document(doc):
+        nonlocal pending_delete_doc
+        pending_delete_doc = doc
+        delete_dialog.title = ft.Text("Delete Legislative Record")
+        delete_dialog.content = ft.Text(f"Delete \"{doc.get('title', 'this record')}\"? This cannot be undone.")
+        delete_dialog.actions = [
+            ft.TextButton("Cancel", on_click=lambda e: close_delete_dialog()),
+            ft.ElevatedButton("Delete", icon=ft.icons.DELETE_OUTLINE, bgcolor=ft.colors.RED_700, color=ft.colors.WHITE, on_click=lambda e: run_delete_dialog_action()),
+        ]
+        delete_dialog.open = True
+        page.update()
+
+    def close_delete_dialog():
+        nonlocal pending_delete_doc
+        delete_dialog.open = False
+        pending_delete_doc = None
+        page.update()
+
+    def run_delete_dialog_action():
+        nonlocal pending_delete_doc
+        doc = pending_delete_doc
+        close_delete_dialog()
+        if doc:
+            delete_document_record(doc)
+
+    def workflow_step_index(step_name):
+        normalized_step = str(step_name or "").strip().lower()
+        for index, step in enumerate(workflow_steps):
+            if str(step).strip().lower() == normalized_step:
+                return index
+        return -1
+
+    def milestone_path_for_status(status):
+        status_text = str(status or "").strip()
+        if not workflow_steps:
+            return status_text or "-"
+
+        current_index = workflow_step_index(status_text)
+        if current_index < 0:
+            return status_text or "-"
+
+        path_steps = [str(step).strip() for step in workflow_steps[: current_index + 1] if str(step).strip()]
+        if not path_steps:
+            return status_text or "-"
+
+        numbered_steps = [f"{index + 1}. {step}" for index, step in enumerate(path_steps)]
+        return " → ".join(numbered_steps)
+
+    def build_document_row(doc):
+        current_status = doc.get("status", "-")
+        return ft.DataRow(
+            cells=[
+                ft.DataCell(ft.Text(str(doc.get("display_id", doc.get("id", "-"))))),
+                ft.DataCell(ft.Text(doc["title"])),
+                ft.DataCell(ft.Text(doc["type"])),
+                ft.DataCell(ft.Text(doc["committee"])),
+                ft.DataCell(ft.Text(current_status, color=ft.colors.BLUE)),
+                ft.DataCell(
+                    ft.Container(
+                        content=ft.Text(
+                            milestone_path_for_status(current_status),
+                            size=12,
+                            color=ft.colors.BLUE_GREY_700,
+                            max_lines=2,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                        width=180,
+                    )
+                ),
+                ft.DataCell(document_action_buttons(doc)),
+            ]
+        )
+
+    def document_action_buttons(doc):
+        return ft.PopupMenuButton(
+            icon=ft.icons.MORE_VERT,
+            tooltip="Actions",
+            items=[
+                ft.PopupMenuItem(text="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
+                ft.PopupMenuItem(text="Preview file", on_click=lambda e, d=doc: _doc_preview(e, d)),
+                ft.PopupMenuItem(text="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
+                ft.PopupMenuItem(text="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
+                ft.PopupMenuItem(text="Advance status", on_click=lambda e, d=doc: advance_document_status(d)),
+                ft.PopupMenuItem(text="Delete record", on_click=lambda e, d=doc: confirm_delete_document(d)),
+            ],
+        )
 
     def render_shell(title_text: str, subtitle_text: str, content_view):
         """Build the shared admin shell with a fixed header and a left navigation rail."""
@@ -339,24 +676,102 @@ def main(page: ft.Page):
             ],
         )
 
-        content_holder = ft.Container(
+        content_holder = ft.ListView(
             expand=True,
+            spacing=16,
             padding=0,
-            content=content_view,
         )
+        content_holder.controls = [content_view]
+
+        def load_audit_logs_view():
+            try:
+                response = requests.get(f"{BACKEND_URL}/audit/logs?limit=200", verify=False)
+                if response.status_code == 200:
+                    payload = response.json()
+                    rows = []
+                    for entry in payload.get("items", []):
+                        target_label = "-"
+                        if entry.get("target_type") or entry.get("target_id"):
+                            target_label = f"{entry.get('target_type') or '-'} #{entry.get('target_id') or '-'}"
+
+                        rows.append(
+                            ft.DataRow(
+                                cells=[
+                                    ft.DataCell(ft.Text((entry.get("created_at") or "").replace("T", " ")[:19])),
+                                    ft.DataCell(ft.Text(entry.get("actor", "-"))),
+                                    ft.DataCell(ft.Text(entry.get("action", "-"))),
+                                    ft.DataCell(ft.Text(target_label)),
+                                    ft.DataCell(ft.Text(entry.get("details") or "-")),
+                                ]
+                            )
+                        )
+
+                    audit_logs_table.rows = rows
+                else:
+                    audit_logs_table.rows = [
+                        ft.DataRow(
+                            cells=[
+                                ft.DataCell(ft.Text("-")),
+                                ft.DataCell(ft.Text("-")),
+                                ft.DataCell(ft.Text("Failed to load audit logs")),
+                                ft.DataCell(ft.Text("-")),
+                                ft.DataCell(ft.Text(response.text)),
+                            ]
+                        )
+                    ]
+            except Exception as exc:
+                audit_logs_table.rows = [
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(ft.Text("-")),
+                            ft.DataCell(ft.Text("-")),
+                            ft.DataCell(ft.Text("Load error")),
+                            ft.DataCell(ft.Text("-")),
+                            ft.DataCell(ft.Text(str(exc))),
+                        ]
+                    )
+                ]
+
+        def audit_logs_view():
+            load_audit_logs_view()
+            return ft.Column(
+                [
+                    surface_card(
+                        ft.Column(
+                            [
+                                section_header(
+                                    "Audit Logs",
+                                    "System Activity & History Logs",
+                                    ft.icons.HISTORY,
+                                    ft.colors.ORANGE_700,
+                                ),
+                                ft.Divider(height=1),
+                                ft.Container(
+                                    content=audit_logs_table,
+                                    bgcolor=ft.colors.BLUE_GREY_50,
+                                    border_radius=18,
+                                    padding=12,
+                                ),
+                            ],
+                            spacing=16,
+                        ),
+                    )
+                ],
+                expand=True,
+            )
 
         def switch_view(e):
             current_index = e.control.selected_index
             if current_index == 0:
-                content_holder.content = registry_view()
+                content_holder.controls = [registry_view()]
             elif current_index == 1:
-                content_holder.content = committees_view()
+                content_holder.controls = [committees_view()]
             elif current_index == 2:
-                content_holder.content = users_roles_view()
+                content_holder.controls = [users_roles_view()]
             elif current_index == 3:
-                content_holder.content = audit_logs_view()
+                content_holder.controls = [audit_logs_view()]
             else:
-                content_holder.content = settings_view()
+                content_holder.controls = [settings_view()]
             page.update()
 
         nav.on_change = switch_view
@@ -428,7 +843,7 @@ def main(page: ft.Page):
                     ft.Column(
                         [
                             section_header(
-                                "Registry",
+                                "Documents",
                                 "Active Legislative Tracker & Document Registration",
                                 ft.icons.LIST_ALT,
                                 ft.colors.BLUE_800,
@@ -469,20 +884,45 @@ def main(page: ft.Page):
             ft.colors.INDIGO_700,
         )
 
-    def audit_logs_view():
-        return empty_state(
-            "Audit Logs",
-            "System activity, record history, and user actions will appear here.",
-            ft.icons.HISTORY,
-            ft.colors.ORANGE_700,
-        )
-
     def settings_view():
-        return empty_state(
-            "Settings",
-            "Templates, municipality headers, backups, and configuration tools belong here.",
-            ft.icons.SETTINGS,
-            ft.colors.BLUE_GREY_700,
+        rebuild_workflow_editor()
+        return ft.Column(
+            [
+                surface_card(
+                    ft.Column(
+                        [
+                            section_header(
+                                "Settings",
+                                "Templates, municipality headers, backups, and configuration tools belong here.",
+                                ft.icons.SETTINGS,
+                                ft.colors.BLUE_GREY_700,
+                            ),
+                            ft.Divider(height=1),
+                            ft.Text("Custom Status & Lifecycle Workflow Builder", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                "Configure the milestones used for legislative records, filtering, and default statuses.",
+                                size=13,
+                                color=ft.colors.BLUE_GREY_600,
+                            ),
+                            workflow_summary,
+                            ft.Divider(height=1),
+                            workflow_editor_column,
+                            ft.Row(
+                                [
+                                    ft.OutlinedButton("Add Milestone", icon=ft.icons.ADD, on_click=add_workflow_step),
+                                    ft.OutlinedButton("Reset Default Workflow", icon=ft.icons.REFRESH, on_click=reset_workflow_config),
+                                    ft.ElevatedButton("Save Workflow", icon=ft.icons.SAVE, on_click=save_workflow_config),
+                                ],
+                                spacing=12,
+                                wrap=True,
+                            ),
+                            workflow_notice,
+                        ],
+                        spacing=14,
+                    ),
+                )
+            ],
+            spacing=16,
         )
 
     # Copy metadata action removed by user request
@@ -711,6 +1151,7 @@ def main(page: ft.Page):
                 nonlocal last_uploaded_filename
                 result = response.json()
                 uuid_code = result["tracking_uuid"]
+                current_stage = result.get("current_stage", workflow_steps[0] if workflow_steps else "Draft")
 
                 # Add to data storage (associate uploaded filename if any)
                 all_documents.append({
@@ -718,7 +1159,7 @@ def main(page: ft.Page):
                     "title": title_input.value,
                     "type": type_dropdown.value,
                     "committee": committee_input.value,
-                    "status": "First Reading",
+                    "status": current_stage,
                     "uuid": uuid_code,
                     "source_filename": last_uploaded_filename,
                 })
@@ -729,6 +1170,8 @@ def main(page: ft.Page):
 
                 # clear last uploaded filename after associating with a record
                 last_uploaded_filename = None
+
+                refresh_display_ids()
 
                 # Update the table immediately
                 update_table_view()
@@ -753,26 +1196,8 @@ def main(page: ft.Page):
             
             if is_numeric_search:
                 # ID search: show ONLY documents with matching ID (ignore type/status filters)
-                if str(doc["id"]) == search_term:
-                    data_table.rows.append(
-                        ft.DataRow(
-                            cells=[
-                                ft.DataCell(ft.Text(str(doc["id"]))),
-                                ft.DataCell(ft.Text(doc["title"])),
-                                ft.DataCell(ft.Text(doc["type"])),
-                                ft.DataCell(ft.Text(doc["committee"])),
-                                ft.DataCell(ft.Text(doc["status"], color=ft.colors.BLUE)),
-                                ft.DataCell(
-                                    ft.Row([
-                                        ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
-                                        ft.IconButton(icon=ft.icons.VISIBILITY, tooltip="Preview file", on_click=lambda e, d=doc: _doc_preview(e, d)),
-                                        ft.IconButton(icon=ft.icons.PRINT, tooltip="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
-                                        ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
-                                    ], spacing=2)
-                                ),
-                            ]
-                        )
-                    )
+                if str(doc.get("display_id", doc.get("id", ""))) == search_term:
+                    data_table.rows.append(build_document_row(doc))
                 continue
             
             # Non-numeric search: apply type/status filters first
@@ -794,25 +1219,7 @@ def main(page: ft.Page):
                     continue
             
             # Add matching row to table
-            data_table.rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text(str(doc["id"]))),
-                        ft.DataCell(ft.Text(doc["title"])),
-                        ft.DataCell(ft.Text(doc["type"])),
-                        ft.DataCell(ft.Text(doc["committee"])),
-                        ft.DataCell(ft.Text(doc["status"], color=ft.colors.BLUE)),
-                        ft.DataCell(
-                            ft.Row([
-                                ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
-                                ft.IconButton(icon=ft.icons.VISIBILITY, tooltip="Preview file", on_click=lambda e, d=doc: _doc_preview(e, d)),
-                                ft.IconButton(icon=ft.icons.PRINT, tooltip="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
-                                ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
-                            ], spacing=2)
-                        ),
-                    ]
-                )
-            )
+            data_table.rows.append(build_document_row(doc))
         
         page.update()
 
@@ -833,6 +1240,21 @@ def main(page: ft.Page):
         # Connect file picker callbacks
         file_picker.on_result = handle_file_import
         file_picker.on_upload = handle_file_upload
+        load_workflow_config()
+
+        try:
+            response = requests.get(f"{BACKEND_URL}/legislative/list", verify=False)
+            if response.status_code == 200:
+                payload = response.json()
+                all_documents = payload.get("items", [])
+                refresh_display_ids()
+            else:
+                all_documents = []
+                page.snack_bar = ft.SnackBar(ft.Text(f"Document load failed: {response.text}"), open=True)
+        except Exception as exc:
+            all_documents = []
+            page.snack_bar = ft.SnackBar(ft.Text(f"Document load error: {exc}"), open=True)
+
         search_field.on_change = lambda e: update_table_view()
         type_filter.on_change = lambda e: update_table_view()
         status_filter.on_change = lambda e: update_table_view()

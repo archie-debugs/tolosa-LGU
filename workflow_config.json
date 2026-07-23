@@ -1,0 +1,13 @@
+{
+  "statuses": [
+    "Draft",
+    "First Reading",
+    "Committee Referral",
+    "Public Hearing",
+    "Second Reading",
+    "Third/Final Reading",
+    "Transmitted to Mayor",
+    "Approved/Vetoed",
+    "Published/Enacted"
+  ]
+}
