@@ -7,6 +7,7 @@ import asyncio
 import time
 import urllib3
 from flet_runtime.uploads import build_upload_url
+from urllib.parse import quote
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -40,6 +41,7 @@ def main(page: ft.Page):
     # Data storage for all documents
     all_documents = []
     pending_upload_filename = None
+    last_uploaded_filename = None
 
     # --- UI COMPONENTS ---
     title_input = ft.TextField(label="Document / Ordinance Title", hint_text="Enter full legislative title...", width=500)
@@ -133,6 +135,44 @@ def main(page: ft.Page):
             page.snack_bar = ft.SnackBar(ft.Text(f"Connection error: {ex}"), open=True)
             page.update()
 
+    def _doc_print(e, doc):
+        # Build a printable HTML and open it in a new tab which triggers print
+        html = f"""<!doctype html><html><head><meta charset='utf-8'><title>{doc['title']}</title></head><body><h1>{doc['title']}</h1><p><strong>Type:</strong> {doc['type']}</p><p><strong>Committee:</strong> {doc['committee']}</p><p><strong>Status:</strong> {doc['status']}</p><p><strong>UUID:</strong> {doc['uuid']}</p><script>window.onload=function(){{window.print();}};</script></body></html>"""
+        data = base64.b64encode(html.encode('utf-8')).decode('utf-8')
+        url = f"data:text/html;base64,{data}"
+        page.launch_url(url)
+
+    def _doc_download(e, doc):
+        # If the document has a source filename, download it from the backend uploads endpoint
+        src = doc.get("source_filename")
+        if src:
+            try:
+                url = f"{BACKEND_URL}/uploads/{quote(src)}"
+                page.launch_url(url)
+                return
+            except Exception:
+                pass
+
+        # Fallback: Offer document metadata as JSON download
+        import json
+
+        json_str = json.dumps(doc, indent=2)
+        data = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        url = f"data:application/json;base64,{data}"
+        page.launch_url(url)
+
+    def _doc_copy_json(e, doc):
+        import json
+
+        json_str = json.dumps(doc, indent=2)
+        try:
+            page.set_clipboard(json_str)
+            page.snack_bar = ft.SnackBar(ft.Text("Document metadata copied to clipboard."), open=True)
+            page.update()
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Copy failed: {exc}"), open=True)
+            page.update()
+
     def _resolve_uploaded_file_path(path_candidate: str, filename: str) -> str | None:
         candidates = []
         if path_candidate:
@@ -175,6 +215,9 @@ def main(page: ft.Page):
             title_input.value = parsed_data.get("title", "")
             type_dropdown.value = parsed_data.get("item_type", "Ordinance")
             committee_input.value = parsed_data.get("committee", "")
+            # remember uploaded filename for association on register
+            nonlocal last_uploaded_filename
+            last_uploaded_filename = filename
             page.snack_bar = ft.SnackBar(
                 ft.Text("✓ Document template parsed successfully! Form auto-filled."),
                 open=True,
@@ -351,23 +394,28 @@ def main(page: ft.Page):
         try:
             response = requests.post(f"{BACKEND_URL}/legislative/register", params=params, verify=False)
             if response.status_code == 200:
+                nonlocal last_uploaded_filename
                 result = response.json()
                 uuid_code = result["tracking_uuid"]
-                
-                # Add to data storage
+
+                # Add to data storage (associate uploaded filename if any)
                 all_documents.append({
                     "id": result.get("id", "-"),
                     "title": title_input.value,
                     "type": type_dropdown.value,
                     "committee": committee_input.value,
                     "status": "First Reading",
-                    "uuid": uuid_code
+                    "uuid": uuid_code,
+                    "source_filename": last_uploaded_filename,
                 })
-                
+
                 title_input.value = ""
                 committee_input.value = ""
                 page.snack_bar = ft.SnackBar(ft.Text("Legislative Document Registered Successfully!"), open=True)
-                
+
+                # clear last uploaded filename after associating with a record
+                last_uploaded_filename = None
+
                 # Update the table immediately
                 update_table_view()
         except Exception as ex:
@@ -401,11 +449,12 @@ def main(page: ft.Page):
                                 ft.DataCell(ft.Text(doc["committee"])),
                                 ft.DataCell(ft.Text(doc["status"], color=ft.colors.BLUE)),
                                 ft.DataCell(
-                                    ft.ElevatedButton(
-                                        "Get QR Code", 
-                                        icon=ft.icons.QR_CODE,
-                                        on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)
-                                    )
+                                    ft.Row([
+                                        ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
+                                        ft.IconButton(icon=ft.icons.PRINT, tooltip="Print", on_click=lambda e, d=doc: _doc_print(e, d)),
+                                        ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download JSON", on_click=lambda e, d=doc: _doc_download(e, d)),
+                                        ft.IconButton(icon=ft.icons.CONTENT_COPY, tooltip="Copy JSON", on_click=lambda e, d=doc: _doc_copy_json(e, d)),
+                                    ], spacing=2)
                                 ),
                             ]
                         )
@@ -440,11 +489,12 @@ def main(page: ft.Page):
                         ft.DataCell(ft.Text(doc["committee"])),
                         ft.DataCell(ft.Text(doc["status"], color=ft.colors.BLUE)),
                         ft.DataCell(
-                            ft.ElevatedButton(
-                                "Get QR Code", 
-                                icon=ft.icons.QR_CODE,
-                                on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)
-                            )
+                            ft.Row([
+                                ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
+                                ft.IconButton(icon=ft.icons.PRINT, tooltip="Print", on_click=lambda e, d=doc: _doc_print(e, d)),
+                                ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download JSON", on_click=lambda e, d=doc: _doc_download(e, d)),
+                                ft.IconButton(icon=ft.icons.CONTENT_COPY, tooltip="Copy JSON", on_click=lambda e, d=doc: _doc_copy_json(e, d)),
+                            ], spacing=2)
                         ),
                     ]
                 )

@@ -6,6 +6,7 @@ import qrcode
 import io
 import re
 from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 from .database import engine, Base, get_db
 from . import models
 
@@ -109,6 +110,8 @@ except Exception:
 
 app = FastAPI(title="LGU Tolosa SB Legislative Tracking Backend")
 
+UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
+
 @app.get("/")
 def root():
     return {"status": "SB Tolosa System Engine Live"}
@@ -182,6 +185,18 @@ def register_item(title: str, item_type: str, committee: str, db: Session = Depe
     db.commit()
     db.refresh(new_item)
     return {"message": f"{item_type} Registered Successfully", "id": new_item.id, "tracking_uuid": unique_id}
+
+
+@app.get("/uploads/{filename:path}")
+def get_uploaded_file(filename: str):
+    # Serve uploaded files from the uploads directory. Protect against path traversal.
+    joined_path = os.path.join(UPLOAD_DIR, filename)
+    full_path = os.path.realpath(joined_path)
+    if not os.path.exists(full_path) or os.path.commonpath([full_path, UPLOAD_DIR]) != UPLOAD_DIR:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Let the browser handle content-disposition
+    return FileResponse(full_path, media_type="application/octet-stream", filename=os.path.basename(full_path))
 
 # Route 2: Generate and stream a downloadable QR code image matching the document UUID
 @app.get("/legislative/qrcode/{tracking_uuid}")
