@@ -115,6 +115,11 @@ def main(page: ft.Page):
         content=ft.Container(alignment=ft.alignment.center, width=250, height=250)
     )
 
+    preview_dialog = ft.AlertDialog(
+        title=ft.Text("Document Preview"),
+        content=ft.Container(width=700, height=500)
+    )
+
     # --- ACTIONS ---
     def view_qr_code(e, uuid_code):
         qr_url = f"{BACKEND_URL}/legislative/qrcode/{uuid_code}"
@@ -141,6 +146,42 @@ def main(page: ft.Page):
         data = base64.b64encode(html.encode('utf-8')).decode('utf-8')
         url = f"data:text/html;base64,{data}"
         page.launch_url(url)
+
+    def _doc_preview(e, doc):
+        src = doc.get("source_filename")
+        if not src:
+            page.snack_bar = ft.SnackBar(ft.Text("No uploaded source file available for preview."), open=True)
+            page.update()
+            return
+
+        # If PDF, open preview endpoint in browser tab for inline rendering
+        if src.lower().endswith('.pdf'):
+            page.launch_url(f"{BACKEND_URL}/legislative/preview/{quote(src)}")
+            return
+
+        # For DOCX, request extracted text from backend preview endpoint and show in dialog
+        try:
+            resp = requests.get(f"{BACKEND_URL}/legislative/preview/{quote(src)}", verify=False)
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data.get("text", "")
+                preview_dialog.content = ft.Container(
+                    ft.Column([
+                        ft.Text(doc.get("title", ""), weight=ft.FontWeight.BOLD),
+                        ft.Divider(),
+                        ft.Text(text)
+                    ], tight=True, scroll=ft.ScrollMode.AUTO),
+                    width=700, height=500
+                )
+                page.overlay.append(preview_dialog)
+                preview_dialog.open = True
+                page.update()
+                return
+
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Preview failed: {exc}"), open=True)
+            page.update()
+            return
 
     def _doc_download(e, doc):
         # If the document has a source filename, download it from the backend uploads endpoint
@@ -441,6 +482,7 @@ def main(page: ft.Page):
                                 ft.DataCell(
                                     ft.Row([
                                         ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
+                                        ft.IconButton(icon=ft.icons.VISIBILITY, tooltip="Preview file", on_click=lambda e, d=doc: _doc_preview(e, d)),
                                         ft.IconButton(icon=ft.icons.PRINT, tooltip="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
                                         ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
                                     ], spacing=2)
@@ -480,6 +522,7 @@ def main(page: ft.Page):
                         ft.DataCell(
                             ft.Row([
                                 ft.IconButton(icon=ft.icons.QR_CODE, tooltip="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
+                                ft.IconButton(icon=ft.icons.VISIBILITY, tooltip="Preview file", on_click=lambda e, d=doc: _doc_preview(e, d)),
                                 ft.IconButton(icon=ft.icons.PRINT, tooltip="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
                                 ft.IconButton(icon=ft.icons.FILE_DOWNLOAD, tooltip="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
                             ], spacing=2)

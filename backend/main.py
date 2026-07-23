@@ -8,6 +8,7 @@ import re
 import os
 from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from .database import engine, Base, get_db
 from . import models
 
@@ -198,6 +199,34 @@ def get_uploaded_file(filename: str):
 
     # Let the browser handle content-disposition
     return FileResponse(full_path, media_type="application/octet-stream", filename=os.path.basename(full_path))
+
+
+@app.get("/legislative/preview/{filename}")
+def preview_uploaded_file(filename: str):
+    # Serve a previewable representation: PDFs are returned so browsers can render them;
+    # DOCX files are parsed server-side and returned as extracted plain text JSON.
+    joined_path = os.path.join(UPLOAD_DIR, filename)
+    full_path = os.path.realpath(joined_path)
+    if not os.path.exists(full_path) or os.path.commonpath([full_path, UPLOAD_DIR]) != UPLOAD_DIR:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if filename.lower().endswith('.pdf'):
+        # Return PDF without Content-Disposition filename so browsers render inline instead of forcing download
+        return FileResponse(full_path, media_type="application/pdf")
+
+    if filename.lower().endswith('.docx'):
+        try:
+            with open(full_path, 'rb') as f:
+                file_bytes = f.read()
+            text = extract_text_from_file(file_bytes, filename)
+            return JSONResponse({"text": text})
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Preview error: {exc}")
+
+    # Unsupported preview types
+    raise HTTPException(status_code=400, detail="Unsupported file type for preview")
 
 # Route 2: Generate and stream a downloadable QR code image matching the document UUID
 @app.get("/legislative/qrcode/{tracking_uuid}")
