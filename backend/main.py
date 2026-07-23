@@ -135,6 +135,19 @@ try:
 except Exception:
     pass
 
+def ensure_user_role_column():
+    with engine.begin() as connection:
+        columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
+        if "role" not in columns:
+            connection.exec_driver_sql("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'Admin'")
+        connection.exec_driver_sql("UPDATE users SET role = 'Admin' WHERE role IS NULL OR role = ''")
+
+
+try:
+    ensure_user_role_column()
+except Exception:
+    pass
+
 app = FastAPI(title="LGU Tolosa SB Legislative Tracking Backend")
 
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
@@ -196,7 +209,7 @@ def root():
     return {"status": "SB Tolosa System Engine Live"}
 
 @app.post("/auth/register")
-def register_user(username: str, password: str, db: Session = Depends(get_db)):
+def register_user(username: str, password: str, role: str = "Admin", db: Session = Depends(get_db)):
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
 
@@ -208,6 +221,7 @@ def register_user(username: str, password: str, db: Session = Depends(get_db)):
         new_user = models.User(
             username=username,
             hashed_password=get_password_hash(password),
+            role=role.strip() or "Admin",
         )
         db.add(new_user)
         db.commit()
@@ -226,6 +240,65 @@ def register_user(username: str, password: str, db: Session = Depends(get_db)):
     )
 
     return {"message": "User registered successfully", "username": new_user.username}
+
+
+@app.get("/auth/users")
+def list_users(db: Session = Depends(get_db)):
+    users = db.query(models.User).order_by(models.User.id.asc()).all()
+    return {
+        "items": [
+            {
+                "id": user.id,
+                "username": user.username,
+                "role": user.role or "Admin",
+            }
+            for user in users
+        ]
+    }
+
+
+@app.put("/auth/users/{username}/role")
+def update_user_role(username: str, role: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.role = role.strip() or "Admin"
+    db.commit()
+    db.refresh(user)
+
+    record_audit_log(
+        db,
+        actor="system",
+        action="USER_ROLE_UPDATED",
+        target_type="User",
+        target_id=str(user.id),
+        details=f"Updated {user.username} role to {user.role}",
+    )
+
+    return {"message": "User role updated", "username": user.username, "role": user.role}
+
+
+@app.delete("/auth/users/{username}")
+def delete_user(username: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user_id = user.id
+    db.delete(user)
+    db.commit()
+
+    record_audit_log(
+        db,
+        actor="system",
+        action="USER_DELETED",
+        target_type="User",
+        target_id=str(user_id),
+        details=f"Deleted user {username}",
+    )
+
+    return {"message": "User deleted", "username": username}
 
 @app.post("/auth/login")
 def login_user(username: str, password: str, db: Session = Depends(get_db)):

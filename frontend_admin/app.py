@@ -58,6 +58,30 @@ def main(page: ft.Page):
     workflow_editor_column = ft.Column(spacing=10)
     workflow_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
     workflow_summary = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
+    users_table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
+        ],
+        rows=[],
+    )
+    user_username_input = ft.TextField(label="Username", width=280)
+    user_password_input = ft.TextField(label="Password", width=280, password=True, can_reveal_password=True)
+    user_role_input = ft.Dropdown(
+        label="Role",
+        width=220,
+        options=[
+            ft.dropdown.Option("Admin"),
+            ft.dropdown.Option("Secretariat"),
+            ft.dropdown.Option("SB Member"),
+            ft.dropdown.Option("Mayor's Office"),
+        ],
+        value="Admin",
+    )
+    users_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
+    pending_delete_user = None
 
     def refresh_display_ids():
         def sort_key(doc):
@@ -69,6 +93,11 @@ def main(page: ft.Page):
         all_documents.sort(key=sort_key)
         for index, doc in enumerate(all_documents, start=1):
             doc["display_id"] = index
+
+    def refresh_user_display_ids(users):
+        users.sort(key=lambda user: int(user.get("id", 0) or 0))
+        for index, user in enumerate(users, start=1):
+            user["display_id"] = index
 
     def surface_card(content, width=None, padding=24, expand=False):
         return ft.Container(
@@ -359,6 +388,7 @@ def main(page: ft.Page):
     )
     page.overlay.append(delete_dialog)
     pending_delete_doc = None
+    pending_delete_user = None
 
     # --- ACTIONS ---
     def view_qr_code(e, uuid_code):
@@ -485,6 +515,123 @@ def main(page: ft.Page):
             page.snack_bar = ft.SnackBar(ft.Text(f"Delete error: {exc}"), open=True)
             page.update()
 
+    def load_users_table():
+        try:
+            response = requests.get(f"{BACKEND_URL}/auth/users", verify=False)
+            if response.status_code == 200:
+                users = response.json().get("items", [])
+                refresh_user_display_ids(users)
+                rows = []
+                for user in users:
+                    rows.append(
+                        ft.DataRow(
+                            cells=[
+                                ft.DataCell(ft.Text(str(user.get("display_id", user.get("id", "-"))))),
+                                ft.DataCell(ft.Text(user.get("username", "-"))),
+                                ft.DataCell(ft.Text(user.get("role", "Admin"))),
+                                ft.DataCell(
+                                    ft.PopupMenuButton(
+                                        icon=ft.icons.MORE_VERT,
+                                        tooltip="User actions",
+                                        items=[
+                                            ft.PopupMenuItem(text="Set Admin", on_click=lambda e, u=user: update_user_role(u, "Admin")),
+                                            ft.PopupMenuItem(text="Set Secretariat", on_click=lambda e, u=user: update_user_role(u, "Secretariat")),
+                                            ft.PopupMenuItem(text="Set SB Member", on_click=lambda e, u=user: update_user_role(u, "SB Member")),
+                                            ft.PopupMenuItem(text="Set Mayor's Office", on_click=lambda e, u=user: update_user_role(u, "Mayor's Office")),
+                                            ft.PopupMenuItem(text="Delete User", on_click=lambda e, u=user: confirm_delete_user(u)),
+                                        ],
+                                    )
+                                ),
+                            ]
+                        )
+                    )
+                users_table.rows = rows
+            else:
+                users_table.rows = []
+                users_notice.value = f"Load failed: {response.text}"
+        except Exception as exc:
+            users_table.rows = []
+            users_notice.value = f"Load error: {exc}"
+
+        page.update()
+
+    def create_user_record(e=None):
+        if not user_username_input.value or not user_password_input.value:
+            users_notice.value = "Username and password are required."
+            page.update()
+            return
+
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/auth/register",
+                params={
+                    "username": user_username_input.value.strip(),
+                    "password": user_password_input.value,
+                    "role": user_role_input.value or "Admin",
+                },
+                verify=False,
+            )
+            if response.status_code == 200:
+                user_username_input.value = ""
+                user_password_input.value = ""
+                users_notice.value = "User created successfully."
+                load_users_table()
+            else:
+                users_notice.value = f"Create failed: {response.text}"
+        except Exception as exc:
+            users_notice.value = f"Create error: {exc}"
+
+        page.update()
+
+    def update_user_role(user, role):
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/auth/users/{quote(user['username'])}/role",
+                params={"role": role},
+                verify=False,
+            )
+            if response.status_code == 200:
+                load_users_table()
+                users_notice.value = response.json().get("message", "Role updated.")
+            else:
+                users_notice.value = f"Role update failed: {response.text}"
+        except Exception as exc:
+            users_notice.value = f"Role update error: {exc}"
+
+        page.update()
+
+    def delete_user_record(user):
+        try:
+            response = requests.delete(f"{BACKEND_URL}/auth/users/{quote(user['username'])}", verify=False)
+            if response.status_code == 200:
+                users_notice.value = response.json().get("message", "User deleted.")
+                load_users_table()
+            else:
+                users_notice.value = f"Delete failed: {response.text}"
+        except Exception as exc:
+            users_notice.value = f"Delete error: {exc}"
+
+        page.update()
+
+    def confirm_delete_user(user):
+        nonlocal pending_delete_user
+        pending_delete_user = user
+        delete_dialog.title = ft.Text("Delete User")
+        delete_dialog.content = ft.Text(f"Delete user \"{user.get('username', 'this user')}\"? This cannot be undone.")
+        delete_dialog.actions = [
+            ft.TextButton("Cancel", on_click=lambda e: close_delete_dialog()),
+            ft.ElevatedButton("Delete", icon=ft.icons.DELETE_OUTLINE, bgcolor=ft.colors.RED_700, color=ft.colors.WHITE, on_click=lambda e: run_delete_user_action()),
+        ]
+        delete_dialog.open = True
+        page.update()
+
+    def run_delete_user_action():
+        nonlocal pending_delete_user
+        user = pending_delete_user
+        close_delete_dialog()
+        if user:
+            delete_user_record(user)
+
     def confirm_delete_document(doc):
         nonlocal pending_delete_doc
         pending_delete_doc = doc
@@ -498,17 +645,21 @@ def main(page: ft.Page):
         page.update()
 
     def close_delete_dialog():
-        nonlocal pending_delete_doc
+        nonlocal pending_delete_doc, pending_delete_user
         delete_dialog.open = False
         pending_delete_doc = None
+        pending_delete_user = None
         page.update()
 
     def run_delete_dialog_action():
-        nonlocal pending_delete_doc
+        nonlocal pending_delete_doc, pending_delete_user
         doc = pending_delete_doc
+        user = pending_delete_user
         close_delete_dialog()
         if doc:
             delete_document_record(doc)
+        elif user:
+            delete_user_record(user)
 
     def workflow_step_index(step_name):
         normalized_step = str(step_name or "").strip().lower()
@@ -877,11 +1028,34 @@ def main(page: ft.Page):
         )
 
     def users_roles_view():
-        return empty_state(
-            "Users & Roles",
-            "RBAC for Admin, Secretariat, SBM members, and the Mayor's Office.",
-            ft.icons.PEOPLE,
-            ft.colors.INDIGO_700,
+        load_users_table()
+        return ft.Column(
+            [
+                surface_card(
+                    ft.Column(
+                        [
+                            section_header(
+                                "Users & Roles",
+                                "Create accounts, set roles, and remove users from the system.",
+                                ft.icons.PEOPLE,
+                                ft.colors.INDIGO_700,
+                            ),
+                            ft.Divider(height=1),
+                            ft.Row([user_username_input, user_password_input, user_role_input], spacing=12, wrap=True),
+                            ft.Row([ft.ElevatedButton("Create User", icon=ft.icons.PERSON_ADD, on_click=create_user_record)], spacing=12),
+                            users_notice,
+                            ft.Container(
+                                content=users_table,
+                                bgcolor=ft.colors.BLUE_GREY_50,
+                                border_radius=18,
+                                padding=12,
+                            ),
+                        ],
+                        spacing=14,
+                    ),
+                )
+            ],
+            expand=True,
         )
 
     def settings_view():
