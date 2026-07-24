@@ -19,9 +19,11 @@ class LegislativeItem(Base):
     title = Column(String, index=True)                     # Title of the Ordinance or Resolution
     item_type = Column(String)                             # Ordinance, Resolution, Committee Report
     current_status = Column(String, default="First Reading") # First Reading, Committee Review, Approved, etc.
+    current_location = Column(String, nullable=False, default="Records Registry")
     assigned_committee = Column(String, nullable=True)     
     
     logs = relationship("LegislativeTrackingLog", back_populates="item")
+    history = relationship("DocumentHistory", back_populates="item", cascade="all, delete-orphan")
 
 class LegislativeTrackingLog(Base):
     __tablename__ = "legislative_tracking_logs"
@@ -34,6 +36,20 @@ class LegislativeTrackingLog(Base):
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
     item = relationship("LegislativeItem", back_populates="logs")
+
+
+class DocumentHistory(Base):
+    __tablename__ = "document_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("legislative_items.id"), nullable=False)
+    previous_location = Column(String, nullable=False)
+    receiving_office = Column(String, nullable=False)
+    new_location = Column(String, nullable=False)
+    logged_in_user = Column(String, nullable=False)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+
+    item = relationship("LegislativeItem", back_populates="history")
 
 
 class AuditLog(Base):

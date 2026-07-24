@@ -1,11 +1,13 @@
 import flet as ft
 import requests
 import base64
+import io
 import os
 import sys
 import asyncio
 import time
 import urllib3
+import qrcode
 from flet_runtime.uploads import build_upload_url
 from urllib.parse import quote
 
@@ -17,6 +19,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", BACKEND_URL)
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
 UPLOAD_SECRET_KEY = os.getenv("FLET_SECRET_KEY", "sb_tolosa_tracking_secret")
 DEFAULT_WORKFLOW_STEPS = [
@@ -82,6 +85,32 @@ def main(page: ft.Page):
     )
     users_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
     pending_delete_user = None
+    scan_office_dropdown = ft.Dropdown(
+        label="Receiving Office",
+        width=300,
+        options=[
+            ft.dropdown.Option("Records Registry"),
+            ft.dropdown.Option("Secretariat"),
+            ft.dropdown.Option("Mayor's Office"),
+            ft.dropdown.Option("Committee Chair"),
+            ft.dropdown.Option("Committee Hearing Room"),
+            ft.dropdown.Option("Session Hall"),
+            ft.dropdown.Option("Legal Office"),
+        ],
+        value="Secretariat",
+    )
+    scan_input = ft.TextField(
+        label="Scan QR Document UUID",
+        hint_text="Scan document QR code and press Enter",
+        width=420,
+        autofocus=True,
+        on_submit=lambda e: process_receive_scan(e),
+    )
+    scan_notice = ft.Text("Ready to receive scans.", size=12, color=ft.colors.BLUE_GREY_600)
+    scan_success_banner = ft.Container(visible=False, content=ft.Text(""))
+    scan_document_dropdown = ft.Dropdown(label="Selected Document", width=520, options=[], on_change=lambda e: load_document_timeline(scan_document_dropdown.value))
+    timeline_summary = ft.Text("Select a document to see its movement timeline.", size=13, color=ft.colors.BLUE_GREY_600)
+    timeline_column = ft.Column(spacing=10)
 
     def refresh_display_ids():
         def sort_key(doc):
@@ -98,6 +127,185 @@ def main(page: ft.Page):
         users.sort(key=lambda user: int(user.get("id", 0) or 0))
         for index, user in enumerate(users, start=1):
             user["display_id"] = index
+
+    def build_qr_code_base64(text: str):
+        qr = qrcode.QRCode(version=1, box_size=8, border=4)
+        qr.add_data(text)
+        qr.make(fit=True)
+        image = qr.make_image(fill_color="black", back_color="white")
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    def load_documents_from_backend(show_notice: bool = False):
+        nonlocal all_documents
+        try:
+            response = requests.get(f"{BACKEND_URL}/legislative/list", verify=False)
+            if response.status_code == 200:
+                payload = response.json()
+                all_documents = payload.get("items", [])
+                refresh_display_ids()
+                if show_notice:
+                    scan_notice.value = f"Loaded {len(all_documents)} documents."
+            elif show_notice:
+                scan_notice.value = f"Document load failed: {response.text}"
+        except Exception as exc:
+            if show_notice:
+                scan_notice.value = f"Document load error: {exc}"
+
+    def refresh_scan_document_options(selected_uuid: str | None = None):
+        options = []
+        for doc in all_documents:
+            label = f"{doc.get('display_id', doc.get('id', '-'))}. {doc.get('title', 'Untitled')}"
+            options.append(ft.dropdown.Option(key=doc.get("uuid", ""), text=label))
+
+        scan_document_dropdown.options = options
+
+        if selected_uuid:
+            scan_document_dropdown.value = selected_uuid if any(option.key == selected_uuid for option in options) else None
+        elif scan_document_dropdown.value not in [option.key for option in options]:
+            scan_document_dropdown.value = options[0].key if options else None
+
+    def render_timeline_entry(entry: dict):
+        timestamp_text = entry.get("timestamp", "")
+        display_time = timestamp_text.replace("T", " ")[:19] if timestamp_text else "Unknown time"
+        return ft.Container(
+            padding=14,
+            border_radius=16,
+            bgcolor=ft.colors.BLUE_GREY_50,
+            content=ft.Row(
+                [
+                    ft.Container(
+                        width=12,
+                        height=12,
+                        border_radius=6,
+                        bgcolor=ft.colors.BLUE_700,
+                    ),
+                    ft.Column(
+                        [
+                            ft.Text(f"{entry.get('previous_location', 'Records Registry')} → {entry.get('new_location', 'Unknown')}", weight=ft.FontWeight.BOLD),
+                            ft.Text(f"Received by {entry.get('receiving_office', '-')}", size=12, color=ft.colors.BLUE_GREY_700),
+                            ft.Text(f"{display_time} • {entry.get('logged_in_user', 'system')}", size=11, color=ft.colors.BLUE_GREY_500),
+                        ],
+                        spacing=2,
+                        expand=True,
+                    ),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+        )
+
+    def load_document_timeline(tracking_uuid: str | None):
+        if not tracking_uuid:
+            timeline_summary.value = "Select a document to see its movement timeline."
+            timeline_column.controls = []
+            page.update()
+            return
+
+        try:
+            response = requests.get(f"{BACKEND_URL}/documents/history/{quote(tracking_uuid)}", verify=False)
+            if response.status_code == 200:
+                payload = response.json()
+                document = payload.get("document", {})
+                history_items = payload.get("items", [])
+                title = document.get("title", "Untitled Document")
+                current_location = document.get("current_location", "Records Registry")
+                timeline_summary.value = f"{title} is currently at {current_location}."
+
+                if history_items:
+                    timeline_column.controls = [render_timeline_entry(entry) for entry in history_items]
+                else:
+                    timeline_column.controls = [
+                        ft.Container(
+                            padding=14,
+                            border_radius=16,
+                            bgcolor=ft.colors.BLUE_GREY_50,
+                            content=ft.Text("No scan history yet for this document."),
+                        )
+                    ]
+            else:
+                timeline_summary.value = f"Timeline load failed: {response.text}"
+                timeline_column.controls = []
+        except Exception as exc:
+            timeline_summary.value = f"Timeline load error: {exc}"
+            timeline_column.controls = []
+
+        page.update()
+
+    def refocus_scan_input():
+        try:
+            scan_input.focus()
+        except Exception:
+            pass
+
+    def process_receive_scan(e=None):
+        tracking_uuid = (scan_input.value or "").strip()
+        if not tracking_uuid:
+            scan_notice.value = "Scan a document QR code first."
+            page.update()
+            refocus_scan_input()
+            return
+
+        receiving_office = scan_office_dropdown.value or "Records Registry"
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/documents/receive/{quote(tracking_uuid)}",
+                params={
+                    "receiving_office": receiving_office,
+                    "logged_in_user": current_user or "system",
+                },
+                verify=False,
+            )
+            if response.status_code == 200:
+                payload = response.json()
+                document_title = payload.get("document_title", tracking_uuid)
+                previous_location = payload.get("previous_location", "Unknown")
+                new_location = payload.get("new_location", receiving_office)
+
+                for doc in all_documents:
+                    if doc.get("uuid") == tracking_uuid:
+                        doc["current_location"] = new_location
+                        break
+
+                scan_success_banner.content = ft.Container(
+                    padding=16,
+                    border_radius=18,
+                    bgcolor=ft.colors.GREEN_100,
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.icons.CHECK_CIRCLE, color=ft.colors.GREEN_700),
+                            ft.Column(
+                                [
+                                    ft.Text(f"{document_title}", weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_900),
+                                    ft.Text(f"{previous_location} → {new_location}", color=ft.colors.GREEN_900),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=12,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                )
+                scan_success_banner.visible = True
+                scan_notice.value = f"Scanned by {current_user or 'system'} for {receiving_office}."
+                load_documents_from_backend()
+                refresh_scan_document_options(tracking_uuid)
+                scan_document_dropdown.value = tracking_uuid
+                load_document_timeline(tracking_uuid)
+                update_table_view()
+                scan_input.value = ""
+                page.update()
+                refocus_scan_input()
+                return
+
+            scan_notice.value = f"Receive failed: {response.text}"
+        except Exception as exc:
+            scan_notice.value = f"Receive error: {exc}"
+
+        page.update()
+        refocus_scan_input()
 
     def surface_card(content, width=None, padding=24, expand=False):
         return ft.Container(
@@ -364,6 +572,7 @@ def main(page: ft.Page):
             ft.DataColumn(ft.Text("Title", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Type", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Committee", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Current Location", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Current Status", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Milestone Path", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
@@ -692,6 +901,7 @@ def main(page: ft.Page):
                 ft.DataCell(ft.Text(doc["title"])),
                 ft.DataCell(ft.Text(doc["type"])),
                 ft.DataCell(ft.Text(doc["committee"])),
+                ft.DataCell(ft.Text(doc.get("current_location", "Records Registry"))),
                 ft.DataCell(ft.Text(current_status, color=ft.colors.BLUE)),
                 ft.DataCell(
                     ft.Container(
@@ -1027,6 +1237,72 @@ def main(page: ft.Page):
             ft.colors.GREEN_700,
         )
 
+    def scan_receive_view():
+        refresh_scan_document_options(scan_document_dropdown.value)
+        if not scan_document_dropdown.value and scan_document_dropdown.options:
+            scan_document_dropdown.value = scan_document_dropdown.options[0].key
+        load_document_timeline(scan_document_dropdown.value)
+        return ft.Column(
+            [
+                surface_card(
+                    ft.Column(
+                        [
+                            section_header(
+                                "Scan & Receive Document",
+                                "Use a QR scanner or paste a UUID to move a document between offices.",
+                                ft.icons.QR_CODE_SCANNER,
+                                ft.colors.TEAL_700,
+                            ),
+                            ft.Divider(height=1),
+                            ft.Row([scan_office_dropdown, scan_input], spacing=16, wrap=True),
+                            scan_notice,
+                            scan_success_banner,
+                            ft.Container(
+                                padding=16,
+                                border_radius=18,
+                                bgcolor=ft.colors.BLUE_GREY_50,
+                                content=ft.Row(
+                                    [
+                                        ft.Column(
+                                            [
+                                                ft.Text("Phone Scanner Access", size=18, weight=ft.FontWeight.BOLD),
+                                                ft.Text(
+                                                    "Open the mobile scanner on a phone, log in first, then scan the document QR code that is already generated.",
+                                                    size=13,
+                                                    color=ft.colors.BLUE_GREY_600,
+                                                ),
+                                                ft.ElevatedButton(
+                                                    "Open Mobile Scanner",
+                                                    icon=ft.icons.PHONE_ANDROID,
+                                                    on_click=lambda e: page.launch_url(f"{BACKEND_PUBLIC_URL}/scanner/mobile?api_base={quote(BACKEND_PUBLIC_URL)}"),
+                                                ),
+                                            ],
+                                            spacing=10,
+                                            expand=True,
+                                        ),
+                                    ],
+                                    spacing=18,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                            ),
+                            ft.Text("Movement Timeline", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Text("Select a document to review its received-at history.", size=13, color=ft.colors.BLUE_GREY_600),
+                            scan_document_dropdown,
+                            timeline_summary,
+                            ft.Container(
+                                content=timeline_column,
+                                bgcolor=ft.colors.BLUE_GREY_50,
+                                border_radius=18,
+                                padding=12,
+                            ),
+                        ],
+                        spacing=14,
+                    ),
+                )
+            ],
+            expand=True,
+        )
+
     def users_roles_view():
         load_users_table()
         return ft.Column(
@@ -1333,6 +1609,7 @@ def main(page: ft.Page):
                     "title": title_input.value,
                     "type": type_dropdown.value,
                     "committee": committee_input.value,
+                    "current_location": result.get("current_location", "Records Registry"),
                     "status": current_stage,
                     "uuid": uuid_code,
                     "source_filename": last_uploaded_filename,
@@ -1386,10 +1663,11 @@ def main(page: ft.Page):
                 title_match = search_term in doc["title"].lower()
                 type_match = search_term in doc["type"].lower()
                 committee_match = search_term in doc["committee"].lower()
+                location_match = search_term in str(doc.get("current_location", "")).lower()
                 status_match = search_term in doc["status"].lower()
                 uuid_match = search_term in doc["uuid"].lower()
                 
-                if not (title_match or type_match or committee_match or status_match or uuid_match):
+                if not (title_match or type_match or committee_match or location_match or status_match or uuid_match):
                     continue
             
             # Add matching row to table
@@ -1416,18 +1694,7 @@ def main(page: ft.Page):
         file_picker.on_upload = handle_file_upload
         load_workflow_config()
 
-        try:
-            response = requests.get(f"{BACKEND_URL}/legislative/list", verify=False)
-            if response.status_code == 200:
-                payload = response.json()
-                all_documents = payload.get("items", [])
-                refresh_display_ids()
-            else:
-                all_documents = []
-                page.snack_bar = ft.SnackBar(ft.Text(f"Document load failed: {response.text}"), open=True)
-        except Exception as exc:
-            all_documents = []
-            page.snack_bar = ft.SnackBar(ft.Text(f"Document load error: {exc}"), open=True)
+        load_documents_from_backend(show_notice=True)
 
         search_field.on_change = lambda e: update_table_view()
         type_filter.on_change = lambda e: update_table_view()

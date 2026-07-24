@@ -3,14 +3,19 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import uuid
+import secrets
+from datetime import datetime, timedelta
 import qrcode
 import io
 import re
 import json
 import os
+from urllib.parse import quote as urlquote
 from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from .database import engine, Base, get_db
 from . import models
 from sqlalchemy import desc
@@ -143,8 +148,25 @@ def ensure_user_role_column():
         connection.exec_driver_sql("UPDATE users SET role = 'Admin' WHERE role IS NULL OR role = ''")
 
 
+def ensure_current_location_column():
+    with engine.begin() as connection:
+        columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(legislative_items)").fetchall()]
+        if "current_location" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE legislative_items ADD COLUMN current_location VARCHAR NOT NULL DEFAULT 'Records Registry'"
+            )
+        connection.exec_driver_sql(
+            "UPDATE legislative_items SET current_location = 'Records Registry' WHERE current_location IS NULL OR current_location = ''"
+        )
+
+
 try:
     ensure_user_role_column()
+except Exception:
+    pass
+
+try:
+    ensure_current_location_column()
 except Exception:
     pass
 
@@ -152,6 +174,10 @@ app = FastAPI(title="LGU Tolosa SB Legislative Tracking Backend")
 
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
 WORKFLOW_CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "workflow_config.json"))
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://192.168.1.4:8001").rstrip("/")
+SCANNER_PUBLIC_URL = os.getenv("SCANNER_PUBLIC_URL", "http://192.168.1.4:8002").rstrip("/")
+SCANNER_SESSION_TTL_MINUTES = 12 * 60
+scanner_sessions: dict[str, dict[str, object]] = {}
 DEFAULT_WORKFLOW_STEPS = [
     "Draft",
     "First Reading",
@@ -203,6 +229,38 @@ def save_workflow_steps(steps: list[str]) -> list[str]:
         json.dump({"statuses": normalized_steps}, config_file, indent=2)
 
     return normalized_steps
+
+
+def _purge_expired_scanner_sessions():
+    now = datetime.utcnow()
+    expired_tokens = [token for token, session in scanner_sessions.items() if session.get("expires_at") and session["expires_at"] < now]
+    for token in expired_tokens:
+        scanner_sessions.pop(token, None)
+
+
+def create_scanner_session(username: str, role: str) -> dict[str, str]:
+    _purge_expired_scanner_sessions()
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(minutes=SCANNER_SESSION_TTL_MINUTES)
+    scanner_sessions[token] = {
+        "username": username,
+        "role": role,
+        "expires_at": expires_at,
+    }
+    return {
+        "token": token,
+        "username": username,
+        "role": role,
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+def validate_scanner_session(token: str) -> dict[str, object]:
+    _purge_expired_scanner_sessions()
+    session = scanner_sessions.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Scanner session expired or invalid")
+    return session
 
 @app.get("/")
 def root():
@@ -320,6 +378,40 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
 
     return {"message": "Login successful", "username": user.username}
 
+
+@app.post("/auth/scanner/login")
+def scanner_login(username: str, password: str, db: Session = Depends(get_db)):
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user or not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    scanner_session = create_scanner_session(user.username, user.role or "Admin")
+
+    record_audit_log(
+        db,
+        actor=user.username,
+        action="SCANNER_LOGIN",
+        target_type="Auth",
+        target_id=user.username,
+        details="Scanner session created",
+    )
+
+    return {
+        "message": "Scanner login successful",
+        "username": user.username,
+        "role": user.role or "Admin",
+        **scanner_session,
+    }
+
+
+@app.post("/auth/scanner/logout")
+def scanner_logout(token: str):
+    scanner_sessions.pop(token, None)
+    return {"message": "Scanner session cleared"}
+
 # Route: Parse document template and extract metadata
 @app.post("/legislative/parse")
 async def parse_document(file: UploadFile = File(...)):
@@ -353,6 +445,7 @@ def register_item(title: str, item_type: str, committee: str, db: Session = Depe
         item_type=item_type, 
         assigned_committee=committee,
         current_status=initial_status,
+        current_location="Records Registry",
     )
     db.add(new_item)
     db.commit()
@@ -372,6 +465,7 @@ def register_item(title: str, item_type: str, committee: str, db: Session = Depe
         "id": new_item.id,
         "tracking_uuid": unique_id,
         "current_stage": new_item.current_status,
+        "current_location": new_item.current_location,
     }
 
 
@@ -386,10 +480,125 @@ def list_legislative_items(db: Session = Depends(get_db)):
                 "type": item.item_type,
                 "committee": item.assigned_committee,
                 "status": item.current_status,
+                "current_location": item.current_location or "Records Registry",
                 "uuid": item.tracking_uuid,
             }
             for item in items
         ]
+    }
+
+
+def _update_document_location(
+    *,
+    item: models.LegislativeItem,
+    receiving_office: str,
+    logged_in_user: str,
+    db: Session,
+):
+    previous_location = item.current_location or "Records Registry"
+    new_location = receiving_office.strip() or previous_location
+
+    item.current_location = new_location
+
+    history_entry = models.DocumentHistory(
+        item_id=item.id,
+        previous_location=previous_location,
+        receiving_office=receiving_office.strip() or new_location,
+        new_location=new_location,
+        logged_in_user=logged_in_user.strip() or "system",
+    )
+    db.add(history_entry)
+    db.commit()
+    db.refresh(item)
+    db.refresh(history_entry)
+
+    record_audit_log(
+        db,
+        actor=logged_in_user.strip() or "system",
+        action="DOCUMENT_RECEIVED",
+        target_type="LegislativeItem",
+        target_id=str(item.id),
+        details=f"{previous_location} -> {new_location}",
+    )
+
+    return previous_location, new_location, history_entry
+
+
+@app.post("/documents/receive/{tracking_uuid}")
+def receive_document(
+    tracking_uuid: str,
+    receiving_office: str,
+    logged_in_user: str = "system",
+    scanner_token: str | None = None,
+    db: Session = Depends(get_db),
+):
+    item = db.query(models.LegislativeItem).filter(models.LegislativeItem.tracking_uuid == tracking_uuid).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if scanner_token:
+        session = validate_scanner_session(scanner_token)
+        logged_in_user = str(session.get("username", logged_in_user))
+
+    previous_location, new_location, history_entry = _update_document_location(
+        item=item,
+        receiving_office=receiving_office,
+        logged_in_user=logged_in_user,
+        db=db,
+    )
+
+    return {
+        "message": f"Received by {new_location}",
+        "document_title": item.title,
+        "previous_location": previous_location,
+        "new_location": new_location,
+        "current_location": item.current_location,
+        "timestamp": history_entry.timestamp.isoformat() if history_entry.timestamp else None,
+    }
+
+
+@app.get("/scanner/mobile")
+def mobile_scanner_page(api_base: str | None = None, uuid: str | None = None):
+        target_url = f"{SCANNER_PUBLIC_URL}/scanner/mobile"
+        if api_base:
+            target_url = f"{target_url}?api_base={urlquote(api_base)}"
+        if uuid:
+            separator = "&" if "?" in target_url else "?"
+            target_url = f"{target_url}{separator}uuid={urlquote(uuid)}"
+        return RedirectResponse(url=target_url, status_code=307)
+
+
+@app.get("/documents/history/{tracking_uuid}")
+def get_document_history(tracking_uuid: str, db: Session = Depends(get_db)):
+    item = db.query(models.LegislativeItem).filter(models.LegislativeItem.tracking_uuid == tracking_uuid).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    history_items = (
+        db.query(models.DocumentHistory)
+        .filter(models.DocumentHistory.item_id == item.id)
+        .order_by(models.DocumentHistory.timestamp.asc(), models.DocumentHistory.id.asc())
+        .all()
+    )
+
+    return {
+        "document": {
+            "id": item.id,
+            "title": item.title,
+            "uuid": item.tracking_uuid,
+            "current_location": item.current_location or "Records Registry",
+        },
+        "items": [
+            {
+                "id": history.id,
+                "previous_location": history.previous_location,
+                "receiving_office": history.receiving_office,
+                "new_location": history.new_location,
+                "logged_in_user": history.logged_in_user,
+                "timestamp": history.timestamp.isoformat() if history.timestamp else None,
+            }
+            for history in history_items
+        ],
     }
 
 
@@ -466,8 +675,9 @@ def preview_uploaded_file(filename: str):
 # Route 2: Generate and stream a downloadable QR code image matching the document UUID
 @app.get("/legislative/qrcode/{tracking_uuid}")
 def get_qrcode(tracking_uuid: str):
+    scanner_url = f"{SCANNER_PUBLIC_URL}/scanner/mobile?uuid={urlquote(tracking_uuid)}&api_base={urlquote(BACKEND_PUBLIC_URL)}"
     qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(tracking_uuid)
+    qr.add_data(scanner_url)
     qr.make(fit=True)
     
     img = qr.make_image(fill_color="black", back_color="white")
@@ -485,12 +695,19 @@ def track_item(tracking_uuid: str, location: str, action: str, scanned_by: str, 
         raise HTTPException(status_code=404, detail="Legislative record not found")
     
     item.current_status = action
-    
+
+    previous_location, new_location, history_entry = _update_document_location(
+        item=item,
+        receiving_office=location,
+        logged_in_user=scanned_by,
+        db=db,
+    )
+
     log_entry = models.LegislativeTrackingLog(
-        item_id=item.id, 
-        location_stamp=location, 
+        item_id=item.id,
+        location_stamp=location,
         action_taken=action,
-        scanned_by=scanned_by
+        scanned_by=scanned_by,
     )
     db.add(log_entry)
     db.commit()
@@ -507,7 +724,10 @@ def track_item(tracking_uuid: str, location: str, action: str, scanned_by: str, 
     return {
         "message": "Tracking log updated", 
         "item_title": item.title, 
-        "current_stage": item.current_status
+        "current_stage": item.current_status,
+        "previous_location": previous_location,
+        "current_location": new_location,
+        "history_timestamp": history_entry.timestamp.isoformat() if history_entry.timestamp else None,
     }
 
 
