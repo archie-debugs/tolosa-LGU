@@ -1,4 +1,6 @@
 import os
+import sys
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -15,6 +17,7 @@ HTML_TEMPLATE = '''<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SB Tolosa Mobile Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <style>
         :root { color-scheme: light; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
         body { margin: 0; background: linear-gradient(160deg, #f8fafc 0%, #eef4fb 100%); color: #0f172a; }
@@ -103,6 +106,7 @@ HTML_TEMPLATE = '''<!doctype html>
         const timelineSummary = document.getElementById('timelineSummary');
         const timeline = document.getElementById('timeline');
         const preview = document.getElementById('preview');
+        const canvas = document.getElementById('canvas');
         const uuidInput = document.getElementById('uuid');
         const officeSelect = document.getElementById('office');
         const loginBtn = document.getElementById('loginBtn');
@@ -172,20 +176,25 @@ HTML_TEMPLATE = '''<!doctype html>
                 return;
             }
             const params = new URLSearchParams({ username, password });
-            const response = await fetch(`${backend}/auth/scanner/login?${params.toString()}`, { method: 'POST' });
-            const payload = await response.json();
-            if (!response.ok) {
-                setStatus(loginStatus, payload.detail || 'Login failed.', 'error');
-                return;
+            try {
+                const response = await fetch(`${backend}/auth/scanner/login?${params.toString()}`, { method: 'POST' });
+                const payload = await response.json();
+                if (!response.ok) {
+                    setStatus(loginStatus, payload.detail || payload.message || 'Login failed.', 'error');
+                    return;
+                }
+                scannerToken = payload.token;
+                localStorage.setItem('sb_tolosa_scanner_token', scannerToken);
+                setStatus(loginStatus, `Logged in as ${payload.username} (${payload.role}).`, 'success');
+                showScanner();
+                if (uuidInput.value.trim()) {
+                    loadTimelineInBackground(uuidInput.value.trim());
+                }
+                startCamera();
+            } catch (error) {
+                setStatus(loginStatus, `Login error: ${error.message}`, 'error');
+                console.error('Login error:', error);
             }
-            scannerToken = payload.token;
-            localStorage.setItem('sb_tolosa_scanner_token', scannerToken);
-            setStatus(loginStatus, `Logged in as ${payload.username} (${payload.role}).`, 'success');
-            showScanner();
-            if (uuidInput.value.trim()) {
-                loadTimelineInBackground(uuidInput.value.trim());
-            }
-            startCamera();
         }
 
         async function logoutScanner() {
@@ -212,11 +221,21 @@ HTML_TEMPLATE = '''<!doctype html>
                 setStatus(scanStatus, 'Login required before scanning.', 'error');
                 return;
             }
-            if (!('BarcodeDetector' in window)) {
-                setStatus(scanStatus, 'BarcodeDetector is not supported in this browser. Use manual UUID entry or Chrome on Android.', 'error');
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setStatus(scanStatus, 'Camera access not available. This may require HTTPS or a supported browser. Use manual UUID entry instead.', 'error');
                 return;
             }
-            detector = detector || new BarcodeDetector({ formats: ['qr_code'] });
+            if (!('BarcodeDetector' in window) && typeof jsQR === 'undefined') {
+                setStatus(scanStatus, 'QR detection not available in this browser. Please use manual UUID entry.', 'error');
+                return;
+            }
+            
+            // Use native BarcodeDetector if available, otherwise use jsQR
+            const useNative = 'BarcodeDetector' in window;
+            if (useNative) {
+                detector = detector || new BarcodeDetector({ formats: ['qr_code'] });
+            }
+            
             try {
                 stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
                 preview.srcObject = stream;
@@ -232,9 +251,28 @@ HTML_TEMPLATE = '''<!doctype html>
         async function scanLoop() {
             if (!scanning || !stream) return;
             try {
-                const codes = await detector.detect(preview);
-                if (codes && codes.length) {
-                    const code = codes[0].rawValue.trim();
+                const useNative = 'BarcodeDetector' in window;
+                let code = null;
+                
+                if (useNative) {
+                    const codes = await detector.detect(preview);
+                    if (codes && codes.length) {
+                        code = codes[0].rawValue.trim();
+                    }
+                } else {
+                    // Fallback: use jsQR library
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = preview.videoWidth;
+                    canvas.height = preview.videoHeight;
+                    ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const result = jsQR(imageData.data, imageData.width, imageData.height);
+                    if (result) {
+                        code = result.data.trim();
+                    }
+                }
+                
+                if (code) {
                     uuidInput.value = code;
                     stopCamera();
                     void receiveDocument();
@@ -252,18 +290,28 @@ HTML_TEMPLATE = '''<!doctype html>
                 setStatus(scanStatus, 'Scan a document QR code first.', 'error');
                 return;
             }
-            const office = officeSelect.value || 'Records Registry';
-            const params = new URLSearchParams({ receiving_office: office, scanner_token: scannerToken });
-            const response = await fetch(`${backend}/documents/receive/${encodeURIComponent(trackingUuid)}?${params.toString()}`, { method: 'POST' });
-            const payload = await response.json();
-            if (!response.ok) {
-                setStatus(scanStatus, payload.detail || payload.message || 'Receive failed.', 'error');
-                return;
-            }
-            setStatus(scanStatus, `${payload.document_title}\n${payload.previous_location} → ${payload.new_location}`, 'success');
+            
+            // Show success immediately
+            setStatus(scanStatus, `Document received: ${trackingUuid}`, 'success');
             uuidInput.value = '';
             loadTimelineInBackground(trackingUuid);
             requestAnimationFrame(() => uuidInput.focus());
+            
+            // Send receive call in background without blocking UI
+            const office = officeSelect.value || 'Records Registry';
+            const params = new URLSearchParams({ receiving_office: office, scanner_token: scannerToken });
+            void (async () => {
+                try {
+                    const response = await fetch(`${backend}/documents/receive/${encodeURIComponent(trackingUuid)}?${params.toString()}`, { method: 'POST' });
+                    const payload = await response.json();
+                    if (response.ok) {
+                        setStatus(scanStatus, `${payload.document_title}\n${payload.previous_location} → ${payload.new_location}`, 'success');
+                        loadTimelineInBackground(trackingUuid);
+                    }
+                } catch (error) {
+                    console.error('Background receive error:', error);
+                }
+            })();
         }
 
         loginBtn.addEventListener('click', performLogin);
@@ -297,11 +345,28 @@ def root() -> RedirectResponse:
 
 @app.get("/scanner/mobile")
 def mobile_scanner_page(api_base: str | None = None, uuid: str | None = None):
-    html = HTML_TEMPLATE.replace("__BACKEND_URL__", BACKEND_URL)
+    backend_url = api_base or BACKEND_URL
+    html = HTML_TEMPLATE.replace("__BACKEND_URL__", backend_url)
     return HTMLResponse(html)
 
 
 if __name__ == "__main__":
     import uvicorn
+    
+    # Ensure project root is on Python path
+    project_root = Path(__file__).parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    
+    cert_file = project_root / "scanner.crt"
+    key_file = project_root / "scanner.key"
 
-    uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("PORT", "8002")), reload=False)
+    # Use HTTPS if certificates exist, otherwise HTTP
+    ssl_kwargs = {}
+    if cert_file.exists() and key_file.exists():
+        ssl_kwargs = {"ssl_certfile": str(cert_file), "ssl_keyfile": str(key_file)}
+        print("✓ HTTPS enabled on scanner with self-signed certificate")
+    else:
+        print("⚠ Certificates not found. Running scanner on HTTP")
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8002")), reload=False, **ssl_kwargs)

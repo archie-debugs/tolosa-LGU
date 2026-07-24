@@ -109,6 +109,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# SSL certificates (self-signed, generated locally)
+scanner.crt
+scanner.key
+
 # Spyder project settings
 .spyderproject
 .spyproject

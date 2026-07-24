@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -172,10 +173,18 @@ except Exception:
 
 app = FastAPI(title="LGU Tolosa SB Legislative Tracking Backend")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
 WORKFLOW_CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "workflow_config.json"))
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://192.168.1.4:8001").rstrip("/")
-SCANNER_PUBLIC_URL = os.getenv("SCANNER_PUBLIC_URL", "http://192.168.1.4:8002").rstrip("/")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "https://192.168.1.4:8001").rstrip("/")
+SCANNER_PUBLIC_URL = os.getenv("SCANNER_PUBLIC_URL", "https://192.168.1.4:8002").rstrip("/")
 SCANNER_SESSION_TTL_MINUTES = 12 * 60
 scanner_sessions: dict[str, dict[str, object]] = {}
 DEFAULT_WORKFLOW_STEPS = [
