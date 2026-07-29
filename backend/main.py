@@ -684,17 +684,19 @@ def preview_uploaded_file(filename: str):
 # Route 2: Generate and stream a downloadable QR code image matching the document UUID
 @app.get("/legislative/qrcode/{tracking_uuid}")
 def get_qrcode(tracking_uuid: str):
-    scanner_url = f"{SCANNER_PUBLIC_URL}/scanner/mobile?uuid={urlquote(tracking_uuid)}&api_base={urlquote(BACKEND_PUBLIC_URL)}"
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(scanner_url)
-    qr.make(fit=True)
-    
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    
-    return StreamingResponse(buf, media_type="image/png")
+    try:
+        scanner_url = f"{SCANNER_PUBLIC_URL}/scanner/mobile?uuid={urlquote(tracking_uuid)}&api_base={urlquote(BACKEND_PUBLIC_URL)}"
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(scanner_url)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="image/png")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"QR generation failed: {exc}")
 
 # Route 3: Endpoint for the QR application to drop a tracking log
 @app.post("/legislative/track/{tracking_uuid}")

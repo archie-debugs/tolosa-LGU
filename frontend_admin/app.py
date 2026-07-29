@@ -18,7 +18,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # if sys.platform == 'win32':
 #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-BACKEND_URL = os.getenv("BACKEND_URL", "https://127.0.0.1:8001")
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+cert_file = os.path.join(project_root, "scanner.crt")
+key_file = os.path.join(project_root, "scanner.key")
+local_backend_default = "https://127.0.0.1:8001" if os.path.exists(cert_file) and os.path.exists(key_file) else "http://127.0.0.1:8001"
+BACKEND_URL = os.getenv("BACKEND_URL", local_backend_default)
 BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", BACKEND_URL)
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
 UPLOAD_SECRET_KEY = os.getenv("FLET_SECRET_KEY", "sb_tolosa_tracking_secret")
@@ -584,6 +588,7 @@ def main(page: ft.Page):
         title=ft.Text("Generated Legislative QR Code"),
         content=ft.Container(alignment=ft.alignment.center, width=250, height=250)
     )
+    page.overlay.append(qr_dialog)
 
     preview_dialog = ft.AlertDialog(
         title=ft.Text("Document Preview"),
@@ -614,9 +619,12 @@ def main(page: ft.Page):
                 )
                 page.overlay.append(qr_dialog)
                 qr_dialog.open = True
-                page.update()
+            else:
+                message = response.text or f"Status {response.status_code}"
+                page.snack_bar = ft.SnackBar(ft.Text(f"QR load failed: {message}"), open=True)
         except Exception as ex:
             page.snack_bar = ft.SnackBar(ft.Text(f"Connection error: {ex}"), open=True)
+        finally:
             page.update()
 
     def _doc_print(e, doc):

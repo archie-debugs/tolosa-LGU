@@ -4,6 +4,7 @@ flet==0.21.2
 sqlalchemy==2.0.28
 pydantic==2.6.4
 qrcode==7.4.2
+pillow==10.0.0
 passlib==1.7.4
 requests==2.31.0
 python-multipart==0.0.6
