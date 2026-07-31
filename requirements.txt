@@ -10,4 +10,5 @@ requests==2.31.0
 python-multipart==0.0.6
 python-docx==0.8.11
 pypdf==4.0.1
+reportlab==4.2.0
 trustme==1.2.1

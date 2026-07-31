@@ -11,6 +11,7 @@ import qrcode
 import json
 from flet_runtime.uploads import build_upload_url
 from urllib.parse import quote
+from frontend.frontend_secretariat.app import build_secretariat_view
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -121,6 +122,8 @@ def main(page: ft.Page):
 
     # Current User Session State
     current_user = None
+    current_user_role = None
+    secretariat_selected_ids = set()
     
     # Data storage for all documents
     all_documents = []
@@ -375,6 +378,12 @@ def main(page: ft.Page):
 
         page.update()
         refocus_scan_input()
+
+    def save_binary_file_to_workspace(filename: str, data: bytes) -> str:
+        output_path = os.path.join(project_root, filename)
+        with open(output_path, "wb") as handle:
+            handle.write(data)
+        return output_path
 
     def surface_card(content, width=None, padding=24, expand=False):
         return ft.Container(
@@ -1006,6 +1015,19 @@ def main(page: ft.Page):
             ],
         )
 
+    def secretariat_workspace(page: ft.Page):
+        return build_secretariat_view(
+            page=page,
+            current_user_role=current_user_role,
+            workflow_steps=workflow_steps,
+            all_documents=all_documents,
+            secretariat_selected_ids=secretariat_selected_ids,
+            save_binary_file_to_workspace=save_binary_file_to_workspace,
+            BACKEND_URL=BACKEND_URL,
+            surface_card=surface_card,
+            section_header=section_header,
+        )
+
     def render_shell(title_text: str, subtitle_text: str, content_view):
         """Build the shared admin shell with a fixed header and a left navigation rail."""
         # Use flexible layout instead of a large fixed body height to avoid
@@ -1071,10 +1093,12 @@ def main(page: ft.Page):
             if index == 0:
                 content_holder.controls.append(registry_view())
             elif index == 1:
-                content_holder.controls.append(committees_view())
+                content_holder.controls.append(secretariat_workspace(page))
             elif index == 2:
-                content_holder.controls.append(users_roles_view())
+                content_holder.controls.append(committees_view())
             elif index == 3:
+                content_holder.controls.append(users_roles_view())
+            elif index == 4:
                 content_holder.controls.append(audit_logs_view())
             else:
                 content_holder.controls.append(settings_view())
@@ -1082,18 +1106,13 @@ def main(page: ft.Page):
             page.update()
 
         def handle_nav_change(e):
-            # Some Flet runtimes set the selected index on the event control,
-            # others update the NavigationRail instance. Try both safely.
             try:
                 idx = getattr(e.control, "selected_index", None)
             except Exception:
                 idx = None
 
             if idx is None:
-                try:
-                    idx = getattr(nav, "selected_index", 0)
-                except Exception:
-                    idx = 0
+                idx = selected_index
 
             switch_view(idx if idx is not None else 0)
 
@@ -1151,10 +1170,11 @@ def main(page: ft.Page):
                 )
             )
             nav_container.controls.append(nav_item(ft.icons.LIST_ALT_OUTLINED, "Documents", 0))
-            nav_container.controls.append(nav_item(ft.icons.GROUP_OUTLINED, "Committees", 1))
-            nav_container.controls.append(nav_item(ft.icons.PEOPLE_OUTLINED, "Users & Roles", 2))
-            nav_container.controls.append(nav_item(ft.icons.HISTORY_OUTLINED, "Audit Logs", 3))
-            nav_container.controls.append(nav_item(ft.icons.SETTINGS_OUTLINED, "Settings", 4))
+            nav_container.controls.append(nav_item(ft.icons.ACCOUNT_BALANCE_OUTLINED, "Secretariat", 1))
+            nav_container.controls.append(nav_item(ft.icons.GROUP_OUTLINED, "Committees", 2))
+            nav_container.controls.append(nav_item(ft.icons.PEOPLE_OUTLINED, "Users & Roles", 3))
+            nav_container.controls.append(nav_item(ft.icons.HISTORY_OUTLINED, "Audit Logs", 4))
+            nav_container.controls.append(nav_item(ft.icons.SETTINGS_OUTLINED, "Settings", 5))
 
         build_nav()
 
@@ -1825,6 +1845,19 @@ def main(page: ft.Page):
         _try_process_pending_upload()
         return
 
+    def refresh_measure_number_preview(e=None):
+        if title_input.value and not title_input.value.startswith("Draft"):
+            return
+        try:
+            response = requests.get(f"{BACKEND_URL}/documents/next-number", params={"item_type": type_dropdown.value or "Ordinance"}, verify=False)
+            if response.status_code == 200:
+                next_number = response.json().get("next_number")
+                if next_number:
+                    title_input.value = next_number
+                    page.update()
+        except Exception:
+            pass
+
     def submit_form(e):
         if not title_input.value or not committee_input.value:
             page.snack_bar = ft.SnackBar(ft.Text("Please fill out all mandatory fields."), open=True)
@@ -1917,6 +1950,7 @@ def main(page: ft.Page):
         
         page.update()
 
+    type_dropdown.on_change = lambda e: refresh_measure_number_preview(e)
     import_button = ft.ElevatedButton(
         "Import Document Template",
         icon=ft.icons.UPLOAD_FILE,
@@ -1948,8 +1982,9 @@ def main(page: ft.Page):
         page.update()
 
     def logout_user():
-        nonlocal current_user
+        nonlocal current_user, current_user_role
         current_user = None
+        current_user_role = None
         show_login()
 
     # --- LOGIN SCREEN ---
@@ -1973,7 +2008,9 @@ def main(page: ft.Page):
                 res = requests.post(f"{BACKEND_URL}/auth/login", params=params, verify=False)
                 
                 if res.status_code == 200:
-                    current_user = res.json()["username"]
+                    payload = res.json()
+                    current_user = payload.get("username")
+                    current_user_role = payload.get("role", "Admin")
                     load_dashboard()
                 else:
                     page.snack_bar = ft.SnackBar(ft.Text("Invalid credentials."), open=True)

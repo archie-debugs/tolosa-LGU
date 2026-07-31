@@ -1,16 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from ..database import get_db
-from .. import models
-from ..core import (
-    extract_text_from_file,
-    parse_document_content,
-    record_audit_log,
-    load_workflow_steps,
-    DEFAULT_WORKFLOW_STEPS,
-)
 from datetime import datetime
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -18,12 +9,17 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import io
-import os
 import qrcode
 import re
-import uuid
 
-router = APIRouter()
+from backend.database import get_db
+from backend import models
+
+router = APIRouter(prefix="/documents", tags=["secretariat"])
+
+
+class BatchQrPayload(BaseModel):
+    item_ids: list[int]
 
 
 def _build_qr_image(url: str):
@@ -144,12 +140,7 @@ def _build_agenda_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
         key = stage_key(item.current_status)
         grouped.setdefault(key, []).append(item)
 
-    ordered_stages = [
-        "1st Reading",
-        "2nd Reading",
-        "3rd Reading",
-        "Committee Report Submitted",
-    ]
+    ordered_stages = ["1st Reading", "2nd Reading", "3rd Reading", "Committee Report Submitted"]
     for stage in ordered_stages:
         if stage not in grouped:
             continue
@@ -195,32 +186,22 @@ def _resolve_measure_number(db: Session, item_type: str, year: int | None = None
 
     pattern = re.compile(rf"{base_year}-(\d{{1,3}})")
     highest_sequence = 0
-
     items = db.query(models.LegislativeItem).filter(models.LegislativeItem.item_type == normalized_type).all()
     for item in items:
-        title = item.title or ""
-        match = pattern.search(title)
+        match = pattern.search(item.title or "")
         if match:
-            sequence = int(match.group(1))
-            highest_sequence = max(highest_sequence, sequence)
-
+            highest_sequence = max(highest_sequence, int(match.group(1)))
     next_sequence = highest_sequence + 1
     return f"{prefix} {base_year}-{next_sequence:03d}"
 
 
-class BatchQrPayload(BaseModel):
-    item_ids: list[int]
-
-
-@router.post("/documents/batch-qr-pdf")
+@router.post("/batch-qr-pdf")
 def batch_qr_pdf(payload: BatchQrPayload, db: Session = Depends(get_db)):
     if not payload.item_ids:
         raise HTTPException(status_code=400, detail="No item IDs were provided")
-
     items = db.query(models.LegislativeItem).filter(models.LegislativeItem.id.in_(payload.item_ids)).all()
     if not items:
         raise HTTPException(status_code=404, detail="No matching legislative items found")
-
     pdf_bytes = _build_batch_qr_pdf_bytes(items)
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
@@ -229,21 +210,16 @@ def batch_qr_pdf(payload: BatchQrPayload, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/documents/next-number")
+@router.get("/next-number")
 def next_measure_number(item_type: str, year: int | None = None, db: Session = Depends(get_db)):
     if not item_type:
         raise HTTPException(status_code=400, detail="item_type is required")
     return {"next_number": _resolve_measure_number(db, item_type, year)}
 
 
-@router.get("/documents/generate-agenda")
+@router.get("/generate-agenda")
 def generate_agenda(db: Session = Depends(get_db)):
-    eligible_statuses = {
-        "1st Reading",
-        "2nd Reading",
-        "3rd Reading",
-        "Committee Report Submitted",
-    }
+    eligible_statuses = {"1st Reading", "2nd Reading", "3rd Reading", "Committee Report Submitted"}
     items = (
         db.query(models.LegislativeItem)
         .filter(models.LegislativeItem.current_status.in_(eligible_statuses))
@@ -257,70 +233,3 @@ def generate_agenda(db: Session = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
-
-
-@router.post("/legislative/parse")
-async def parse_document(file: UploadFile = File(...)):
-    try:
-        file_bytes = await file.read()
-        text = extract_text_from_file(file_bytes, file.filename)
-        parsed_data = parse_document_content(text)
-        return parsed_data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error parsing document: {str(e)}")
-
-
-@router.post("/legislative/register")
-def register_item(title: str, item_type: str, committee: str, db: Session = Depends(get_db)):
-    unique_id = str(uuid.uuid4())
-    current_workflow_steps = load_workflow_steps()
-    initial_status = current_workflow_steps[0] if current_workflow_steps else DEFAULT_WORKFLOW_STEPS[0]
-    new_item = models.LegislativeItem(
-        tracking_uuid=unique_id,
-        title=title,
-        item_type=item_type,
-        assigned_committee=committee,
-        current_status=initial_status,
-        current_location="Records Registry",
-    )
-    db.add(new_item)
-    db.commit()
-    db.refresh(new_item)
-
-    record_audit_log(
-        db,
-        actor="system",
-        action="LEGISLATIVE_ITEM_REGISTERED",
-        target_type="LegislativeItem",
-        target_id=str(new_item.id),
-        details=f"Registered {item_type}: {title} for committee {committee}",
-    )
-
-    return {
-        "message": f"{item_type} Registered Successfully",
-        "id": new_item.id,
-        "tracking_uuid": unique_id,
-        "current_stage": new_item.current_status,
-        "current_location": new_item.current_location,
-    }
-
-
-@router.get("/legislative/list")
-def list_legislative_items(db: Session = Depends(get_db)):
-    items = db.query(models.LegislativeItem).order_by(models.LegislativeItem.id.asc()).all()
-    return {
-        "items": [
-            {
-                "id": item.id,
-                "title": item.title,
-                "type": item.item_type,
-                "committee": item.assigned_committee,
-                "status": item.current_status,
-                "current_location": item.current_location or "Records Registry",
-                "uuid": item.tracking_uuid,
-            }
-            for item in items
-        ]
-    }
