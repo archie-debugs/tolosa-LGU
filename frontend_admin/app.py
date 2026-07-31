@@ -8,6 +8,7 @@ import asyncio
 import time
 import urllib3
 import qrcode
+import json
 from flet_runtime.uploads import build_upload_url
 from urllib.parse import quote
 
@@ -37,6 +38,68 @@ DEFAULT_WORKFLOW_STEPS = [
     "Approved/Vetoed",
     "Published/Enacted",
 ]
+
+COMMITTEES = [
+    {"name": "Committee on Finance, Budget and Appropriation"},
+    {"name": "Committee on Rules, Ordinances, Public Accountability and Good Government"},
+    {"name": "Committee on Agriculture"},
+    {"name": "Committee on Health"},
+    {"name": "Committee on Education, Culture and Arts"},
+    {"name": "Committee on Information and Communications Technology (ICT)"},
+    {"name": "Committee on Social Services"},
+    {"name": "Committee on Public Works and Infrastructures"},
+    {"name": "Committee on Women, Children and Family Care"},
+    {"name": "Committee on Tourism"},
+    {"name": "Committee on Trade and Industry"},
+    {"name": "Committee on Youth and Sports Development"},
+    {"name": "Committee on Police, Fire, Public Safety and Human Rights"},
+    {"name": "Committee on Ways and Means"},
+    {"name": "Committee on Market and Slaughterhouse"},
+    {"name": "Committee on Personnel"},
+    {"name": "Committee on Labor and Employment Policies"},
+    {"name": "Committee on Environment Protection and Sanitation"},
+    {"name": "Committee on Cooperatives, Entrepreneurship and Livelihood Development"},
+    {"name": "Committee on Barangay Affairs"},
+    {"name": "Committee on General Services"},
+    {"name": "Committee on Games and Amusement"},
+    {"name": "Committee on Public Utilities, Transportation, Communication and Public Information"},
+    {"name": "Land Use and Housing Committee"},
+    {"name": "Committee on Disaster Risk Reduction Management"},
+]
+
+# Persist committees to a JSON file so edits survive restarts
+committees_file = os.path.join(project_root, "committees.json")
+
+def load_committees_from_file():
+    try:
+        if os.path.exists(committees_file):
+            with open(committees_file, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+                if isinstance(data, list):
+                    # normalize to list of dicts with 'name'
+                    out = []
+                    for item in data:
+                        if isinstance(item, dict) and item.get("name"):
+                            out.append({"name": str(item.get("name"))})
+                        elif isinstance(item, str):
+                            out.append({"name": item})
+                    if out:
+                        return out
+    except Exception:
+        pass
+    return COMMITTEES
+
+def save_committees_to_file(committees):
+    try:
+        with open(committees_file, "w", encoding="utf-8") as fh:
+            json.dump(committees, fh, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+# Override default with persisted list when available
+COMMITTEES = load_committees_from_file()
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.environ["FLET_SECRET_KEY"] = UPLOAD_SECRET_KEY
 os.environ["FLET_UPLOAD_DIR"] = UPLOAD_DIR
@@ -48,11 +111,13 @@ UPLOAD_ENDPOINT = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
 def main(page: ft.Page):
     page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.bgcolor = ft.colors.BLUE_GREY_50
+    # Subtle neutral background for modern look
+    page.bgcolor = ft.colors.BLUE_GREY_100
     page.scroll = ft.ScrollMode.AUTO
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.padding = 30
+    page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
+    page.vertical_alignment = ft.MainAxisAlignment.START
+    # Use minimal outer padding so content can fill viewport cleanly
+    page.padding = 8
 
     # Current User Session State
     current_user = None
@@ -943,112 +1008,160 @@ def main(page: ft.Page):
 
     def render_shell(title_text: str, subtitle_text: str, content_view):
         """Build the shared admin shell with a fixed header and a left navigation rail."""
+        # Use flexible layout instead of a large fixed body height to avoid
+        # extra blank space when the window is scrolled. The containers will
+        # expand to the available space.
         body_height = max((page.window_height or 900) - 170, 520)
 
         header = ft.Container(
-            padding=ft.padding.all(20),
-            bgcolor=ft.colors.WHITE,
-            border_radius=24,
+            padding=ft.padding.symmetric(vertical=12, horizontal=14),
+            bgcolor=None,
             content=ft.Row(
                 [
                     ft.Container(
-                        content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=28, color=ft.colors.WHITE),
-                        padding=14,
-                        bgcolor=ft.colors.BLUE_900,
-                        border_radius=18,
+                        content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=22, color=ft.colors.WHITE),
+                        padding=10,
+                        bgcolor=ft.colors.BLUE_800,
+                        border_radius=10,
                     ),
                     ft.Column(
                         [
                             ft.Text(
-                                "LGU Tolosa - Sangguniang Bayan Tracking Dashboard",
-                                size=24,
+                                "LGU Tolosa - Sangguniang Bayan",
+                                size=18,
                                 weight=ft.FontWeight.BOLD,
                                 color=ft.colors.BLUE_900,
                             ),
                             ft.Text(
-                                "Track, register, preview, and manage legislative records from one workspace.",
-                                size=13,
+                                "Tracking Dashboard",
+                                size=12,
                                 color=ft.colors.BLUE_GREY_600,
                             ),
                         ],
-                        spacing=2,
+                        spacing=0,
                         expand=True,
                     ),
-                    ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Text("Logged in as", size=11, color=ft.colors.BLUE_GREY_500),
-                                ft.Text(current_user, size=14, weight=ft.FontWeight.W_600),
-                            ],
-                            spacing=0,
-                            horizontal_alignment=ft.CrossAxisAlignment.END,
-                        ),
-                        padding=ft.padding.symmetric(horizontal=14, vertical=10),
-                        bgcolor=ft.colors.BLUE_GREY_50,
-                        border_radius=16,
+                    ft.Row(
+                        [
+                            ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Text("Logged in as", size=11, color=ft.colors.BLUE_GREY_500),
+                                        ft.Text(current_user or "-", size=13, weight=ft.FontWeight.W_600),
+                                    ],
+                                    spacing=0,
+                                    horizontal_alignment=ft.CrossAxisAlignment.END,
+                                ),
+                                padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                                bgcolor=ft.colors.WHITE,
+                                border_radius=10,
+                            ),
+                            ft.IconButton(icon=ft.icons.LOGOUT, tooltip="Log out", on_click=lambda e: logout_user()),
+                        ],
+                        spacing=8,
                     ),
-                    ft.IconButton(icon=ft.icons.LOGOUT, tooltip="Log out", on_click=lambda e: logout_user()),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=16,
+                spacing=12,
             ),
         )
 
-        nav = ft.NavigationRail(
-            height=body_height,
-            selected_index=0,
-            label_type=ft.NavigationRailLabelType.ALL,
-            min_width=92,
-            min_extended_width=220,
-            leading=ft.Container(
-                padding=ft.padding.only(top=8, bottom=12),
-                content=ft.Column(
+        def switch_view(index: int):
+            content_holder.controls.clear()
+            if index == 0:
+                content_holder.controls.append(registry_view())
+            elif index == 1:
+                content_holder.controls.append(committees_view())
+            elif index == 2:
+                content_holder.controls.append(users_roles_view())
+            elif index == 3:
+                content_holder.controls.append(audit_logs_view())
+            else:
+                content_holder.controls.append(settings_view())
+            content_holder.update()
+            page.update()
+
+        def handle_nav_change(e):
+            # Some Flet runtimes set the selected index on the event control,
+            # others update the NavigationRail instance. Try both safely.
+            try:
+                idx = getattr(e.control, "selected_index", None)
+            except Exception:
+                idx = None
+
+            if idx is None:
+                try:
+                    idx = getattr(nav, "selected_index", 0)
+                except Exception:
+                    idx = 0
+
+            switch_view(idx if idx is not None else 0)
+
+        # Compute a height for the main content card so it fills the viewport
+        card_height = max((page.window_height or 900) - 160, 360)
+
+        # Build a simple top-aligned navigation column and allow rebuilding
+        selected_index = 0
+
+        nav_container = ft.Column(spacing=12)
+
+        def set_selected(idx: int):
+            nonlocal selected_index
+            selected_index = idx
+            build_nav()
+            switch_view(idx)
+
+        def nav_item(icon, label, idx):
+            is_selected = (idx == selected_index)
+            return ft.Container(
+                content=ft.Row(
                     [
-                        ft.Container(
-                            content=ft.Icon(ft.icons.DASHBOARD, color=ft.colors.BLUE_900),
-                            padding=10,
-                            bgcolor=ft.colors.BLUE_GREY_50,
-                            border_radius=14,
-                        ),
-                        ft.Text("Admin", size=13, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                        ft.Icon(icon, color=ft.colors.BLUE_800 if is_selected else ft.colors.BLUE_GREY_700),
+                        ft.Container(width=8),
+                        ft.Text(label, size=12, color=ft.colors.BLUE_800 if is_selected else ft.colors.BLUE_GREY_700),
                     ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-            ),
-            destinations=[
-                ft.NavigationRailDestination(
-                    icon=ft.icons.LIST_ALT_OUTLINED,
-                    selected_icon=ft.icons.LIST_ALT,
-                    label="Documents",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.GROUP_OUTLINED,
-                    selected_icon=ft.icons.GROUP,
-                    label="Committees",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.PEOPLE_OUTLINED,
-                    selected_icon=ft.icons.PEOPLE,
-                    label="Users & Roles",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.HISTORY_OUTLINED,
-                    selected_icon=ft.icons.HISTORY,
-                    label="Audit Logs",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.icons.SETTINGS_OUTLINED,
-                    selected_icon=ft.icons.SETTINGS,
-                    label="Settings",
-                ),
-            ],
-        )
+                padding=ft.padding.symmetric(vertical=10, horizontal=12),
+                width=200,
+                bgcolor=ft.colors.BLUE_50 if is_selected else None,
+                border_radius=10,
+                on_click=lambda e, i=idx: set_selected(i),
+            )
+
+        def build_nav():
+            nav_container.controls.clear()
+            nav_container.controls.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Container(
+                                content=ft.Icon(ft.icons.DASHBOARD, color=ft.colors.BLUE_800),
+                                padding=8,
+                                bgcolor=ft.colors.BLUE_50,
+                                border_radius=12,
+                            ),
+                            ft.Text("Admin", size=12, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=6,
+                    ),
+                    padding=ft.padding.only(top=6, bottom=8),
+                    alignment=ft.alignment.top_center,
+                )
+            )
+            nav_container.controls.append(nav_item(ft.icons.LIST_ALT_OUTLINED, "Documents", 0))
+            nav_container.controls.append(nav_item(ft.icons.GROUP_OUTLINED, "Committees", 1))
+            nav_container.controls.append(nav_item(ft.icons.PEOPLE_OUTLINED, "Users & Roles", 2))
+            nav_container.controls.append(nav_item(ft.icons.HISTORY_OUTLINED, "Audit Logs", 3))
+            nav_container.controls.append(nav_item(ft.icons.SETTINGS_OUTLINED, "Settings", 4))
+
+        build_nav()
 
         content_holder = ft.ListView(
             expand=True,
-            spacing=16,
-            padding=0,
+            spacing=12,
+            padding=ft.padding.only(top=0, right=0, left=0, bottom=0),
         )
         content_holder.controls = [content_view]
 
@@ -1129,22 +1242,6 @@ def main(page: ft.Page):
                 expand=True,
             )
 
-        def switch_view(e):
-            current_index = e.control.selected_index
-            if current_index == 0:
-                content_holder.controls = [registry_view()]
-            elif current_index == 1:
-                content_holder.controls = [committees_view()]
-            elif current_index == 2:
-                content_holder.controls = [users_roles_view()]
-            elif current_index == 3:
-                content_holder.controls = [audit_logs_view()]
-            else:
-                content_holder.controls = [settings_view()]
-            page.update()
-
-        nav.on_change = switch_view
-
         page.clean()
         page.horizontal_alignment = ft.CrossAxisAlignment.START
         page.vertical_alignment = ft.MainAxisAlignment.START
@@ -1155,23 +1252,22 @@ def main(page: ft.Page):
                     ft.Row(
                         [
                             ft.Container(
-                                width=240,
-                                height=body_height,
-                                padding=ft.padding.only(top=8, right=8),
-                                content=nav,
-                                bgcolor=ft.colors.WHITE,
-                                border_radius=24,
+                                width=200,
+                                padding=ft.padding.only(top=8, right=6),
+                                content=nav_container,
+                                bgcolor=None,
+                                border_radius=12,
+                                alignment=ft.alignment.top_center,
                             ),
                             ft.Container(
                                 expand=True,
-                                height=body_height,
                                 padding=ft.padding.only(top=8),
                                 content=ft.Container(
                                     expand=True,
-                                    height=body_height,
                                     padding=20,
                                     bgcolor=ft.colors.WHITE,
-                                    border_radius=24,
+                                    border_radius=12,
+                                    border=ft.border.all(1, ft.colors.BLUE_GREY_50),
                                     content=content_holder,
                                 ),
                             ),
@@ -1237,12 +1333,150 @@ def main(page: ft.Page):
             expand=True,
         )
 
+    # --- Committees editing helpers ---
+    committee_edit_index = None
+
+    committee_name_input = ft.TextField(label="Committee Name", width=420)
+
+    committee_edit_dialog = ft.AlertDialog(
+        title=ft.Text("Edit Committee"),
+        content=ft.Column([
+            committee_name_input,
+        ]),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda e: close_committee_dialog()),
+            ft.ElevatedButton("Save", on_click=lambda e: on_committee_save()),
+        ],
+    )
+    page.overlay.append(committee_edit_dialog)
+
+    pending_delete_committee = None
+    delete_committee_dialog = ft.AlertDialog(
+        title=ft.Text("Delete Committee"),
+        content=ft.Text("Are you sure you want to delete this committee?"),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda e: close_delete_committee_dialog()),
+            ft.ElevatedButton("Delete", bgcolor=ft.colors.RED_600, color=ft.colors.WHITE, on_click=lambda e: delete_committee_action()),
+        ],
+    )
+    page.overlay.append(delete_committee_dialog)
+
+    def open_committee_dialog(index: int | None):
+        nonlocal committee_edit_index
+        committee_edit_index = index
+        if index is None:
+            committee_name_input.value = ""
+            committee_edit_dialog.title.value = "Add Committee"
+        else:
+            committee_name_input.value = COMMITTEES[index]["name"]
+            committee_edit_dialog.title.value = "Edit Committee"
+        committee_edit_dialog.open = True
+        page.update()
+
+    def close_committee_dialog():
+        committee_edit_dialog.open = False
+        page.update()
+
+    def on_committee_save():
+        nonlocal committee_edit_index
+        name = (committee_name_input.value or "").strip()
+        if not name:
+            return
+        if committee_edit_index is None:
+            COMMITTEES.append({"name": name})
+        else:
+            COMMITTEES[committee_edit_index]["name"] = name
+        save_committees_to_file(COMMITTEES)
+        committee_edit_dialog.open = False
+        page.update()
+
+    def confirm_delete_committee(index: int):
+        nonlocal pending_delete_committee
+        pending_delete_committee = index
+        delete_committee_dialog.open = True
+        page.update()
+
+    def delete_committee_action():
+        nonlocal pending_delete_committee
+        try:
+            if pending_delete_committee is not None and 0 <= pending_delete_committee < len(COMMITTEES):
+                COMMITTEES.pop(pending_delete_committee)
+                save_committees_to_file(COMMITTEES)
+        finally:
+            pending_delete_committee = None
+            delete_committee_dialog.open = False
+            page.update()
+
+    def close_delete_committee_dialog():
+        nonlocal pending_delete_committee
+        pending_delete_committee = None
+        delete_committee_dialog.open = False
+        page.update()
+
     def committees_view():
-        return empty_state(
-            "Committees",
-            "Committee Management & Assigned Files will live here. Drop your committee list, assignments, and workflows into this view.",
-            ft.icons.GROUP,
-            ft.colors.GREEN_700,
+        # Build rows with Edit/Delete actions
+        committee_rows = []
+        for index, committee in enumerate(COMMITTEES):
+            committee_rows.append(
+                ft.DataRow(
+                    cells=[
+                        ft.DataCell(ft.Text(str(index + 1))),
+                        ft.DataCell(ft.Text(committee["name"])),
+                        ft.DataCell(
+                            ft.Row(
+                                [
+                                    ft.IconButton(ft.icons.EDIT, tooltip="Edit", on_click=lambda e, idx=index: open_committee_dialog(idx)),
+                                    ft.IconButton(ft.icons.DELETE, tooltip="Delete", on_click=lambda e, idx=index: confirm_delete_committee(idx)),
+                                ],
+                                spacing=4,
+                            )
+                        ),
+                    ]
+                )
+            )
+
+        committee_table = ft.DataTable(
+            columns=[
+                ft.DataColumn(ft.Text("#", weight=ft.FontWeight.BOLD, size=12)),
+                ft.DataColumn(ft.Text("Committee", weight=ft.FontWeight.BOLD, size=12)),
+                ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
+            ],
+            rows=committee_rows,
+            column_spacing=12,
+        )
+
+        return ft.Column(
+            [
+                surface_card(
+                    ft.Column(
+                        [
+                            section_header(
+                                "Committees",
+                                "Reference list of SB committee assignments and organization.",
+                                ft.icons.GROUP,
+                                ft.colors.GREEN_700,
+                            ),
+                            ft.Divider(height=1),
+                            ft.Row([
+                                ft.Text(
+                                    "These are the standing committee names used for document assignment and reporting.",
+                                    size=13,
+                                    color=ft.colors.BLUE_GREY_600,
+                                ),
+                                ft.ElevatedButton("Add Committee", icon=ft.icons.ADD, on_click=lambda e: open_committee_dialog(None)),
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            ft.Container(
+                                content=committee_table,
+                                bgcolor=ft.colors.BLUE_GREY_50,
+                                border_radius=18,
+                                padding=12,
+                            ),
+                        ],
+                        spacing=14,
+                    ),
+                )
+            ],
+            expand=True,
         )
 
     def scan_receive_view():
