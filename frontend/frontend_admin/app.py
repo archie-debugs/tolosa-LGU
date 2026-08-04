@@ -11,6 +11,13 @@ import qrcode
 import json
 from flet_runtime.uploads import build_upload_url
 from urllib.parse import quote
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 from frontend.frontend_secretariat.app import build_secretariat_view
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -21,8 +28,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-cert_file = os.path.join(project_root, "scanner.crt")
-key_file = os.path.join(project_root, "scanner.key")
+# Certificates are stored at the repository root (used by run_backend.py).
+repo_root = str(PROJECT_ROOT)
+cert_file = os.path.join(repo_root, "scanner.crt")
+key_file = os.path.join(repo_root, "scanner.key")
 local_backend_default = "https://127.0.0.1:8001" if os.path.exists(cert_file) and os.path.exists(key_file) else "http://127.0.0.1:8001"
 BACKEND_URL = os.getenv("BACKEND_URL", local_backend_default)
 BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", BACKEND_URL)
@@ -107,6 +116,8 @@ os.environ["FLET_UPLOAD_DIR"] = UPLOAD_DIR
 os.environ["FLET_UPLOAD_HANDLER_ENDPOINT"] = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
 print(f"FLET_UPLOAD_DIR={UPLOAD_DIR}")
 print(f"FLET_SECRET_KEY={UPLOAD_SECRET_KEY}")
+print(f"BACKEND_URL={BACKEND_URL}")
+print(f"BACKEND_SCHEME={'https' if BACKEND_URL.lower().startswith('https') else 'http'}")
 UPLOAD_ENDPOINT = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
 
 def main(page: ft.Page):
@@ -1090,18 +1101,18 @@ def main(page: ft.Page):
 
         def switch_view(index: int):
             content_holder.controls.clear()
-            if index == 0:
-                content_holder.controls.append(registry_view())
-            elif index == 1:
-                content_holder.controls.append(secretariat_workspace(page))
-            elif index == 2:
-                content_holder.controls.append(committees_view())
-            elif index == 3:
-                content_holder.controls.append(users_roles_view())
-            elif index == 4:
-                content_holder.controls.append(audit_logs_view())
-            else:
-                content_holder.controls.append(settings_view())
+            try:
+                view_fn = nav_items[index][2]
+            except Exception:
+                view_fn = lambda: settings_view()
+
+            # view_fn is a zero-arg callable that returns a control
+            try:
+                control = view_fn()
+            except Exception:
+                control = ft.Text("Error loading view")
+
+            content_holder.controls.append(control)
             content_holder.update()
             page.update()
 
@@ -1150,17 +1161,26 @@ def main(page: ft.Page):
 
         def build_nav():
             nav_container.controls.clear()
+            # Show a contextual header label/icon depending on the signed-in role
+            try:
+                header_role = (current_user_role or "").strip().lower()
+            except Exception:
+                header_role = ""
+
+            header_icon = ft.icons.DASHBOARD if header_role != "secretariat" else ft.icons.ACCOUNT_BALANCE
+            header_label = "Admin" if header_role != "secretariat" else "Secretariat"
+
             nav_container.controls.append(
                 ft.Container(
                     content=ft.Column(
                         [
                             ft.Container(
-                                content=ft.Icon(ft.icons.DASHBOARD, color=ft.colors.BLUE_800),
+                                content=ft.Icon(header_icon, color=ft.colors.BLUE_800),
                                 padding=8,
                                 bgcolor=ft.colors.BLUE_50,
                                 border_radius=12,
                             ),
-                            ft.Text("Admin", size=12, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                            ft.Text(header_label, size=12, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
                         ],
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=6,
@@ -1169,13 +1189,40 @@ def main(page: ft.Page):
                     alignment=ft.alignment.top_center,
                 )
             )
-            nav_container.controls.append(nav_item(ft.icons.LIST_ALT_OUTLINED, "Documents", 0))
-            nav_container.controls.append(nav_item(ft.icons.ACCOUNT_BALANCE_OUTLINED, "Secretariat", 1))
-            nav_container.controls.append(nav_item(ft.icons.GROUP_OUTLINED, "Committees", 2))
-            nav_container.controls.append(nav_item(ft.icons.PEOPLE_OUTLINED, "Users & Roles", 3))
-            nav_container.controls.append(nav_item(ft.icons.HISTORY_OUTLINED, "Audit Logs", 4))
-            nav_container.controls.append(nav_item(ft.icons.SETTINGS_OUTLINED, "Settings", 5))
 
+            # Build a list of available nav items depending on the user's role
+            # Each entry: (icon, label, view_fn)
+            nonlocal nav_items
+            try:
+                role = (current_user_role or "").strip().lower()
+            except Exception:
+                role = ""
+
+            # Secretariat-only users should only see the Secretariat workspace
+            if role == "secretariat":
+                nav_items = [
+                    (ft.icons.ACCOUNT_BALANCE_OUTLINED, "Secretariat", lambda: secretariat_workspace(page)),
+                ]
+            else:
+                # Admin and other roles see the full admin navigation. Admins also get Secretariat.
+                nav_items = [
+                    (ft.icons.LIST_ALT_OUTLINED, "Documents", lambda: registry_view()),
+                    (ft.icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
+                    (ft.icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),
+                    (ft.icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()),
+                ]
+
+                if role == "admin":
+                    nav_items.insert(1, (ft.icons.ACCOUNT_BALANCE_OUTLINED, "Secretariat", lambda: secretariat_workspace(page)))
+
+                nav_items.append((ft.icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
+
+            # Render nav items
+            for idx, (icon, label, _) in enumerate(nav_items):
+                nav_container.controls.append(nav_item(icon, label, idx))
+
+        # nav_items holds tuples of available navigation entries. Start with empty and build.
+        nav_items = []
         build_nav()
 
         content_holder = ft.ListView(
@@ -1871,7 +1918,7 @@ def main(page: ft.Page):
         }
 
         try:
-            response = requests.post(f"{BACKEND_URL}/legislative/register", params=params, verify=False)
+            response = requests.post(f"{BACKEND_URL}/legislative/register", json=params, verify=False)
             if response.status_code == 200:
                 nonlocal last_uploaded_filename
                 result = response.json()
@@ -1978,7 +2025,18 @@ def main(page: ft.Page):
         
         # Initial population of table
         update_table_view()
-        render_shell("Registry", "Active Legislative Tracker & Document Registration", registry_view())
+        # If the signed-in user is Secretariat, open the Secretariat workspace by default
+        try:
+            role_for_landing = (current_user_role or "").strip().lower()
+        except Exception:
+            role_for_landing = ""
+
+        if role_for_landing == "secretariat":
+            initial_view = secretariat_workspace(page)
+        else:
+            initial_view = registry_view()
+
+        render_shell("Registry", "Active Legislative Tracker & Document Registration", initial_view)
         page.update()
 
     def logout_user():
@@ -1997,7 +2055,7 @@ def main(page: ft.Page):
         password_field = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK)
         
         def attempt_login(e):
-            nonlocal current_user
+            nonlocal current_user, current_user_role
             if not username_field.value or not password_field.value:
                 page.snack_bar = ft.SnackBar(ft.Text("Please fill out both fields."), open=True)
                 page.update()
@@ -2008,10 +2066,12 @@ def main(page: ft.Page):
                 res = requests.post(f"{BACKEND_URL}/auth/login", params=params, verify=False)
                 
                 if res.status_code == 200:
-                    payload = res.json()
-                    current_user = payload.get("username")
-                    current_user_role = payload.get("role", "Admin")
-                    load_dashboard()
+                        payload = res.json()
+                        role = (payload.get("role") or "Admin").strip()
+                        # Allow Secretariat users to sign in to the web UI so they can access the Secretariat tab.
+                        current_user = payload.get("username")
+                        current_user_role = role
+                        load_dashboard()
                 else:
                     page.snack_bar = ft.SnackBar(ft.Text("Invalid credentials."), open=True)
                     page.update()

@@ -117,7 +117,7 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
         details="Successful login",
     )
 
-    return {"message": "Login successful", "username": user.username}
+    return {"message": "Login successful", "username": user.username, "role": user.role or "Admin"}
 
 
 @router.post("/auth/scanner/login")

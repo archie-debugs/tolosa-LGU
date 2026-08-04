@@ -212,6 +212,12 @@ class BatchQrPayload(BaseModel):
     item_ids: list[int]
 
 
+class RegisterPayload(BaseModel):
+    title: str
+    item_type: str
+    committee: str
+
+
 @router.post("/documents/batch-qr-pdf")
 def batch_qr_pdf(payload: BatchQrPayload, db: Session = Depends(get_db)):
     if not payload.item_ids:
@@ -273,7 +279,11 @@ async def parse_document(file: UploadFile = File(...)):
 
 
 @router.post("/legislative/register")
-def register_item(title: str, item_type: str, committee: str, db: Session = Depends(get_db)):
+def register_item(payload: RegisterPayload, db: Session = Depends(get_db)):
+    title = (payload.title or "").strip()
+    item_type = (payload.item_type or "").strip()
+    committee = (payload.committee or "").strip()
+
     unique_id = str(uuid.uuid4())
     current_workflow_steps = load_workflow_steps()
     initial_status = current_workflow_steps[0] if current_workflow_steps else DEFAULT_WORKFLOW_STEPS[0]

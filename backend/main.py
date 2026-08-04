@@ -39,3 +39,8 @@ app.include_router(workflow_router)
 app.include_router(documents_router)
 app.include_router(tracking_router)
 app.include_router(secretariat_router)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
