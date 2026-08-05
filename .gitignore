@@ -148,3 +148,6 @@ sb_tolosa.db-journal
 key.pem
 cert.pem
 debug_uvicorn.py
+uploads/
+*.pdf
+*.pdf

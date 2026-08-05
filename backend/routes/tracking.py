@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi import UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -247,6 +248,49 @@ def track_item(tracking_uuid: str, location: str, action: str, scanned_by: str, 
         "current_location": new_location,
         "history_timestamp": history_entry.timestamp.isoformat() if history_entry.timestamp else None,
     }
+
+
+@router.post("/legislative/upload/{tracking_uuid}")
+async def upload_source_file(tracking_uuid: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    item = db.query(models.LegislativeItem).filter(models.LegislativeItem.tracking_uuid == tracking_uuid).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Legislative item not found")
+
+    filename = os.path.basename(file.filename or f"upload_{tracking_uuid}")
+    safe_name = filename.replace('..', '').replace('/', '_').replace('\\', '_')
+    save_path = os.path.join(UPLOAD_DIR, safe_name)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    try:
+        contents = await file.read()
+        with open(save_path, "wb") as fh:
+            fh.write(contents)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {exc}")
+
+    # associate with the legislative item
+    item.source_filename = safe_name
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    record_audit_log(db, actor="system", action="SOURCE_FILE_UPLOADED", target_type="LegislativeItem", target_id=str(item.id), details=f"Uploaded {safe_name}")
+
+    return {"message": "File uploaded and associated", "filename": safe_name}
+
+
+@router.post("/uploads")
+async def upload_generic_file(file: UploadFile = File(...)):
+    filename = os.path.basename(file.filename or "upload")
+    safe_name = filename.replace('..', '').replace('/', '_').replace('\\', '_')
+    save_path = os.path.join(UPLOAD_DIR, safe_name)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    try:
+        contents = await file.read()
+        with open(save_path, "wb") as fh:
+            fh.write(contents)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {exc}")
+    return {"message": "File uploaded", "filename": safe_name}
 
 
 @router.post("/legislative/advance/{tracking_uuid}")

@@ -1,9 +1,14 @@
 from fastapi import FastAPI
+from dotenv import load_dotenv
+
+# Load .env early so core.py picks up environment overrides
+load_dotenv()
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine
 from . import models
 from .core import ensure_user_role_column, ensure_current_location_column
+from .core import ensure_source_filename_column
 from .routes.auth import router as auth_router
 from .routes.status import router as status_router
 from .routes.workflow import router as workflow_router
@@ -30,6 +35,11 @@ except Exception:
 
 try:
     ensure_current_location_column()
+except Exception:
+    pass
+
+try:
+    ensure_source_filename_column()
 except Exception:
     pass
 

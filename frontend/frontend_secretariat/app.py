@@ -4,7 +4,11 @@ import requests
 import base64
 import json
 from urllib.parse import quote
+from dotenv import load_dotenv
 import flet as ft
+
+# Load .env for standalone runs
+load_dotenv()
 
 
 def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all_documents, secretariat_selected_ids, save_binary_file_to_workspace, BACKEND_URL, surface_card, section_header):
@@ -126,6 +130,11 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
         content=ft.Row([], spacing=12),
     )
 
+    # File picker for uploading source documents
+    file_picker = ft.FilePicker(on_result=lambda e: None)
+    page.overlay.append(file_picker)
+
+
     def refresh_secretariat_table():
         rows = []
         search_term = (secretariat_search_field.value or "").strip().lower()
@@ -179,6 +188,7 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             ft.Text(f"{len(secretariat_selected_ids)} items selected", weight=ft.FontWeight.BOLD),
             ft.ElevatedButton("Generate Batch QR PDF", icon=ft.icons.PRINT, on_click=handle_batch_qr_export),
             ft.OutlinedButton("Generate Session Agenda", icon=ft.icons.DESCRIPTION_OUTLINED, on_click=handle_agenda_export),
+            ft.ElevatedButton("Upload Source File", icon=ft.icons.UPLOAD_FILE, on_click=lambda e: file_picker.pick_files()),
         ], spacing=12, wrap=True)
         page.update()
 
@@ -207,11 +217,175 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             page.snack_bar = ft.SnackBar(ft.Text(f"Batch PDF error: {exc}"), open=True)
         page.update()
 
+
+    def handle_file_picker_result(e):
+        nonlocal register_source_filename, import_mode
+        try:
+            # e.files is available in desktop/runtime file picker; use first file only
+            files = getattr(e, 'files', None) or []
+            if not files:
+                page.snack_bar = ft.SnackBar(ft.Text("No file selected."), open=True)
+                page.update()
+                return
+
+            picked = files[0]
+            # runtime provides a path attribute when running locally
+            raw_path = getattr(picked, 'path', None)
+            filename = picked.name or getattr(picked, 'file_name', None) or os.path.basename(raw_path or "uploaded")
+
+            if not filename.lower().endswith(('.pdf', '.docx')):
+                page.snack_bar = ft.SnackBar(ft.Text("Only .pdf and .docx files are supported."), open=True)
+                page.update()
+                return
+
+            # Read file bytes either from runtime-provided path or via FilePicker upload data
+            file_bytes = None
+            if raw_path and os.path.exists(raw_path):
+                with open(raw_path, 'rb') as fh:
+                    file_bytes = fh.read()
+            else:
+                # Fallback: use picked data buffer if present
+                file_bytes = getattr(picked, 'bytes', None)
+
+            if file_bytes is None:
+                page.snack_bar = ft.SnackBar(ft.Text("Failed to read selected file."), open=True)
+                page.update()
+                return
+
+            # If import_mode is set, parse file and open register dialog pre-filled
+            if import_mode:
+                try:
+                    # Parse the document to auto-fill fields
+                    parse_resp = requests.post(f"{BACKEND_URL}/legislative/parse", files=files_payload, verify=False)
+                    if parse_resp.status_code == 200:
+                        parsed = parse_resp.json()
+                        register_title.value = parsed.get('title', register_title.value)
+                        register_type.value = parsed.get('item_type', register_type.value)
+                        register_committee.value = parsed.get('committee', register_committee.value)
+                    else:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Parse failed: {parse_resp.text}"), open=True)
+                        page.update()
+                        import_mode = False
+                        return
+                except Exception as exc:
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Parse error: {exc}"), open=True)
+                    page.update()
+                    import_mode = False
+                    return
+
+                # Save the uploaded file to backend uploads and attach filename to register
+                try:
+                    save_resp = requests.post(f"{BACKEND_URL}/uploads", files=files_payload, verify=False)
+                    if save_resp.status_code == 200:
+                        saved_name = save_resp.json().get('filename')
+                        register_source_filename = saved_name
+                    else:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Save failed: {save_resp.text}"), open=True)
+                        page.update()
+                        import_mode = False
+                        return
+                except Exception as exc:
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Save error: {exc}"), open=True)
+                    page.update()
+                    import_mode = False
+                    return
+
+                # Open register dialog with parsed values
+                import_mode = False
+                open_register_dialog()
+                page.update()
+                return
+
+            # If exactly one document is selected in the table, associate upload with it
+            target_uuid = None
+            if len(secretariat_selected_ids) == 1:
+                sid = next(iter(secretariat_selected_ids))
+                # find document by id
+                doc = next((d for d in all_documents if str(d.get('id')) == str(sid)), None)
+                if doc:
+                    target_uuid = doc.get('uuid')
+
+            files_payload = {'file': (filename, file_bytes)}
+
+            if target_uuid:
+                url = f"{BACKEND_URL}/legislative/upload/{target_uuid}"
+            else:
+                url = f"{BACKEND_URL}/uploads"
+
+            response = requests.post(url, files=files_payload, verify=False)
+            if response.status_code == 200:
+                payload = response.json()
+                saved_name = payload.get('filename')
+                page.snack_bar = ft.SnackBar(ft.Text(f"Uploaded {saved_name}"), open=True)
+
+                # Update local document record if associated
+                if target_uuid:
+                    for d in all_documents:
+                        if d.get('uuid') == target_uuid:
+                            d['source_filename'] = saved_name
+                            break
+                    refresh_secretariat_table()
+            else:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Upload failed: {response.text}"), open=True)
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Upload error: {exc}"), open=True)
+        page.update()
+
+    def start_import():
+        nonlocal import_mode
+        import_mode = True
+        try:
+            file_picker.pick_files()
+        except Exception:
+            page.snack_bar = ft.SnackBar(ft.Text("File picker not available."), open=True)
+            import_mode = False
+            page.update()
+
+    # assign handler now that it's defined
+    try:
+        file_picker.on_result = handle_file_picker_result
+    except Exception:
+        pass
+
     def handle_agenda_export(e=None):
         try:
             response = requests.get(f"{BACKEND_URL}/documents/generate-agenda", verify=False)
             if response.status_code == 200:
-                output_path = save_binary_file_to_workspace(f"session_agenda_{time.strftime('%Y%m%d_%H%M%S')}.pdf", response.content)
+                filename = f"session_agenda_{time.strftime('%Y%m%d_%H%M%S')}.pdf"
+                output_path = save_binary_file_to_workspace(filename, response.content)
+                # Show an explicit preview dialog with an Open button
+                try:
+                    from pathlib import Path
+
+                    file_uri = Path(output_path).absolute().as_uri()
+                except Exception:
+                    file_uri = None
+
+                def _open_agenda(e=None):
+                    try:
+                        if file_uri:
+                            page.launch_url(file_uri)
+                        else:
+                            import base64 as _b64
+
+                            b64 = _b64.b64encode(response.content).decode('utf-8')
+                            url = f"data:application/pdf;base64,{b64}"
+                            page.launch_url(url)
+                    except Exception as ex:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Failed to open preview: {ex}"), open=True)
+                    preview_alert.open = False
+                    page.update()
+
+                preview_alert = ft.AlertDialog(
+                    title=ft.Text("Agenda Generated"),
+                    content=ft.Column([ft.Text(f"Saved to: {output_path}"), ft.Text("Click Open to preview the PDF.")]),
+                    actions=[
+                        ft.TextButton("Close", on_click=lambda e: (setattr(preview_alert, 'open', False), page.update())),
+                        ft.ElevatedButton("Open", on_click=_open_agenda),
+                    ],
+                )
+                page.dialog = preview_alert
+                page.open_dialog(preview_alert)
                 page.snack_bar = ft.SnackBar(ft.Text(f"Agenda PDF saved to {output_path}"), open=True)
             else:
                 page.snack_bar = ft.SnackBar(ft.Text(f"Agenda export failed: {response.text}"), open=True)
@@ -344,6 +518,9 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
     register_title = ft.TextField(label="Title", width=520)
     register_type = ft.Dropdown(label="Item Type", width=220, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
     register_committee = ft.TextField(label="Assigned Committee", width=320)
+    register_source_filename: str | None = None
+    import_mode = False
+
 
     def open_register_dialog(e=None):
         dialog = ft.AlertDialog(
@@ -374,7 +551,11 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             page.update()
             return
         try:
-            response = requests.post(f"{BACKEND_URL}/legislative/register", json={"title": title, "item_type": item_type, "committee": committee}, verify=False)
+            response = requests.post(
+                f"{BACKEND_URL}/legislative/register",
+                json={"title": title, "item_type": item_type, "committee": committee, "source_filename": register_source_filename},
+                verify=False,
+            )
             if response.status_code == 200:
                 result = response.json()
                 all_documents.append({
@@ -385,7 +566,7 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                     "status": result.get("current_stage", "Draft"),
                     "current_location": result.get("current_location", "Records Registry"),
                     "uuid": result.get("tracking_uuid"),
-                    "source_filename": None,
+                    "source_filename": result.get("source_filename") or register_source_filename,
                 })
                 register_title.value = ""
                 register_committee.value = ""
@@ -429,6 +610,7 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                         ft.Row(
                             [
                                 ft.ElevatedButton("+ Register New Measure", icon=ft.icons.ADD, on_click=lambda e: open_register_dialog(e)),
+                                    ft.ElevatedButton("Import Document", icon=ft.icons.FILE_UPLOAD, on_click=lambda e: start_import()),
                                 ft.ElevatedButton("🖨️ Batch QR Sheet", icon=ft.icons.PRINT, on_click=handle_batch_qr_export),
                                 ft.ElevatedButton("📄 Generate Session Agenda", icon=ft.icons.DESCRIPTION_OUTLINED, on_click=handle_agenda_export),
                             ],

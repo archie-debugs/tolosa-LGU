@@ -10,6 +10,8 @@ from ..core import (
     record_audit_log,
     load_workflow_steps,
     DEFAULT_WORKFLOW_STEPS,
+    BACKEND_PUBLIC_URL,
+    SCANNER_PUBLIC_URL,
 )
 from datetime import datetime
 from reportlab.lib import colors
@@ -40,8 +42,8 @@ def _build_qr_image(url: str):
 def _build_batch_qr_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
     styles = getSampleStyleSheet()
     story = []
-    styles["Body"].fontName = "Helvetica"
-    styles["Body"].fontSize = 8
+    styles["BodyText"].fontName = "Helvetica"
+    styles["BodyText"].fontSize = 8
     styles["Heading2"].fontName = "Helvetica-Bold"
     styles["Heading2"].fontSize = 9
 
@@ -59,23 +61,26 @@ def _build_batch_qr_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
                 idx = row * 3 + col
                 item = page_slice[idx] if idx < len(page_slice) else None
                 if item is None:
-                    row_cells.append(Paragraph("", styles["Body"]))
+                    row_cells.append(Paragraph("", styles["BodyText"]))
                 else:
                     title = (item.title or "Untitled").strip()
                     short_title = title[:30] + ("..." if len(title) > 30 else "")
-                    qr_url = f"https://192.168.1.4:8002/scan?uuid={item.tracking_uuid}"
+                    # Build QR scanner URL using configured public scanner/backend URLs
+                    scanner_base = SCANNER_PUBLIC_URL.rstrip("/")
+                    backend_base = BACKEND_PUBLIC_URL.rstrip("/")
+                    qr_url = f"{scanner_base}/scanner/mobile?uuid={item.tracking_uuid}&api_base={backend_base}"
                     cell_content = [
                         Paragraph("<b>STICKER</b>", styles["Heading2"]),
                         Spacer(1, 3),
-                        Paragraph(f"{item.item_type or 'Measure'}", styles["Body"]),
+                        Paragraph(f"{item.item_type or 'Measure'}", styles["BodyText"]),
                         Spacer(1, 3),
-                        Paragraph(f"{item.current_status or '-'}", styles["Body"]),
+                        Paragraph(f"{item.current_status or '-'}", styles["BodyText"]),
                         Spacer(1, 4),
-                        Paragraph(f"UUID: {item.tracking_uuid[:8].upper()}", styles["Body"]),
+                        Paragraph(f"UUID: {item.tracking_uuid[:8].upper()}", styles["BodyText"]),
                         Spacer(1, 4),
-                        Paragraph(short_title, styles["Body"]),
+                        Paragraph(short_title, styles["BodyText"]),
                         Spacer(1, 6),
-                        Paragraph("", styles["Body"]),
+                        Paragraph("", styles["BodyText"]),
                     ]
                     cell_content.append(Image(_build_qr_image(qr_url), width=70, height=70))
                     row_cells.append(cell_content)
@@ -118,7 +123,7 @@ def _build_agenda_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
     title_style = styles["Title"]
     title_style.fontName = "Helvetica-Bold"
     title_style.fontSize = 18
-    body_style = styles["Body"]
+    body_style = styles["BodyText"]
     body_style.fontName = "Helvetica"
     body_style.fontSize = 10
 
@@ -216,6 +221,7 @@ class RegisterPayload(BaseModel):
     title: str
     item_type: str
     committee: str
+    source_filename: str | None = None
 
 
 @router.post("/documents/batch-qr-pdf")
@@ -244,25 +250,38 @@ def next_measure_number(item_type: str, year: int | None = None, db: Session = D
 
 @router.get("/documents/generate-agenda")
 def generate_agenda(db: Session = Depends(get_db)):
-    eligible_statuses = {
-        "1st Reading",
-        "2nd Reading",
-        "3rd Reading",
-        "Committee Report Submitted",
-    }
-    items = (
-        db.query(models.LegislativeItem)
-        .filter(models.LegislativeItem.current_status.in_(eligible_statuses))
-        .order_by(models.LegislativeItem.id.asc())
-        .all()
-    )
-    pdf_bytes = _build_agenda_pdf_bytes(items)
-    filename = f"session_agenda_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
+    try:
+        eligible_statuses = {
+            "1st Reading",
+            "2nd Reading",
+            "3rd Reading",
+            "Committee Report Submitted",
+        }
+        items = (
+            db.query(models.LegislativeItem)
+            .filter(models.LegislativeItem.current_status.in_(eligible_statuses))
+            .order_by(models.LegislativeItem.id.asc())
+            .all()
+        )
+        pdf_bytes = _build_agenda_pdf_bytes(items)
+        filename = f"session_agenda_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        try:
+            log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend_error.log'))
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.utcnow().isoformat()}] generate_agenda error: {str(e)}\n")
+                f.write(tb + "\n")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Agenda generation failed: {str(e)}")
 
 
 @router.post("/legislative/parse")
@@ -283,6 +302,7 @@ def register_item(payload: RegisterPayload, db: Session = Depends(get_db)):
     title = (payload.title or "").strip()
     item_type = (payload.item_type or "").strip()
     committee = (payload.committee or "").strip()
+    source_filename = (payload.source_filename or None)
 
     unique_id = str(uuid.uuid4())
     current_workflow_steps = load_workflow_steps()
@@ -294,6 +314,7 @@ def register_item(payload: RegisterPayload, db: Session = Depends(get_db)):
         assigned_committee=committee,
         current_status=initial_status,
         current_location="Records Registry",
+        source_filename=source_filename,
     )
     db.add(new_item)
     db.commit()
@@ -329,6 +350,7 @@ def list_legislative_items(db: Session = Depends(get_db)):
                 "committee": item.assigned_committee,
                 "status": item.current_status,
                 "current_location": item.current_location or "Records Registry",
+                "source_filename": item.source_filename,
                 "uuid": item.tracking_uuid,
             }
             for item in items

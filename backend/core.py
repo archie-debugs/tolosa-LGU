@@ -230,3 +230,11 @@ def ensure_current_location_column() -> None:
         connection.exec_driver_sql(
             "UPDATE legislative_items SET current_location = 'Records Registry' WHERE current_location IS NULL OR current_location = ''"
         )
+
+
+def ensure_source_filename_column() -> None:
+    from .database import engine
+    with engine.begin() as connection:
+        columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(legislative_items)").fetchall()]
+        if "source_filename" not in columns:
+            connection.exec_driver_sql("ALTER TABLE legislative_items ADD COLUMN source_filename VARCHAR NULL")

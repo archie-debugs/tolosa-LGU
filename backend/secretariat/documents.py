@@ -36,8 +36,8 @@ def _build_qr_image(url: str):
 def _build_batch_qr_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
     styles = getSampleStyleSheet()
     story = []
-    styles["Body"].fontName = "Helvetica"
-    styles["Body"].fontSize = 8
+    styles["BodyText"].fontName = "Helvetica"
+    styles["BodyText"].fontSize = 8
     styles["Heading2"].fontName = "Helvetica-Bold"
     styles["Heading2"].fontSize = 9
 
@@ -55,7 +55,7 @@ def _build_batch_qr_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
                 idx = row * 3 + col
                 item = page_slice[idx] if idx < len(page_slice) else None
                 if item is None:
-                    row_cells.append(Paragraph("", styles["Body"]))
+                    row_cells.append(Paragraph("", styles["BodyText"]))
                 else:
                     title = (item.title or "Untitled").strip()
                     short_title = title[:30] + ("..." if len(title) > 30 else "")
@@ -63,15 +63,15 @@ def _build_batch_qr_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
                     cell_content = [
                         Paragraph("<b>STICKER</b>", styles["Heading2"]),
                         Spacer(1, 3),
-                        Paragraph(f"{item.item_type or 'Measure'}", styles["Body"]),
+                        Paragraph(f"{item.item_type or 'Measure'}", styles["BodyText"]),
                         Spacer(1, 3),
-                        Paragraph(f"{item.current_status or '-'}", styles["Body"]),
+                        Paragraph(f"{item.current_status or '-'}", styles["BodyText"]),
                         Spacer(1, 4),
-                        Paragraph(f"UUID: {item.tracking_uuid[:8].upper()}", styles["Body"]),
+                        Paragraph(f"UUID: {item.tracking_uuid[:8].upper()}", styles["BodyText"]),
                         Spacer(1, 4),
-                        Paragraph(short_title, styles["Body"]),
+                        Paragraph(short_title, styles["BodyText"]),
                         Spacer(1, 6),
-                        Paragraph("", styles["Body"]),
+                        Paragraph("", styles["BodyText"]),
                     ]
                     cell_content.append(Image(_build_qr_image(qr_url), width=70, height=70))
                     row_cells.append(cell_content)
@@ -114,7 +114,7 @@ def _build_agenda_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
     title_style = styles["Title"]
     title_style.fontName = "Helvetica-Bold"
     title_style.fontSize = 18
-    body_style = styles["Body"]
+    body_style = styles["BodyText"]
     body_style.fontName = "Helvetica"
     body_style.fontSize = 10
 

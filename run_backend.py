@@ -10,6 +10,10 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import uvicorn
+from dotenv import load_dotenv
+
+# Load .env for local development
+load_dotenv()
 
 if __name__ == "__main__":
     from backend.main import app

@@ -21,6 +21,7 @@ class LegislativeItem(Base):
     current_status = Column(String, default="First Reading") # First Reading, Committee Review, Approved, etc.
     current_location = Column(String, nullable=False, default="Records Registry")
     assigned_committee = Column(String, nullable=True)     
+    source_filename = Column(String, nullable=True)
     
     logs = relationship("LegislativeTrackingLog", back_populates="item")
     history = relationship("DocumentHistory", back_populates="item", cascade="all, delete-orphan")
