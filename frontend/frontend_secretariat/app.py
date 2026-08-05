@@ -450,7 +450,7 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
 
         # dialog to choose a status from workflow_steps
         options = [ft.dropdown.Option(step) for step in workflow_steps]
-        status_dropdown = ft.Dropdown(label="Set Status To", width=320, options=options)
+        status_dropdown = ft.Dropdown(label="Set Status To", width=320, options=options, value=(workflow_steps[0] if workflow_steps else None))
 
         def do_set_status(ev=None):
             chosen = status_dropdown.value
@@ -471,7 +471,14 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                     page.snack_bar = ft.SnackBar(ft.Text(f"Batch update failed: {resp.text}"), open=True)
             except Exception as exc:
                 page.snack_bar = ft.SnackBar(ft.Text(f"Batch update error: {exc}"), open=True)
-            page.dialog.open = False
+            # close dialog and refresh
+            try:
+                dialog.open = False
+            except Exception:
+                try:
+                    page.dialog.open = False
+                except Exception:
+                    pass
             page.update()
 
         dialog = ft.AlertDialog(title=ft.Text("Change Status for Selected Items"), content=ft.Column([status_dropdown]), actions=[ft.TextButton("Cancel", on_click=lambda e: (setattr(dialog, 'open', False), page.update())), ft.ElevatedButton("Apply", on_click=do_set_status)])
