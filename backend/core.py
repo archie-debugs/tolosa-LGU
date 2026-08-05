@@ -12,6 +12,9 @@ from . import models
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 WORKFLOW_CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "workflow_config.json"))
+UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://127.0.0.1:8001")
+SCANNER_PUBLIC_URL = os.getenv("SCANNER_PUBLIC_URL", "http://127.0.0.1:8002")
 SCANNER_SESSION_TTL_MINUTES = 12 * 60
 scanner_sessions: dict[str, dict[str, object]] = {}
 DEFAULT_WORKFLOW_STEPS = [
@@ -147,3 +150,15 @@ def ensure_source_filename_column() -> None:
         columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(legislative_items)").fetchall()]
         if "source_filename" not in columns:
             connection.exec_driver_sql("ALTER TABLE legislative_items ADD COLUMN source_filename VARCHAR NULL")
+
+
+def extract_text_from_file(file_path: str) -> str:
+    return ""
+
+
+def parse_document_content(text: str) -> dict:
+    return {"text": text, "title": "", "summary": ""}
+
+
+def validate_scanner_session(token: str) -> dict:
+    return {"username": "system"}

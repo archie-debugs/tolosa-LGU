@@ -22,6 +22,7 @@ from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.users_roles import build_users_roles_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
 from frontend.frontend_admin.admin_shell import render_shell
+from frontend.frontend_admin.admindashboard import build_admin_dashboard_view
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1083,7 +1084,26 @@ def main(page: ft.Page):
             spacing=16,
         )
 
+    dashboard_action_dialog = ft.AlertDialog(
+        title=ft.Text("Frontend preview"),
+        content=ft.Text("This action is only a visual preview. No backend or database changes are performed."),
+        actions=[ft.TextButton("Close", on_click=lambda _: close_dashboard_action_dialog())],
+    )
+    page.overlay.append(dashboard_action_dialog)
+
+    def close_dashboard_action_dialog():
+        dashboard_action_dialog.open = False
+        page.update()
+
+    def open_preview_notice(_=None):
+        dashboard_action_dialog.open = True
+        page.update()
+
+    def dashboard_view():
+        return build_admin_dashboard_view(surface_card, section_header, open_preview_notice)
+
     nav_items = [
+        (ft.icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view()),
         (ft.icons.LIST_ALT_OUTLINED, "Documents", lambda: registry_view()),
         (ft.icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
         (ft.icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),
@@ -1427,7 +1447,7 @@ def main(page: ft.Page):
         
         # Initial population of table
         update_table_view()
-        initial_view = registry_view()
+        initial_view = dashboard_view()
 
         render_shell(page, current_user, logout_user, nav_items, initial_view)
         page.update()

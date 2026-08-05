@@ -3,37 +3,57 @@ import flet as ft
 
 def render_shell(page, current_user, logout_user, nav_items, content_view):
     header = ft.Container(
-        padding=ft.padding.symmetric(vertical=12, horizontal=14),
-        bgcolor=None,
+        padding=ft.padding.symmetric(vertical=16, horizontal=16),
+        bgcolor=ft.colors.WHITE,
+        border_radius=16,
+        border=ft.border.all(1, ft.colors.BLUE_GREY_50),
         content=ft.Row(
             [
-                ft.Container(
-                    content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=22, color=ft.colors.WHITE),
-                    padding=10,
-                    bgcolor=ft.colors.BLUE_800,
-                    border_radius=10,
-                ),
-                ft.Column(
+                ft.Row(
                     [
-                        ft.Text("LGU Tolosa - Sangguniang Bayan", size=18, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
-                        ft.Text("Tracking Dashboard", size=12, color=ft.colors.BLUE_GREY_600),
+                        ft.Container(
+                            content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=22, color=ft.colors.WHITE),
+                            padding=10,
+                            bgcolor=ft.colors.BLUE_800,
+                            border_radius=12,
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text("SB Tolosa — Administration Dashboard", size=18, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                                ft.Text("System Administration and Document Management Overview", size=12, color=ft.colors.BLUE_GREY_600),
+                            ],
+                            spacing=1,
+                            expand=True,
+                        ),
                     ],
-                    spacing=0,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=12,
                     expand=True,
                 ),
                 ft.Row(
                     [
+                        ft.IconButton(icon=ft.icons.NOTIFICATIONS_OUTLINED, tooltip="Notifications"),
                         ft.Container(
-                            content=ft.Column(
+                            content=ft.Row(
                                 [
-                                    ft.Text("Logged in as", size=11, color=ft.colors.BLUE_GREY_500),
-                                    ft.Text(current_user or "-", size=13, weight=ft.FontWeight.W_600),
+                                    ft.Container(
+                                        content=ft.Icon(ft.icons.ACCOUNT_CIRCLE_OUTLINED, size=24, color=ft.colors.BLUE_700),
+                                        padding=4,
+                                    ),
+                                    ft.Column(
+                                        [
+                                            ft.Text(current_user or "Administrator", size=13, weight=ft.FontWeight.W_600),
+                                            ft.Text("Administrator", size=12, color=ft.colors.BLUE_GREY_600),
+                                        ],
+                                        spacing=1,
+                                        horizontal_alignment=ft.CrossAxisAlignment.START,
+                                    ),
                                 ],
-                                spacing=0,
-                                horizontal_alignment=ft.CrossAxisAlignment.END,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                spacing=8,
                             ),
-                            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                            bgcolor=ft.colors.WHITE,
+                            padding=ft.padding.symmetric(horizontal=8, vertical=6),
+                            bgcolor=ft.colors.BLUE_GREY_50,
                             border_radius=10,
                         ),
                         ft.IconButton(icon=ft.icons.LOGOUT, tooltip="Log out", on_click=lambda _: logout_user()),
