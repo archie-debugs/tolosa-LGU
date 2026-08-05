@@ -7,14 +7,11 @@ Usage:
 Options:
     --no-admin        Don't start the admin frontend
     --no-scanner      Don't start the scanner frontend
-    --secretariat     Also start the separate Secretariat frontend (disabled by default)
 
 The script starts child processes and will terminate them on Ctrl+C.
 """
 import subprocess
 import sys
-import os
-import signal
 import time
 from pathlib import Path
 
@@ -24,7 +21,6 @@ PY = sys.executable
 FRONTENDS = {
     "admin": str(REPO_ROOT / "frontend" / "frontend_admin" / "app.py"),
     "scanner": str(REPO_ROOT / "frontend" / "frontend_scanner" / "app.py"),
-    "secretariat": str(REPO_ROOT / "frontend" / "frontend_secretariat" / "run_secretariat.py"),
 }
 
 children = []
@@ -71,13 +67,6 @@ def main():
             start_process("admin", FRONTENDS["admin"])
         if "--no-scanner" not in args:
             start_process("scanner", FRONTENDS["scanner"])
-        # By default we do not start the standalone Secretariat app because
-        # Secretariat functionality is now integrated into the Admin web UI.
-        # Pass --secretariat to explicitly start the separate Secretariat launcher.
-        if "--secretariat" in args:
-            # secretariat launcher enforces role checks
-            start_process("secretariat", FRONTENDS["secretariat"])
-
         print("All processes started. Press Ctrl+C to stop.")
 
         # Wait until children exit or user interrupts

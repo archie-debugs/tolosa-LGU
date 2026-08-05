@@ -13,7 +13,7 @@ from ..core import (
     BACKEND_PUBLIC_URL,
     SCANNER_PUBLIC_URL,
 )
-from datetime import datetime
+from datetime import datetime, timezone
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
@@ -129,7 +129,7 @@ def _build_agenda_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
 
     story.append(Paragraph("ORDER OF BUSINESS - Sangguniang Bayan Tolosa", title_style))
     story.append(Spacer(1, 10))
-    story.append(Paragraph(f"Prepared on {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", body_style))
+    story.append(Paragraph(f"Prepared on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}", body_style))
     story.append(Spacer(1, 12))
 
     def stage_key(status: str | None) -> str:
@@ -189,7 +189,7 @@ def _build_agenda_pdf_bytes(items: list[models.LegislativeItem]) -> bytes:
 
 
 def _resolve_measure_number(db: Session, item_type: str, year: int | None = None) -> str:
-    base_year = year or datetime.utcnow().year
+    base_year = year or datetime.now(timezone.utc).year
     normalized_type = (item_type or "").strip()
     if "resolution" in normalized_type.lower():
         prefix = "Draft Res. No."
@@ -339,7 +339,7 @@ def generate_agenda(db: Session = Depends(get_db)):
             .all()
         )
         pdf_bytes = _build_agenda_pdf_bytes(items)
-        filename = f"session_agenda_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+        filename = f"session_agenda_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf"
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
@@ -352,7 +352,7 @@ def generate_agenda(db: Session = Depends(get_db)):
         try:
             log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend_error.log'))
             with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{datetime.utcnow().isoformat()}] generate_agenda error: {str(e)}\n")
+                f.write(f"[{datetime.now(timezone.utc).isoformat()}] generate_agenda error: {str(e)}\n")
                 f.write(tb + "\n")
         except Exception:
             pass
@@ -386,7 +386,7 @@ def generate_agenda_selected(payload: AgendaPayload, db: Session = Depends(get_d
             raise HTTPException(status_code=404, detail="No matching legislative items found for agenda")
 
         pdf_bytes = _build_agenda_pdf_bytes(items)
-        filename = f"session_agenda_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+        filename = f"session_agenda_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf"
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
@@ -401,7 +401,7 @@ def generate_agenda_selected(payload: AgendaPayload, db: Session = Depends(get_d
         try:
             log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend_error.log'))
             with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(f"[{datetime.utcnow().isoformat()}] generate_agenda_selected error: {str(e)}\n")
+                f.write(f"[{datetime.now(timezone.utc).isoformat()}] generate_agenda_selected error: {str(e)}\n")
                 f.write(tb + "\n")
         except Exception:
             pass

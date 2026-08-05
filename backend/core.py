@@ -2,18 +2,14 @@ from fastapi import HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from datetime import datetime, timedelta
-import uuid
+from datetime import datetime, timedelta, timezone
 import secrets
 import re
 import json
 import os
 import io
-from urllib.parse import quote as urlquote
-import qrcode
 from docx import Document as DocxDocument
 from pypdf import PdfReader
-from .database import engine, Base, get_db
 from . import models
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -179,7 +175,7 @@ def save_workflow_steps(steps: list[str]) -> list[str]:
 
 
 def _purge_expired_scanner_sessions() -> None:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expired_tokens = [token for token, session in scanner_sessions.items() if session.get("expires_at") and session["expires_at"] < now]
     for token in expired_tokens:
         scanner_sessions.pop(token, None)
@@ -188,7 +184,7 @@ def _purge_expired_scanner_sessions() -> None:
 def create_scanner_session(username: str, role: str) -> dict[str, str]:
     _purge_expired_scanner_sessions()
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.utcnow() + timedelta(minutes=SCANNER_SESSION_TTL_MINUTES)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=SCANNER_SESSION_TTL_MINUTES)
     scanner_sessions[token] = {
         "username": username,
         "role": role,

@@ -2,27 +2,28 @@ import flet as ft
 import requests
 import base64
 from dotenv import load_dotenv
-import io
 import os
 import sys
-import asyncio
 import time
 import urllib3
-import qrcode
 import json
 from flet_runtime.uploads import build_upload_url
 from urllib.parse import quote
 from pathlib import Path
-import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # Load .env so BACKEND_URL and related overrides work for local development
 load_dotenv()
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-from frontend.frontend_secretariat.app import build_secretariat_view
+from frontend.frontend_admin.documents import build_documents_view
+from frontend.frontend_admin.committees import build_committees_view
+from frontend.frontend_admin.users_roles import build_users_roles_view
+from frontend.frontend_admin.audit_logs import build_audit_logs_view
+from frontend.frontend_admin.admin_shell import render_shell
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -38,7 +39,6 @@ cert_file = os.path.join(repo_root, "scanner.crt")
 key_file = os.path.join(repo_root, "scanner.key")
 local_backend_default = "https://127.0.0.1:8001" if os.path.exists(cert_file) and os.path.exists(key_file) else "http://127.0.0.1:8001"
 BACKEND_URL = os.getenv("BACKEND_URL", local_backend_default)
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", BACKEND_URL)
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
 UPLOAD_SECRET_KEY = os.getenv("FLET_SECRET_KEY", "sb_tolosa_tracking_secret")
 DEFAULT_WORKFLOW_STEPS = [
@@ -138,7 +138,6 @@ def main(page: ft.Page):
     # Current User Session State
     current_user = None
     current_user_role = None
-    secretariat_selected_ids = set()
     
     # Data storage for all documents
     all_documents = []
@@ -164,7 +163,6 @@ def main(page: ft.Page):
         width=220,
         options=[
             ft.dropdown.Option("Admin"),
-            ft.dropdown.Option("Secretariat"),
             ft.dropdown.Option("SB Member"),
             ft.dropdown.Option("Mayor's Office"),
         ],
@@ -172,57 +170,14 @@ def main(page: ft.Page):
     )
     users_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
     pending_delete_user = None
-    scan_office_dropdown = ft.Dropdown(
-        label="Receiving Office",
-        width=300,
-        options=[
-            ft.dropdown.Option("Records Registry"),
-            ft.dropdown.Option("Secretariat"),
-            ft.dropdown.Option("Mayor's Office"),
-            ft.dropdown.Option("Committee Chair"),
-            ft.dropdown.Option("Committee Hearing Room"),
-            ft.dropdown.Option("Session Hall"),
-            ft.dropdown.Option("Legal Office"),
-        ],
-        value="Secretariat",
-    )
-    scan_input = ft.TextField(
-        label="Scan QR Document UUID",
-        hint_text="Scan document QR code and press Enter",
-        width=420,
-        autofocus=True,
-        on_submit=lambda e: process_receive_scan(e),
-    )
-    scan_notice = ft.Text("Ready to receive scans.", size=12, color=ft.colors.BLUE_GREY_600)
-    scan_success_banner = ft.Container(visible=False, content=ft.Text(""))
-    scan_document_dropdown = ft.Dropdown(label="Selected Document", width=520, options=[], on_change=lambda e: load_document_timeline(scan_document_dropdown.value))
-    timeline_summary = ft.Text("Select a document to see its movement timeline.", size=13, color=ft.colors.BLUE_GREY_600)
-    timeline_column = ft.Column(spacing=10)
 
     def refresh_display_ids():
-        def sort_key(doc):
-            try:
-                return int(doc.get("id", 0))
-            except Exception:
-                return 0
-
-        all_documents.sort(key=sort_key)
-        for index, doc in enumerate(all_documents, start=1):
-            doc["display_id"] = index
+        for idx, item in enumerate(all_documents, start=1):
+            item["display_id"] = idx
 
     def refresh_user_display_ids(users):
-        users.sort(key=lambda user: int(user.get("id", 0) or 0))
-        for index, user in enumerate(users, start=1):
-            user["display_id"] = index
-
-    def build_qr_code_base64(text: str):
-        qr = qrcode.QRCode(version=1, box_size=8, border=4)
-        qr.add_data(text)
-        qr.make(fit=True)
-        image = qr.make_image(fill_color="black", back_color="white")
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+        for idx, user in enumerate(users, start=1):
+            user["display_id"] = idx
 
     def load_documents_from_backend(show_notice: bool = False):
         nonlocal all_documents
@@ -232,173 +187,13 @@ def main(page: ft.Page):
                 payload = response.json()
                 all_documents = payload.get("items", [])
                 refresh_display_ids()
-                if show_notice:
-                    scan_notice.value = f"Loaded {len(all_documents)} documents."
             elif show_notice:
-                scan_notice.value = f"Document load failed: {response.text}"
+                page.snack_bar = ft.SnackBar(ft.Text(f"Document load failed: {response.text}"), open=True)
+                page.update()
         except Exception as exc:
             if show_notice:
-                scan_notice.value = f"Document load error: {exc}"
-
-    def refresh_scan_document_options(selected_uuid: str | None = None):
-        options = []
-        for doc in all_documents:
-            label = f"{doc.get('display_id', doc.get('id', '-'))}. {doc.get('title', 'Untitled')}"
-            options.append(ft.dropdown.Option(key=doc.get("uuid", ""), text=label))
-
-        scan_document_dropdown.options = options
-
-        if selected_uuid:
-            scan_document_dropdown.value = selected_uuid if any(option.key == selected_uuid for option in options) else None
-        elif scan_document_dropdown.value not in [option.key for option in options]:
-            scan_document_dropdown.value = options[0].key if options else None
-
-    def render_timeline_entry(entry: dict):
-        timestamp_text = entry.get("timestamp", "")
-        display_time = timestamp_text.replace("T", " ")[:19] if timestamp_text else "Unknown time"
-        return ft.Container(
-            padding=14,
-            border_radius=16,
-            bgcolor=ft.colors.BLUE_GREY_50,
-            content=ft.Row(
-                [
-                    ft.Container(
-                        width=12,
-                        height=12,
-                        border_radius=6,
-                        bgcolor=ft.colors.BLUE_700,
-                    ),
-                    ft.Column(
-                        [
-                            ft.Text(f"{entry.get('previous_location', 'Records Registry')} → {entry.get('new_location', 'Unknown')}", weight=ft.FontWeight.BOLD),
-                            ft.Text(f"Received by {entry.get('receiving_office', '-')}", size=12, color=ft.colors.BLUE_GREY_700),
-                            ft.Text(f"{display_time} • {entry.get('logged_in_user', 'system')}", size=11, color=ft.colors.BLUE_GREY_500),
-                        ],
-                        spacing=2,
-                        expand=True,
-                    ),
-                ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            ),
-        )
-
-    def load_document_timeline(tracking_uuid: str | None):
-        if not tracking_uuid:
-            timeline_summary.value = "Select a document to see its movement timeline."
-            timeline_column.controls = []
-            page.update()
-            return
-
-        try:
-            response = requests.get(f"{BACKEND_URL}/documents/history/{quote(tracking_uuid)}", verify=False)
-            if response.status_code == 200:
-                payload = response.json()
-                document = payload.get("document", {})
-                history_items = payload.get("items", [])
-                title = document.get("title", "Untitled Document")
-                current_location = document.get("current_location", "Records Registry")
-                timeline_summary.value = f"{title} is currently at {current_location}."
-
-                if history_items:
-                    timeline_column.controls = [render_timeline_entry(entry) for entry in history_items]
-                else:
-                    timeline_column.controls = [
-                        ft.Container(
-                            padding=14,
-                            border_radius=16,
-                            bgcolor=ft.colors.BLUE_GREY_50,
-                            content=ft.Text("No scan history yet for this document."),
-                        )
-                    ]
-            else:
-                timeline_summary.value = f"Timeline load failed: {response.text}"
-                timeline_column.controls = []
-        except Exception as exc:
-            timeline_summary.value = f"Timeline load error: {exc}"
-            timeline_column.controls = []
-
-        page.update()
-
-    def refocus_scan_input():
-        try:
-            scan_input.focus()
-        except Exception:
-            pass
-
-    def process_receive_scan(e=None):
-        tracking_uuid = (scan_input.value or "").strip()
-        if not tracking_uuid:
-            scan_notice.value = "Scan a document QR code first."
-            page.update()
-            refocus_scan_input()
-            return
-
-        receiving_office = scan_office_dropdown.value or "Records Registry"
-        try:
-            response = requests.post(
-                f"{BACKEND_URL}/documents/receive/{quote(tracking_uuid)}",
-                params={
-                    "receiving_office": receiving_office,
-                    "logged_in_user": current_user or "system",
-                },
-                verify=False,
-            )
-            if response.status_code == 200:
-                payload = response.json()
-                document_title = payload.get("document_title", tracking_uuid)
-                previous_location = payload.get("previous_location", "Unknown")
-                new_location = payload.get("new_location", receiving_office)
-
-                for doc in all_documents:
-                    if doc.get("uuid") == tracking_uuid:
-                        doc["current_location"] = new_location
-                        break
-
-                scan_success_banner.content = ft.Container(
-                    padding=16,
-                    border_radius=18,
-                    bgcolor=ft.colors.GREEN_100,
-                    content=ft.Row(
-                        [
-                            ft.Icon(ft.icons.CHECK_CIRCLE, color=ft.colors.GREEN_700),
-                            ft.Column(
-                                [
-                                    ft.Text(f"{document_title}", weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_900),
-                                    ft.Text(f"{previous_location} → {new_location}", color=ft.colors.GREEN_900),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                        ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                )
-                scan_success_banner.visible = True
-                scan_notice.value = f"Scanned by {current_user or 'system'} for {receiving_office}."
-                load_documents_from_backend()
-                refresh_scan_document_options(tracking_uuid)
-                scan_document_dropdown.value = tracking_uuid
-                load_document_timeline(tracking_uuid)
-                update_table_view()
-                scan_input.value = ""
+                page.snack_bar = ft.SnackBar(ft.Text(f"Document load error: {exc}"), open=True)
                 page.update()
-                refocus_scan_input()
-                return
-
-            scan_notice.value = f"Receive failed: {response.text}"
-        except Exception as exc:
-            scan_notice.value = f"Receive error: {exc}"
-
-        page.update()
-        refocus_scan_input()
-
-    def save_binary_file_to_workspace(filename: str, data: bytes) -> str:
-        output_path = os.path.join(project_root, filename)
-        with open(output_path, "wb") as handle:
-            handle.write(data)
-        return output_path
 
     def surface_card(content, width=None, padding=24, expand=False):
         return ft.Container(
@@ -447,7 +242,7 @@ def main(page: ft.Page):
     committee_input = ft.TextField(label="Assigned Committee", hint_text="e.g., Committee on Finance", width=300)
     
     # File picker for document template import
-    file_picker = ft.FilePicker(on_result=lambda e: None)  # Will be set in load_dashboard
+    file_picker = ft.FilePicker(on_result=lambda _: None)  # Will be set in load_dashboard
     page.overlay.append(file_picker)
     
     # --- SEARCH AND FILTER COMPONENTS ---
@@ -456,7 +251,7 @@ def main(page: ft.Page):
         hint_text="Type to search...",
         width=400,
         prefix_icon=ft.icons.SEARCH,
-        on_change=lambda e: None  # Will be set in load_dashboard
+        on_change=lambda _: None  # Will be set in load_dashboard
     )
     
     type_filter = ft.Dropdown(
@@ -469,7 +264,7 @@ def main(page: ft.Page):
             ft.dropdown.Option("Committee Report"),
         ],
         value="All",
-        on_change=lambda e: None  # Will be set in load_dashboard
+        on_change=lambda _: None  # Will be set in load_dashboard
     )
     
     status_filter = ft.Dropdown(
@@ -484,7 +279,21 @@ def main(page: ft.Page):
             ft.dropdown.Option("Pending"),
         ],
         value="All",
-        on_change=lambda e: None  # Will be set in load_dashboard
+        on_change=lambda _: None  # Will be set in load_dashboard
+    )
+
+    import_button = ft.ElevatedButton(
+        "Import Document Template",
+        icon=ft.icons.UPLOAD_FILE,
+        bgcolor=ft.colors.GREEN,
+        color=ft.colors.WHITE,
+        on_click=lambda _: file_picker.pick_files(allowed_extensions=["docx", "pdf"]),
+    )
+
+    submit_button = ft.ElevatedButton(
+        "Register and Auto-Generate QR",
+        icon=ft.icons.ADD,
+        on_click=lambda _: submit_form(_),
     )
 
     def sync_status_filter_options():
@@ -543,23 +352,23 @@ def main(page: ft.Page):
                                 label=f"Milestone {index + 1}",
                                 value=step,
                                 expand=True,
-                                on_change=lambda e, idx=index: update_workflow_step(idx, e.control.value),
+                                on_change=lambda _, idx=index: update_workflow_step(idx, _.control.value),
                             ),
                             ft.IconButton(
                                 icon=ft.icons.ARROW_UPWARD,
                                 tooltip="Move up",
-                                on_click=lambda e, idx=index: move_workflow_step(idx, -1),
+                                on_click=lambda _, idx=index: move_workflow_step(idx, -1),
                             ),
                             ft.IconButton(
                                 icon=ft.icons.ARROW_DOWNWARD,
                                 tooltip="Move down",
-                                on_click=lambda e, idx=index: move_workflow_step(idx, 1),
+                                on_click=lambda _, idx=index: move_workflow_step(idx, 1),
                             ),
                             ft.IconButton(
                                 icon=ft.icons.DELETE_OUTLINE,
                                 tooltip="Remove milestone",
                                 icon_color=ft.colors.RED_700,
-                                on_click=lambda e, idx=index: remove_workflow_step(idx),
+                                on_click=lambda _, idx=index: remove_workflow_step(idx),
                             ),
                         ],
                         spacing=10,
@@ -575,7 +384,7 @@ def main(page: ft.Page):
             workflow_steps[index] = value.strip()
             refresh_workflow_summary()
 
-    def add_workflow_step(e=None):
+    def add_workflow_step(_=None):
         workflow_steps.append(next_workflow_step_label())
         rebuild_workflow_editor()
         page.update()
@@ -606,7 +415,7 @@ def main(page: ft.Page):
         sync_status_filter_options()
         rebuild_workflow_editor()
 
-    def save_workflow_config(e=None):
+    def save_workflow_config(_=None):
         cleaned_steps = [step.strip() for step in workflow_steps if str(step).strip()]
         if not cleaned_steps:
             workflow_notice.value = "Add at least one milestone before saving."
@@ -632,7 +441,7 @@ def main(page: ft.Page):
 
         page.update()
 
-    def reset_workflow_config(e=None):
+    def reset_workflow_config(_=None):
         try:
             response = requests.post(f"{BACKEND_URL}/workflow/reset", verify=False)
             if response.status_code == 200:
@@ -694,7 +503,7 @@ def main(page: ft.Page):
     pending_delete_user = None
 
     # --- ACTIONS ---
-    def view_qr_code(e, uuid_code):
+    def view_qr_code(_, uuid_code):
         qr_url = f"{BACKEND_URL}/legislative/qrcode/{uuid_code}"
         try:
             response = requests.get(qr_url, verify=False)
@@ -716,14 +525,14 @@ def main(page: ft.Page):
         finally:
             page.update()
 
-    def _doc_print(e, doc):
+    def _doc_print(_, doc):
         # Build a printable HTML and open it in a new tab which triggers print
         html = f"""<!doctype html><html><head><meta charset='utf-8'><title>{doc['title']}</title></head><body><h1>{doc['title']}</h1><p><strong>Type:</strong> {doc['type']}</p><p><strong>Committee:</strong> {doc['committee']}</p><p><strong>Status:</strong> {doc['status']}</p><p><strong>UUID:</strong> {doc['uuid']}</p><script>window.onload=function(){{window.print();}};</script></body></html>"""
         data = base64.b64encode(html.encode('utf-8')).decode('utf-8')
         url = f"data:text/html;base64,{data}"
         page.launch_url(url)
 
-    def _doc_preview(e, doc):
+    def _doc_preview(_, doc):
         src = doc.get("source_filename")
         if not src:
             page.snack_bar = ft.SnackBar(ft.Text("No uploaded source file available for preview."), open=True)
@@ -759,7 +568,7 @@ def main(page: ft.Page):
             page.update()
             return
 
-    def _doc_download(e, doc):
+    def _doc_download(_, doc):
         # If the document has a source filename, download it from the backend uploads endpoint
         src = doc.get("source_filename")
         if src:
@@ -771,7 +580,6 @@ def main(page: ft.Page):
                 pass
 
         # Fallback: Offer document metadata as JSON download
-        import json
 
         json_str = json.dumps(doc, indent=2)
         data = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
@@ -840,11 +648,10 @@ def main(page: ft.Page):
                                         icon=ft.icons.MORE_VERT,
                                         tooltip="User actions",
                                         items=[
-                                            ft.PopupMenuItem(text="Set Admin", on_click=lambda e, u=user: update_user_role(u, "Admin")),
-                                            ft.PopupMenuItem(text="Set Secretariat", on_click=lambda e, u=user: update_user_role(u, "Secretariat")),
-                                            ft.PopupMenuItem(text="Set SB Member", on_click=lambda e, u=user: update_user_role(u, "SB Member")),
-                                            ft.PopupMenuItem(text="Set Mayor's Office", on_click=lambda e, u=user: update_user_role(u, "Mayor's Office")),
-                                            ft.PopupMenuItem(text="Delete User", on_click=lambda e, u=user: confirm_delete_user(u)),
+                                            ft.PopupMenuItem(text="Set Admin", on_click=lambda _, u=user: update_user_role(u, "Admin")),
+                                            ft.PopupMenuItem(text="Set SB Member", on_click=lambda _, u=user: update_user_role(u, "SB Member")),
+                                            ft.PopupMenuItem(text="Set Mayor's Office", on_click=lambda _, u=user: update_user_role(u, "Mayor's Office")),
+                                            ft.PopupMenuItem(text="Delete User", on_click=lambda _, u=user: confirm_delete_user(u)),
                                         ],
                                     )
                                 ),
@@ -861,7 +668,7 @@ def main(page: ft.Page):
 
         page.update()
 
-    def create_user_record(e=None):
+    def create_user_record(_=None):
         if not user_username_input.value or not user_password_input.value:
             users_notice.value = "Username and password are required."
             page.update()
@@ -925,8 +732,8 @@ def main(page: ft.Page):
         delete_dialog.title = ft.Text("Delete User")
         delete_dialog.content = ft.Text(f"Delete user \"{user.get('username', 'this user')}\"? This cannot be undone.")
         delete_dialog.actions = [
-            ft.TextButton("Cancel", on_click=lambda e: close_delete_dialog()),
-            ft.ElevatedButton("Delete", icon=ft.icons.DELETE_OUTLINE, bgcolor=ft.colors.RED_700, color=ft.colors.WHITE, on_click=lambda e: run_delete_user_action()),
+            ft.TextButton("Cancel", on_click=lambda _: close_delete_dialog()),
+            ft.ElevatedButton("Delete", icon=ft.icons.DELETE_OUTLINE, bgcolor=ft.colors.RED_700, color=ft.colors.WHITE, on_click=lambda _: run_delete_user_action()),
         ]
         delete_dialog.open = True
         page.update()
@@ -944,8 +751,8 @@ def main(page: ft.Page):
         delete_dialog.title = ft.Text("Delete Legislative Record")
         delete_dialog.content = ft.Text(f"Delete \"{doc.get('title', 'this record')}\"? This cannot be undone.")
         delete_dialog.actions = [
-            ft.TextButton("Cancel", on_click=lambda e: close_delete_dialog()),
-            ft.ElevatedButton("Delete", icon=ft.icons.DELETE_OUTLINE, bgcolor=ft.colors.RED_700, color=ft.colors.WHITE, on_click=lambda e: run_delete_dialog_action()),
+            ft.TextButton("Cancel", on_click=lambda _: close_delete_dialog()),
+            ft.ElevatedButton("Delete", icon=ft.icons.DELETE_OUTLINE, bgcolor=ft.colors.RED_700, color=ft.colors.WHITE, on_click=lambda _: run_delete_dialog_action()),
         ]
         delete_dialog.open = True
         page.update()
@@ -995,7 +802,17 @@ def main(page: ft.Page):
         return ft.DataRow(
             cells=[
                 ft.DataCell(ft.Text(str(doc.get("display_id", doc.get("id", "-"))))),
-                ft.DataCell(ft.Text(doc["title"])),
+                ft.DataCell(
+                    ft.Container(
+                        content=ft.Row(
+                            [ft.Text(doc.get("title", "Untitled"), size=14)],
+                            scroll=ft.ScrollMode.AUTO,
+                            tight=True,
+                            wrap=False,
+                        ),
+                        width=420,
+                    )
+                ),
                 ft.DataCell(ft.Text(doc["type"])),
                 ft.DataCell(ft.Text(doc["committee"])),
                 ft.DataCell(ft.Text(doc.get("current_location", "Records Registry"))),
@@ -1021,387 +838,28 @@ def main(page: ft.Page):
             icon=ft.icons.MORE_VERT,
             tooltip="Actions",
             items=[
-                ft.PopupMenuItem(text="Get QR Code", on_click=lambda e, uid=doc["uuid"]: view_qr_code(e, uid)),
-                ft.PopupMenuItem(text="Preview file", on_click=lambda e, d=doc: _doc_preview(e, d)),
-                ft.PopupMenuItem(text="Print file", on_click=lambda e, d=doc: _doc_print(e, d)),
-                ft.PopupMenuItem(text="Download file", on_click=lambda e, d=doc: _doc_download(e, d)),
-                ft.PopupMenuItem(text="Advance status", on_click=lambda e, d=doc: advance_document_status(d)),
-                ft.PopupMenuItem(text="Delete record", on_click=lambda e, d=doc: confirm_delete_document(d)),
+                ft.PopupMenuItem(text="Get QR Code", on_click=lambda _, uid=doc["uuid"]: view_qr_code(_, uid)),
+                ft.PopupMenuItem(text="Preview file", on_click=lambda _, d=doc: _doc_preview(_, d)),
+                ft.PopupMenuItem(text="Print file", on_click=lambda _, d=doc: _doc_print(_, d)),
+                ft.PopupMenuItem(text="Download file", on_click=lambda _, d=doc: _doc_download(_, d)),
+                ft.PopupMenuItem(text="Advance status", on_click=lambda _, d=doc: advance_document_status(d)),
+                ft.PopupMenuItem(text="Delete record", on_click=lambda _, d=doc: confirm_delete_document(d)),
             ],
-        )
-
-    def secretariat_workspace(page: ft.Page):
-        return build_secretariat_view(
-            page=page,
-            current_user_role=current_user_role,
-            workflow_steps=workflow_steps,
-            all_documents=all_documents,
-            secretariat_selected_ids=secretariat_selected_ids,
-            save_binary_file_to_workspace=save_binary_file_to_workspace,
-            BACKEND_URL=BACKEND_URL,
-            surface_card=surface_card,
-            section_header=section_header,
-        )
-
-    def render_shell(title_text: str, subtitle_text: str, content_view):
-        """Build the shared admin shell with a fixed header and a left navigation rail."""
-        # Use flexible layout instead of a large fixed body height to avoid
-        # extra blank space when the window is scrolled. The containers will
-        # expand to the available space.
-        body_height = max((page.window_height or 900) - 170, 520)
-
-        header = ft.Container(
-            padding=ft.padding.symmetric(vertical=12, horizontal=14),
-            bgcolor=None,
-            content=ft.Row(
-                [
-                    ft.Container(
-                        content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=22, color=ft.colors.WHITE),
-                        padding=10,
-                        bgcolor=ft.colors.BLUE_800,
-                        border_radius=10,
-                    ),
-                    ft.Column(
-                        [
-                            ft.Text(
-                                "LGU Tolosa - Sangguniang Bayan",
-                                size=18,
-                                weight=ft.FontWeight.BOLD,
-                                color=ft.colors.BLUE_900,
-                            ),
-                            ft.Text(
-                                "Tracking Dashboard",
-                                size=12,
-                                color=ft.colors.BLUE_GREY_600,
-                            ),
-                        ],
-                        spacing=0,
-                        expand=True,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Container(
-                                content=ft.Column(
-                                    [
-                                        ft.Text("Logged in as", size=11, color=ft.colors.BLUE_GREY_500),
-                                        ft.Text(current_user or "-", size=13, weight=ft.FontWeight.W_600),
-                                    ],
-                                    spacing=0,
-                                    horizontal_alignment=ft.CrossAxisAlignment.END,
-                                ),
-                                padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                                bgcolor=ft.colors.WHITE,
-                                border_radius=10,
-                            ),
-                            ft.IconButton(icon=ft.icons.LOGOUT, tooltip="Log out", on_click=lambda e: logout_user()),
-                        ],
-                        spacing=8,
-                    ),
-                ],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=12,
-            ),
-        )
-
-        def switch_view(index: int):
-            content_holder.controls.clear()
-            try:
-                view_fn = nav_items[index][2]
-            except Exception:
-                view_fn = lambda: settings_view()
-
-            # view_fn is a zero-arg callable that returns a control
-            try:
-                control = view_fn()
-            except Exception:
-                control = ft.Text("Error loading view")
-
-            content_holder.controls.append(control)
-            content_holder.update()
-            page.update()
-
-        def handle_nav_change(e):
-            try:
-                idx = getattr(e.control, "selected_index", None)
-            except Exception:
-                idx = None
-
-            if idx is None:
-                idx = selected_index
-
-            switch_view(idx if idx is not None else 0)
-
-        # Compute a height for the main content card so it fills the viewport
-        card_height = max((page.window_height or 900) - 160, 360)
-
-        # Build a simple top-aligned navigation column and allow rebuilding
-        selected_index = 0
-
-        nav_container = ft.Column(spacing=12)
-
-        def set_selected(idx: int):
-            nonlocal selected_index
-            selected_index = idx
-            build_nav()
-            switch_view(idx)
-
-        def nav_item(icon, label, idx):
-            is_selected = (idx == selected_index)
-            return ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(icon, color=ft.colors.BLUE_800 if is_selected else ft.colors.BLUE_GREY_700),
-                        ft.Container(width=8),
-                        ft.Text(label, size=12, color=ft.colors.BLUE_800 if is_selected else ft.colors.BLUE_GREY_700),
-                    ],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=ft.padding.symmetric(vertical=10, horizontal=12),
-                width=200,
-                bgcolor=ft.colors.BLUE_50 if is_selected else None,
-                border_radius=10,
-                on_click=lambda e, i=idx: set_selected(i),
-            )
-
-        def build_nav():
-            nav_container.controls.clear()
-            # Show a contextual header label/icon depending on the signed-in role
-            try:
-                header_role = (current_user_role or "").strip().lower()
-            except Exception:
-                header_role = ""
-
-            header_icon = ft.icons.DASHBOARD if header_role != "secretariat" else ft.icons.ACCOUNT_BALANCE
-            header_label = "Admin" if header_role != "secretariat" else "Secretariat"
-
-            nav_container.controls.append(
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Container(
-                                content=ft.Icon(header_icon, color=ft.colors.BLUE_800),
-                                padding=8,
-                                bgcolor=ft.colors.BLUE_50,
-                                border_radius=12,
-                            ),
-                            ft.Text(header_label, size=12, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=6,
-                    ),
-                    padding=ft.padding.only(top=6, bottom=8),
-                    alignment=ft.alignment.top_center,
-                )
-            )
-
-            # Build a list of available nav items depending on the user's role
-            # Each entry: (icon, label, view_fn)
-            nonlocal nav_items
-            try:
-                role = (current_user_role or "").strip().lower()
-            except Exception:
-                role = ""
-
-            # Secretariat-only users should only see the Secretariat workspace
-            if role == "secretariat":
-                nav_items = [
-                    (ft.icons.ACCOUNT_BALANCE_OUTLINED, "Secretariat", lambda: secretariat_workspace(page)),
-                ]
-            else:
-                # Admin and other roles see the full admin navigation. Admins also get Secretariat.
-                nav_items = [
-                    (ft.icons.LIST_ALT_OUTLINED, "Documents", lambda: registry_view()),
-                    (ft.icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
-                    (ft.icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),
-                    (ft.icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()),
-                ]
-
-                if role == "admin":
-                    nav_items.insert(1, (ft.icons.ACCOUNT_BALANCE_OUTLINED, "Secretariat", lambda: secretariat_workspace(page)))
-
-                nav_items.append((ft.icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
-
-            # Render nav items
-            for idx, (icon, label, _) in enumerate(nav_items):
-                nav_container.controls.append(nav_item(icon, label, idx))
-
-        # nav_items holds tuples of available navigation entries. Start with empty and build.
-        nav_items = []
-        build_nav()
-
-        content_holder = ft.ListView(
-            expand=True,
-            spacing=12,
-            padding=ft.padding.only(top=0, right=0, left=0, bottom=0),
-        )
-        content_holder.controls = [content_view]
-
-        def load_audit_logs_view():
-            try:
-                response = requests.get(f"{BACKEND_URL}/audit/logs?limit=200", verify=False)
-                if response.status_code == 200:
-                    payload = response.json()
-                    rows = []
-                    for entry in payload.get("items", []):
-                        target_label = "-"
-                        if entry.get("target_type") or entry.get("target_id"):
-                            target_label = f"{entry.get('target_type') or '-'} #{entry.get('target_id') or '-'}"
-
-                        rows.append(
-                            ft.DataRow(
-                                cells=[
-                                    ft.DataCell(ft.Text((entry.get("created_at") or "").replace("T", " ")[:19])),
-                                    ft.DataCell(ft.Text(entry.get("actor", "-"))),
-                                    ft.DataCell(ft.Text(entry.get("action", "-"))),
-                                    ft.DataCell(ft.Text(target_label)),
-                                    ft.DataCell(ft.Text(entry.get("details") or "-")),
-                                ]
-                            )
-                        )
-
-                    audit_logs_table.rows = rows
-                else:
-                    audit_logs_table.rows = [
-                        ft.DataRow(
-                            cells=[
-                                ft.DataCell(ft.Text("-")),
-                                ft.DataCell(ft.Text("-")),
-                                ft.DataCell(ft.Text("Failed to load audit logs")),
-                                ft.DataCell(ft.Text("-")),
-                                ft.DataCell(ft.Text(response.text)),
-                            ]
-                        )
-                    ]
-            except Exception as exc:
-                audit_logs_table.rows = [
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(ft.Text("-")),
-                            ft.DataCell(ft.Text("-")),
-                            ft.DataCell(ft.Text("Load error")),
-                            ft.DataCell(ft.Text("-")),
-                            ft.DataCell(ft.Text(str(exc))),
-                        ]
-                    )
-                ]
-
-        def audit_logs_view():
-            load_audit_logs_view()
-            return ft.Column(
-                [
-                    surface_card(
-                        ft.Column(
-                            [
-                                section_header(
-                                    "Audit Logs",
-                                    "System Activity & History Logs",
-                                    ft.icons.HISTORY,
-                                    ft.colors.ORANGE_700,
-                                ),
-                                ft.Divider(height=1),
-                                ft.Container(
-                                    content=audit_logs_table,
-                                    bgcolor=ft.colors.BLUE_GREY_50,
-                                    border_radius=18,
-                                    padding=12,
-                                ),
-                            ],
-                            spacing=16,
-                        ),
-                    )
-                ],
-                expand=True,
-            )
-
-        page.clean()
-        page.horizontal_alignment = ft.CrossAxisAlignment.START
-        page.vertical_alignment = ft.MainAxisAlignment.START
-        page.add(
-            ft.Column(
-                [
-                    header,
-                    ft.Row(
-                        [
-                            ft.Container(
-                                width=200,
-                                padding=ft.padding.only(top=8, right=6),
-                                content=nav_container,
-                                bgcolor=None,
-                                border_radius=12,
-                                alignment=ft.alignment.top_center,
-                            ),
-                            ft.Container(
-                                expand=True,
-                                padding=ft.padding.only(top=8),
-                                content=ft.Container(
-                                    expand=True,
-                                    padding=20,
-                                    bgcolor=ft.colors.WHITE,
-                                    border_radius=12,
-                                    border=ft.border.all(1, ft.colors.BLUE_GREY_50),
-                                    content=content_holder,
-                                ),
-                            ),
-                        ],
-                        expand=True,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                    ),
-                ],
-                spacing=16,
-                expand=True,
-            )
-        )
-
-    def empty_state(title: str, subtitle: str, icon, accent_color):
-        return ft.Container(
-            expand=True,
-            alignment=ft.alignment.center,
-            content=ft.Column(
-                [
-                    ft.Container(
-                        content=ft.Icon(icon, size=54, color=accent_color),
-                        padding=16,
-                        bgcolor=ft.colors.BLUE_GREY_50,
-                        border_radius=20,
-                    ),
-                    ft.Text(title, size=22, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
-                    ft.Text(subtitle, size=14, color=ft.colors.BLUE_GREY_600, text_align=ft.TextAlign.CENTER),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
-            ),
         )
 
     def registry_view():
-        return ft.Column(
-            [
-                surface_card(
-                    ft.Column(
-                        [
-                            section_header(
-                                "Documents",
-                                "Active Legislative Tracker & Document Registration",
-                                ft.icons.LIST_ALT,
-                                ft.colors.BLUE_800,
-                            ),
-                            ft.Divider(height=1),
-                            ft.Row([title_input, import_button], spacing=16),
-                            ft.Row([type_dropdown, committee_input, submit_button], spacing=16),
-                            ft.Container(height=6),
-                            ft.Row([search_field, type_filter, status_filter], spacing=15),
-                            ft.Container(height=4),
-                            ft.Container(
-                                content=data_table,
-                                bgcolor=ft.colors.BLUE_GREY_50,
-                                border_radius=18,
-                                padding=12,
-                            ),
-                        ],
-                        spacing=16,
-                    ),
-                )
-            ],
-            expand=True,
+        return build_documents_view(
+            title_input,
+            type_dropdown,
+            committee_input,
+            search_field,
+            type_filter,
+            status_filter,
+            data_table,
+            import_button,
+            submit_button,
+            surface_card,
+            section_header,
         )
 
     # --- Committees editing helpers ---
@@ -1415,8 +873,8 @@ def main(page: ft.Page):
             committee_name_input,
         ]),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda e: close_committee_dialog()),
-            ft.ElevatedButton("Save", on_click=lambda e: on_committee_save()),
+            ft.TextButton("Cancel", on_click=lambda _: close_committee_dialog()),
+            ft.ElevatedButton("Save", on_click=lambda _: on_committee_save()),
         ],
     )
     page.overlay.append(committee_edit_dialog)
@@ -1426,8 +884,8 @@ def main(page: ft.Page):
         title=ft.Text("Delete Committee"),
         content=ft.Text("Are you sure you want to delete this committee?"),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda e: close_delete_committee_dialog()),
-            ft.ElevatedButton("Delete", bgcolor=ft.colors.RED_600, color=ft.colors.WHITE, on_click=lambda e: delete_committee_action()),
+            ft.TextButton("Cancel", on_click=lambda _: close_delete_committee_dialog()),
+            ft.ElevatedButton("Delete", bgcolor=ft.colors.RED_600, color=ft.colors.WHITE, on_click=lambda _: delete_committee_action()),
         ],
     )
     page.overlay.append(delete_committee_dialog)
@@ -1496,8 +954,8 @@ def main(page: ft.Page):
                         ft.DataCell(
                             ft.Row(
                                 [
-                                    ft.IconButton(ft.icons.EDIT, tooltip="Edit", on_click=lambda e, idx=index: open_committee_dialog(idx)),
-                                    ft.IconButton(ft.icons.DELETE, tooltip="Delete", on_click=lambda e, idx=index: confirm_delete_committee(idx)),
+                                    ft.IconButton(ft.icons.EDIT, tooltip="Edit", on_click=lambda _, idx=index: open_committee_dialog(idx)),
+                                    ft.IconButton(ft.icons.DELETE, tooltip="Delete", on_click=lambda _, idx=index: confirm_delete_committee(idx)),
                                 ],
                                 spacing=4,
                             )
@@ -1516,135 +974,51 @@ def main(page: ft.Page):
             column_spacing=12,
         )
 
-        return ft.Column(
-            [
-                surface_card(
-                    ft.Column(
-                        [
-                            section_header(
-                                "Committees",
-                                "Reference list of SB committee assignments and organization.",
-                                ft.icons.GROUP,
-                                ft.colors.GREEN_700,
-                            ),
-                            ft.Divider(height=1),
-                            ft.Row([
-                                ft.Text(
-                                    "These are the standing committee names used for document assignment and reporting.",
-                                    size=13,
-                                    color=ft.colors.BLUE_GREY_600,
-                                ),
-                                ft.ElevatedButton("Add Committee", icon=ft.icons.ADD, on_click=lambda e: open_committee_dialog(None)),
-                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                            ft.Container(
-                                content=committee_table,
-                                bgcolor=ft.colors.BLUE_GREY_50,
-                                border_radius=18,
-                                padding=12,
-                            ),
-                        ],
-                        spacing=14,
-                    ),
-                )
-            ],
-            expand=True,
-        )
-
-    def scan_receive_view():
-        refresh_scan_document_options(scan_document_dropdown.value)
-        if not scan_document_dropdown.value and scan_document_dropdown.options:
-            scan_document_dropdown.value = scan_document_dropdown.options[0].key
-        load_document_timeline(scan_document_dropdown.value)
-        return ft.Column(
-            [
-                surface_card(
-                    ft.Column(
-                        [
-                            section_header(
-                                "Scan & Receive Document",
-                                "Use a QR scanner or paste a UUID to move a document between offices.",
-                                ft.icons.QR_CODE_SCANNER,
-                                ft.colors.TEAL_700,
-                            ),
-                            ft.Divider(height=1),
-                            ft.Row([scan_office_dropdown, scan_input], spacing=16, wrap=True),
-                            scan_notice,
-                            scan_success_banner,
-                            ft.Container(
-                                padding=16,
-                                border_radius=18,
-                                bgcolor=ft.colors.BLUE_GREY_50,
-                                content=ft.Row(
-                                    [
-                                        ft.Column(
-                                            [
-                                                ft.Text("Phone Scanner Access", size=18, weight=ft.FontWeight.BOLD),
-                                                ft.Text(
-                                                    "Open the mobile scanner on a phone, log in first, then scan the document QR code that is already generated.",
-                                                    size=13,
-                                                    color=ft.colors.BLUE_GREY_600,
-                                                ),
-                                                ft.ElevatedButton(
-                                                    "Open Mobile Scanner",
-                                                    icon=ft.icons.PHONE_ANDROID,
-                                                    on_click=lambda e: page.launch_url(f"{BACKEND_PUBLIC_URL}/scanner/mobile?api_base={quote(BACKEND_PUBLIC_URL)}"),
-                                                ),
-                                            ],
-                                            spacing=10,
-                                            expand=True,
-                                        ),
-                                    ],
-                                    spacing=18,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                ),
-                            ),
-                            ft.Text("Movement Timeline", size=18, weight=ft.FontWeight.BOLD),
-                            ft.Text("Select a document to review its received-at history.", size=13, color=ft.colors.BLUE_GREY_600),
-                            scan_document_dropdown,
-                            timeline_summary,
-                            ft.Container(
-                                content=timeline_column,
-                                bgcolor=ft.colors.BLUE_GREY_50,
-                                border_radius=18,
-                                padding=12,
-                            ),
-                        ],
-                        spacing=14,
-                    ),
-                )
-            ],
-            expand=True,
-        )
+        return build_committees_view(committee_table, open_committee_dialog, surface_card, section_header)
 
     def users_roles_view():
         load_users_table()
-        return ft.Column(
-            [
-                surface_card(
-                    ft.Column(
-                        [
-                            section_header(
-                                "Users & Roles",
-                                "Create accounts, set roles, and remove users from the system.",
-                                ft.icons.PEOPLE,
-                                ft.colors.INDIGO_700,
-                            ),
-                            ft.Divider(height=1),
-                            ft.Row([user_username_input, user_password_input, user_role_input], spacing=12, wrap=True),
-                            ft.Row([ft.ElevatedButton("Create User", icon=ft.icons.PERSON_ADD, on_click=create_user_record)], spacing=12),
-                            users_notice,
-                            ft.Container(
-                                content=users_table,
-                                bgcolor=ft.colors.BLUE_GREY_50,
-                                border_radius=18,
-                                padding=12,
-                            ),
-                        ],
-                        spacing=14,
-                    ),
-                )
-            ],
-            expand=True,
+        return build_users_roles_view(
+            user_username_input,
+            user_password_input,
+            user_role_input,
+            users_notice,
+            users_table,
+            create_user_record,
+            surface_card,
+            section_header,
+        )
+
+    def load_audit_logs_view():
+        try:
+            response = requests.get(f"{BACKEND_URL}/audit/logs", verify=False)
+            if response.status_code == 200:
+                payload = response.json()
+                items = payload.get("items", [])
+                audit_logs_table.rows = [
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(ft.Text(item.get("created_at", "-"))),
+                            ft.DataCell(ft.Text(item.get("actor", "-"))),
+                            ft.DataCell(ft.Text(item.get("action", "-"))),
+                            ft.DataCell(ft.Text(item.get("target", "-"))),
+                            ft.DataCell(ft.Text(item.get("details", "-"))),
+                        ]
+                    )
+                    for item in items
+                ]
+            else:
+                audit_logs_table.rows = []
+        except Exception:
+            audit_logs_table.rows = []
+        page.update()
+
+    def audit_logs_view():
+        return build_audit_logs_view(
+            audit_logs_table,
+            load_audit_logs_view,
+            surface_card,
+            section_header,
         )
 
     def settings_view():
@@ -1688,6 +1062,14 @@ def main(page: ft.Page):
             spacing=16,
         )
 
+    nav_items = [
+        (ft.icons.LIST_ALT_OUTLINED, "Documents", lambda: registry_view()),
+        (ft.icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
+        (ft.icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),
+        (ft.icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()),
+        (ft.icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()),
+    ]
+
     # Copy metadata action removed by user request
 
     def _resolve_uploaded_file_path(path_candidate: str, filename: str) -> str | None:
@@ -1708,12 +1090,6 @@ def main(page: ft.Page):
                 return os.path.join(root, filename)
 
         return None
-
-    def _debug_upload_dir():
-        try:
-            return sorted(os.listdir(UPLOAD_DIR))
-        except Exception as exc:
-            return [f"ERROR: {exc}"]
 
     def _process_uploaded_file(filename: str, file_path: str):
         with open(file_path, 'rb') as f:
@@ -1896,7 +1272,7 @@ def main(page: ft.Page):
         _try_process_pending_upload()
         return
 
-    def refresh_measure_number_preview(e=None):
+    def refresh_measure_number_preview(_=None):
         if title_input.value and not title_input.value.startswith("Draft"):
             return
         try:
@@ -1909,7 +1285,7 @@ def main(page: ft.Page):
         except Exception:
             pass
 
-    def submit_form(e):
+    def submit_form(_):
         if not title_input.value or not committee_input.value:
             page.snack_bar = ft.SnackBar(ft.Text("Please fill out all mandatory fields."), open=True)
             page.update()
@@ -2001,16 +1377,16 @@ def main(page: ft.Page):
         
         page.update()
 
-    type_dropdown.on_change = lambda e: refresh_measure_number_preview(e)
-    import_button = ft.ElevatedButton(
-        "Import Document Template",
-        icon=ft.icons.UPLOAD_FILE,
-        bgcolor=ft.colors.GREEN,
-        color=ft.colors.WHITE,
-        on_click=lambda e: file_picker.pick_files(allowed_extensions=["docx", "pdf"])
-    )
-    
-    submit_button = ft.ElevatedButton("Register and Auto-Generate QR", icon=ft.icons.ADD, on_click=submit_form)
+        type_dropdown.on_change = lambda _: refresh_measure_number_preview()
+        import_button = ft.ElevatedButton(
+            "Import Document Template",
+            icon=ft.icons.UPLOAD_FILE,
+            bgcolor=ft.colors.GREEN,
+            color=ft.colors.WHITE,
+            on_click=lambda _: file_picker.pick_files(allowed_extensions=["docx", "pdf"])
+        )
+
+        submit_button = ft.ElevatedButton("Register and Auto-Generate QR", icon=ft.icons.ADD, on_click=submit_form)
 
     # --- MAIN DASHBOARD LAYOUT VIEW ---
     def load_dashboard():
@@ -2023,24 +1399,15 @@ def main(page: ft.Page):
 
         load_documents_from_backend(show_notice=True)
 
-        search_field.on_change = lambda e: update_table_view()
-        type_filter.on_change = lambda e: update_table_view()
-        status_filter.on_change = lambda e: update_table_view()
+        search_field.on_change = lambda _: update_table_view()
+        type_filter.on_change = lambda _: update_table_view()
+        status_filter.on_change = lambda _: update_table_view()
         
         # Initial population of table
         update_table_view()
-        # If the signed-in user is Secretariat, open the Secretariat workspace by default
-        try:
-            role_for_landing = (current_user_role or "").strip().lower()
-        except Exception:
-            role_for_landing = ""
+        initial_view = registry_view()
 
-        if role_for_landing == "secretariat":
-            initial_view = secretariat_workspace(page)
-        else:
-            initial_view = registry_view()
-
-        render_shell("Registry", "Active Legislative Tracker & Document Registration", initial_view)
+        render_shell(page, current_user, logout_user, nav_items, initial_view)
         page.update()
 
     def logout_user():
@@ -2058,7 +1425,7 @@ def main(page: ft.Page):
         username_field = ft.TextField(label="Username", width=300, icon=ft.icons.PERSON)
         password_field = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK)
         
-        def attempt_login(e):
+        def attempt_login(_):
             nonlocal current_user, current_user_role
             if not username_field.value or not password_field.value:
                 page.snack_bar = ft.SnackBar(ft.Text("Please fill out both fields."), open=True)
@@ -2072,7 +1439,6 @@ def main(page: ft.Page):
                 if res.status_code == 200:
                         payload = res.json()
                         role = (payload.get("role") or "Admin").strip()
-                        # Allow Secretariat users to sign in to the web UI so they can access the Secretariat tab.
                         current_user = payload.get("username")
                         current_user_role = role
                         load_dashboard()
@@ -2084,7 +1450,7 @@ def main(page: ft.Page):
                 page.update()
 
         login_btn = ft.ElevatedButton("Log In", width=300, on_click=attempt_login, bgcolor=ft.colors.BLUE_800, color=ft.colors.WHITE)
-        signup_link = ft.TextButton("Don't have an account? Sign Up", on_click=lambda e: show_signup())
+        signup_link = ft.TextButton("Don't have an account? Sign Up", on_click=lambda _: show_signup())
 
         page.add(
             surface_card(
@@ -2120,7 +1486,7 @@ def main(page: ft.Page):
         reg_password = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK_OUTLINE)
         reg_confirm_password = ft.TextField(label="Confirm Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK)
 
-        def attempt_signup(e):
+        def attempt_signup(_):
             if not reg_username.value or not reg_password.value or not reg_confirm_password.value:
                 page.snack_bar = ft.SnackBar(ft.Text("Please fill out all registration fields."), open=True)
                 page.update()

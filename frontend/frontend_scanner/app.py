@@ -65,7 +65,6 @@ HTML_TEMPLATE = '''<!doctype html>
                     <label for="office">Receiving Office</label>
                     <select id="office">
                         <option>Records Registry</option>
-                        <option>Secretariat</option>
                         <option>Mayor's Office</option>
                         <option>Committee Chair</option>
                         <option>Committee Hearing Room</option>
@@ -344,7 +343,7 @@ def root() -> RedirectResponse:
 
 
 @app.get("/scanner/mobile")
-def mobile_scanner_page(api_base: str | None = None, uuid: str | None = None):
+def mobile_scanner_page(api_base: str | None = None):
     backend_url = api_base or BACKEND_URL
     html = HTML_TEMPLATE.replace("__BACKEND_URL__", backend_url)
     return HTMLResponse(html)

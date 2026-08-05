@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
-import datetime
+from datetime import datetime, timezone
 from .database import Base
 
 class User(Base):
@@ -34,7 +34,7 @@ class LegislativeTrackingLog(Base):
     location_stamp = Column(String)   # e.g., "Office of the Municipal Mayor", "Committee Room"
     action_taken = Column(String)     # e.g., "Signed", "Received for Review"
     scanned_by = Column(String)       # Accounts for who scanned the QR code via the tracking app
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     item = relationship("LegislativeItem", back_populates="logs")
 
@@ -48,7 +48,7 @@ class DocumentHistory(Base):
     receiving_office = Column(String, nullable=False)
     new_location = Column(String, nullable=False)
     logged_in_user = Column(String, nullable=False)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
     item = relationship("LegislativeItem", back_populates="history")
 
@@ -62,4 +62,4 @@ class AuditLog(Base):
     target_type = Column(String, nullable=True, index=True)
     target_id = Column(String, nullable=True, index=True)
     details = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

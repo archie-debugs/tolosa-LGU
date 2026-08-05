@@ -12,7 +12,6 @@ from ..core import (
     extract_text_from_file,
     record_audit_log,
     load_workflow_steps,
-    DEFAULT_WORKFLOW_STEPS,
     validate_scanner_session,
 )
 from urllib.parse import quote as urlquote

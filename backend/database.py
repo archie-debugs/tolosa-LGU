@@ -1,10 +1,19 @@
+import os
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Free, local embedded database configuration
-DATABASE_URL = "sqlite:///./sb_tolosa.db"
+load_dotenv()
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Use DATABASE_URL from environment for PostgreSQL or other SQLAlchemy backends.
+# Fall back to local SQLite for development if DATABASE_URL is not set.
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sb_tolosa.db")
+
+engine_kwargs = {}
+if DATABASE_URL.startswith("sqlite://"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
