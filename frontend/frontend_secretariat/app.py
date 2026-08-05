@@ -262,15 +262,50 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
 
             # Read file bytes either from runtime-provided path or via FilePicker upload data
             file_bytes = None
-            if raw_path and os.path.exists(raw_path):
-                with open(raw_path, 'rb') as fh:
-                    file_bytes = fh.read()
-            else:
-                # Fallback: use picked data buffer if present
-                file_bytes = getattr(picked, 'bytes', None)
+            tried = []
+            # 1) Try raw path if provided (handle file:// URIs)
+            if raw_path:
+                p = raw_path
+                try:
+                    if p.startswith("file://"):
+                        from urllib.parse import unquote
+
+                        p = unquote(p.split("file://", 1)[1])
+                    p = os.path.expanduser(p)
+                    tried.append(f"path:{p}")
+                    if os.path.exists(p):
+                        with open(p, "rb") as fh:
+                            file_bytes = fh.read()
+                except Exception as ex:
+                    tried.append(f"path_error:{ex}")
+
+            # 2) Try common buffer attributes on the picked file
+            if file_bytes is None:
+                for attr in ("bytes", "data", "content", "raw_bytes"):
+                    file_bytes = getattr(picked, attr, None)
+                    if file_bytes is not None:
+                        tried.append(f"attr:{attr}")
+                        break
+
+            # 3) If the picked object exposes an open/read interface, try that
+            if file_bytes is None:
+                try:
+                    opener = getattr(picked, "open", None)
+                    if callable(opener):
+                        fobj = opener("rb")
+                        try:
+                            file_bytes = fobj.read()
+                        finally:
+                            try:
+                                fobj.close()
+                            except Exception:
+                                pass
+                        tried.append("open()")
+                except Exception as ex:
+                    tried.append(f"open_error:{ex}")
 
             if file_bytes is None:
-                page.snack_bar = ft.SnackBar(ft.Text("Failed to read selected file."), open=True)
+                page.snack_bar = ft.SnackBar(ft.Text(f"Failed to read selected file ({';'.join(tried)})"), open=True)
                 page.update()
                 return
 
