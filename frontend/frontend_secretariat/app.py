@@ -519,6 +519,23 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
     register_type = ft.Dropdown(label="Item Type", width=220, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
     register_committee = ft.TextField(label="Assigned Committee", width=320)
     register_source_filename: str | None = None
+    
+    def refresh_measure_number_preview(e=None):
+        try:
+            # only prefill when title is empty or looks like a Draft placeholder
+            val = (register_title.value or "").strip()
+            if val and not val.startswith("Draft"):
+                return
+            resp = requests.get(f"{BACKEND_URL}/documents/next-number", params={"item_type": register_type.value or "Ordinance"}, verify=False)
+            if resp.status_code == 200:
+                next_number = resp.json().get("next_number")
+                if next_number:
+                    register_title.value = next_number
+                    page.update()
+        except Exception:
+            pass
+
+    register_type.on_change = lambda e: refresh_measure_number_preview(e)
     import_mode = False
 
 
