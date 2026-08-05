@@ -6,7 +6,6 @@ Usage:
 
 Options:
     --no-admin        Don't start the admin frontend
-    --no-scanner      Don't start the scanner frontend
 
 The script starts child processes and will terminate them on Ctrl+C.
 """
@@ -20,7 +19,6 @@ PY = sys.executable
 
 FRONTENDS = {
     "admin": str(REPO_ROOT / "frontend" / "frontend_admin" / "app.py"),
-    "scanner": str(REPO_ROOT / "frontend" / "frontend_scanner" / "app.py"),
 }
 
 children = []
@@ -65,8 +63,6 @@ def main():
 
         if "--no-admin" not in args:
             start_process("admin", FRONTENDS["admin"])
-        if "--no-scanner" not in args:
-            start_process("scanner", FRONTENDS["scanner"])
         print("All processes started. Press Ctrl+C to stop.")
 
         # Wait until children exit or user interrupts

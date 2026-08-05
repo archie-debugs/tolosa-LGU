@@ -18,22 +18,42 @@ def build_users_roles_view(
                     [
                         section_header(
                             "Users & Roles",
-                            "Create accounts, set roles, and remove users from the system.",
+                            "Manage admin users, roles, and account access for the system.",
                             ft.icons.PEOPLE,
-                            ft.colors.INDIGO_700,
+                            ft.colors.BLUE_700,
                         ),
                         ft.Divider(height=1),
-                        ft.Row([user_username_input, user_password_input, user_role_input], spacing=12, wrap=True),
-                        ft.Row([ft.ElevatedButton("Create User", icon=ft.icons.PERSON_ADD, on_click=create_user_record)], spacing=12),
-                        users_notice,
-                        ft.Container(
-                            content=users_table,
-                            bgcolor=ft.colors.BLUE_GREY_50,
-                            border_radius=18,
-                            padding=12,
+                        ft.Row(
+                            [
+                                ft.Column(
+                                    [
+                                        user_username_input,
+                                        user_password_input,
+                                        user_role_input,
+                                        ft.ElevatedButton(
+                                            "Create User",
+                                            on_click=create_user_record,
+                                            bgcolor=ft.colors.BLUE_800,
+                                            color=ft.colors.WHITE,
+                                        ),
+                                        users_notice,
+                                    ],
+                                    spacing=12,
+                                    width=360,
+                                ),
+                                ft.Container(
+                                    content=users_table,
+                                    expand=True,
+                                    bgcolor=ft.colors.BLUE_GREY_50,
+                                    border_radius=18,
+                                    padding=12,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            spacing=20,
                         ),
                     ],
-                    spacing=14,
+                    spacing=16,
                 ),
             )
         ],

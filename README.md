@@ -15,30 +15,17 @@ Ctrl+Shift+P → Tasks: Run Task → Run Full Stack
 python run_backend.py
 ```
 
-**Scanner (port 8002 with HTTPS):**
+**Admin frontend:**
 ```bash
-python frontend_scanner/app.py
+python frontend/frontend_admin/app.py
 ```
 
 ## HTTPS Setup
 
-The system now runs on **HTTPS** to enable camera access on mobile phones. Self-signed certificates have been generated:
-- `scanner.crt` - SSL certificate
-- `scanner.key` - SSL private key
+The backend can run with HTTPS if valid certificates are available in the repository root as `server.crt` and `server.key`.
 
-When accessing from your phone, you'll see a security warning. Tap **"Continue anyway"** to proceed.
+If certificate files are not present, the backend falls back to HTTP by default. Use `DEV_HTTP=1` in `.env` to force HTTP during local development.
 
-## Phone Access
+## Backend URL
 
-1. Start the services (Run Full Stack task)
-2. On your PC: Generate QR code in admin app pointing to `https://192.168.1.4:8002`
-3. On your phone: Scan QR code with Chrome
-4. Accept SSL warning
-5. Camera should now work for automatic QR scanning
-
-## Backend & Scanner URLs
-
-- Backend: `https://192.168.1.4:8001` (or localhost `https://127.0.0.1:8001`)
-- Scanner: `https://192.168.1.4:8002` (or localhost `https://127.0.0.1:8002`)
-
-QR codes automatically point to the correct HTTPS endpoints.
+- Backend: `http://127.0.0.1:8001` (or your machine IP address if you need network access)

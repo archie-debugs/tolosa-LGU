@@ -7,12 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine
 from . import models
-from .core import ensure_user_role_column, ensure_current_location_column
-from .core import ensure_source_filename_column
+from .core import ensure_user_role_column
 from .routes.auth import router as auth_router
 from .routes.status import router as status_router
-from .routes.tracking import router as tracking_router
-from .routes.workflow import router as workflow_router
+from .routes.audit import router as audit_router
 
 app = FastAPI(title="LGU Tolosa SB Legislative Tracking Backend")
 
@@ -33,8 +31,7 @@ except Exception:
 
 app.include_router(status_router)
 app.include_router(auth_router)
-app.include_router(tracking_router)
-app.include_router(workflow_router)
+app.include_router(audit_router)
 
 
 @app.get("/health")

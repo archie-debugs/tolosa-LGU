@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
-from ..core import get_password_hash, verify_password, record_audit_log, create_scanner_session
+from ..core import get_password_hash, verify_password, record_audit_log
 
 router = APIRouter()
 
@@ -118,38 +118,3 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
     )
 
     return {"message": "Login successful", "username": user.username, "role": user.role or "Admin"}
-
-
-@router.post("/auth/scanner/login")
-def scanner_login(username: str, password: str, db: Session = Depends(get_db)):
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="Username and password are required")
-
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user or not verify_password(password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    scanner_session = create_scanner_session(user.username, user.role or "Admin")
-
-    record_audit_log(
-        db,
-        actor=user.username,
-        action="SCANNER_LOGIN",
-        target_type="Auth",
-        target_id=user.username,
-        details="Scanner session created",
-    )
-
-    return {
-        "message": "Scanner login successful",
-        "username": user.username,
-        "role": user.role or "Admin",
-        **scanner_session,
-    }
-
-
-@router.post("/auth/scanner/logout")
-def scanner_logout(token: str):
-    from ..core import scanner_sessions
-    scanner_sessions.pop(token, None)
-    return {"message": "Scanner session cleared"}

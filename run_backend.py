@@ -18,8 +18,8 @@ load_dotenv()
 if __name__ == "__main__":
     from backend.main import app
     
-    cert_file = project_root / "scanner.crt"
-    key_file = project_root / "scanner.key"
+    cert_file = project_root / "server.crt"
+    key_file = project_root / "server.key"
 
     # Allow forcing HTTP for local/dev tools via DEV_HTTP=1 even if certs exist
     dev_http = os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes")
@@ -29,7 +29,6 @@ if __name__ == "__main__":
         print("DEV_HTTP=1 set — forcing HTTP (no SSL) for development")
     elif cert_file.exists() and key_file.exists():
         ssl_kwargs = {"ssl_certfile": str(cert_file), "ssl_keyfile": str(key_file)}
-        # Use plain ASCII text to avoid encoding errors when stdout is redirected
         print("HTTPS enabled on backend with self-signed certificate")
     else:
         print("Certificates not found. Running backend on HTTP")
