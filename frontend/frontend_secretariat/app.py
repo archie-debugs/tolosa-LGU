@@ -699,9 +699,24 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
 
 
     def open_register_dialog(e=None):
+        # show staged/imported filename or already-attached source filename
+        staged_row = None
+        display_name = register_source_filename or pending_import_filename
+        if display_name:
+            staged_row = ft.Row([
+                ft.Text("Staged file:", weight=ft.FontWeight.BOLD),
+                ft.Text(display_name, selectable=True),
+                ft.IconButton(icon=ft.icons.CLOSE, tooltip="Remove staged file", on_click=lambda e: (clear_staged_file(), page.update())),
+            ], spacing=12)
+
+        contents = [register_title, register_type, register_committee]
+        if staged_row:
+            contents.append(ft.Divider())
+            contents.append(staged_row)
+
         dialog = ft.AlertDialog(
             title=ft.Text("Register New Measure"),
-            content=ft.Column([register_title, register_type, register_committee], tight=True),
+            content=ft.Column(contents, tight=True),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: dialog_close(dialog)),
                 ft.ElevatedButton("Register", on_click=lambda e: submit_register(dialog)),
@@ -710,6 +725,13 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
         page.overlay.append(dialog)
         dialog.open = True
         page.update()
+
+
+    def clear_staged_file():
+        nonlocal pending_import_bytes, pending_import_filename, register_source_filename
+        pending_import_bytes = None
+        pending_import_filename = None
+        register_source_filename = None
 
     def dialog_close(dialog):
         try:
