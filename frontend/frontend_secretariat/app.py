@@ -130,6 +130,9 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
         content=ft.Row([], spacing=12),
     )
 
+    # mode flag to indicate next picked file should be attached to selected items
+    bulk_attach_mode = False
+
     # File picker for uploading source documents
     file_picker = ft.FilePicker(on_result=lambda e: None)
     page.overlay.append(file_picker)
@@ -188,7 +191,10 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             ft.Text(f"{len(secretariat_selected_ids)} items selected", weight=ft.FontWeight.BOLD),
             ft.ElevatedButton("Generate Batch QR PDF", icon=ft.icons.PRINT, on_click=handle_batch_qr_export),
             ft.OutlinedButton("Generate Session Agenda", icon=ft.icons.DESCRIPTION_OUTLINED, on_click=handle_agenda_export),
-            ft.ElevatedButton("Upload Source File", icon=ft.icons.UPLOAD_FILE, on_click=lambda e: file_picker.pick_files()),
+            ft.ElevatedButton("Change Status", icon=ft.icons.SYNC_ALT, on_click=handle_bulk_change_status),
+            ft.ElevatedButton("Assign Committee", icon=ft.icons.GROUP, on_click=handle_bulk_assign_committee),
+            ft.ElevatedButton("Attach File to Selected", icon=ft.icons.ATTACH_FILE, on_click=lambda e: start_bulk_attach()),
+            ft.ElevatedButton("Export CSV", icon=ft.icons.DOWNLOAD, on_click=handle_export_csv),
         ], spacing=12, wrap=True)
         page.update()
 
@@ -218,8 +224,24 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
         page.update()
 
 
+    def start_bulk_attach():
+        nonlocal bulk_attach_mode
+        if not secretariat_selected_ids:
+            page.snack_bar = ft.SnackBar(ft.Text("Select at least one measure first."), open=True)
+            page.update()
+            return
+        bulk_attach_mode = True
+        try:
+            file_picker.pick_files()
+        except Exception:
+            page.snack_bar = ft.SnackBar(ft.Text("File picker not available."), open=True)
+            bulk_attach_mode = False
+            page.update()
+
+
+
     def handle_file_picker_result(e):
-        nonlocal register_source_filename, import_mode
+        nonlocal register_source_filename, import_mode, bulk_attach_mode
         try:
             # e.files is available in desktop/runtime file picker; use first file only
             files = getattr(e, 'files', None) or []
@@ -287,6 +309,37 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                 page.update()
                 return
 
+            # If bulk_attach_mode is set, upload file and attach filename to all selected items
+            files_payload = {'file': (filename, file_bytes)}
+            if bulk_attach_mode:
+                try:
+                    up_resp = requests.post(f"{BACKEND_URL}/uploads", files=files_payload, verify=False)
+                    if up_resp.status_code == 200:
+                        saved_name = up_resp.json().get('filename')
+                        # call batch update to set source_filename on selected items
+                        ids = [int(i) for i in secretariat_selected_ids if str(i).isdigit()]
+                        if ids:
+                            bat_resp = requests.post(f"{BACKEND_URL}/documents/batch-update", json={"item_ids": ids, "set_source_filename": saved_name}, verify=False)
+                            if bat_resp.status_code == 200:
+                                # update local cache
+                                for d in all_documents:
+                                    if str(d.get('id')) in secretariat_selected_ids:
+                                        d['source_filename'] = saved_name
+                                refresh_secretariat_table()
+                                page.snack_bar = ft.SnackBar(ft.Text(f"Attached {saved_name} to {len(ids)} items"), open=True)
+                            else:
+                                page.snack_bar = ft.SnackBar(ft.Text(f"Batch attach failed: {bat_resp.text}"), open=True)
+                        else:
+                            page.snack_bar = ft.SnackBar(ft.Text("No valid selected item IDs to attach to."), open=True)
+                    else:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Upload failed: {up_resp.text}"), open=True)
+                except Exception as exc:
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Bulk attach error: {exc}"), open=True)
+                finally:
+                    bulk_attach_mode = False
+                page.update()
+                return
+
             # If exactly one document is selected in the table, associate upload with it
             target_uuid = None
             if len(secretariat_selected_ids) == 1:
@@ -295,8 +348,6 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                 doc = next((d for d in all_documents if str(d.get('id')) == str(sid)), None)
                 if doc:
                     target_uuid = doc.get('uuid')
-
-            files_payload = {'file': (filename, file_bytes)}
 
             if target_uuid:
                 url = f"{BACKEND_URL}/legislative/upload/{target_uuid}"
@@ -388,6 +439,96 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                 page.snack_bar = ft.SnackBar(ft.Text(f"Agenda export failed: {response.text}"), open=True)
         except Exception as exc:
             page.snack_bar = ft.SnackBar(ft.Text(f"Agenda export error: {exc}"), open=True)
+        page.update()
+
+
+    def handle_bulk_change_status(e=None):
+        if not secretariat_selected_ids:
+            page.snack_bar = ft.SnackBar(ft.Text("Select at least one measure first."), open=True)
+            page.update()
+            return
+
+        # dialog to choose a status from workflow_steps
+        options = [ft.dropdown.Option(step) for step in workflow_steps]
+        status_dropdown = ft.Dropdown(label="Set Status To", width=320, options=options)
+
+        def do_set_status(ev=None):
+            chosen = status_dropdown.value
+            if not chosen:
+                page.snack_bar = ft.SnackBar(ft.Text("Please choose a status."), open=True)
+                page.update()
+                return
+            ids = [int(i) for i in secretariat_selected_ids if str(i).isdigit()]
+            try:
+                resp = requests.post(f"{BACKEND_URL}/documents/batch-update", json={"item_ids": ids, "set_status": chosen}, verify=False)
+                if resp.status_code == 200:
+                    for d in all_documents:
+                        if str(d.get('id')) in secretariat_selected_ids:
+                            d['status'] = chosen
+                    refresh_secretariat_table()
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Updated status for {len(ids)} items."), open=True)
+                else:
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Batch update failed: {resp.text}"), open=True)
+            except Exception as exc:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Batch update error: {exc}"), open=True)
+            page.dialog.open = False
+            page.update()
+
+        dialog = ft.AlertDialog(title=ft.Text("Change Status for Selected Items"), content=ft.Column([status_dropdown]), actions=[ft.TextButton("Cancel", on_click=lambda e: (setattr(dialog, 'open', False), page.update())), ft.ElevatedButton("Apply", on_click=do_set_status)])
+        page.dialog = dialog
+        page.open_dialog(dialog)
+
+
+    def handle_bulk_assign_committee(e=None):
+        if not secretariat_selected_ids:
+            page.snack_bar = ft.SnackBar(ft.Text("Select at least one measure first."), open=True)
+            page.update()
+            return
+
+        committee_field = ft.TextField(label="Committee Name", width=360)
+
+        def do_assign(ev=None):
+            name = (committee_field.value or "").strip()
+            if not name:
+                page.snack_bar = ft.SnackBar(ft.Text("Please provide a committee name."), open=True)
+                page.update()
+                return
+            ids = [int(i) for i in secretariat_selected_ids if str(i).isdigit()]
+            try:
+                resp = requests.post(f"{BACKEND_URL}/documents/batch-update", json={"item_ids": ids, "set_committee": name}, verify=False)
+                if resp.status_code == 200:
+                    for d in all_documents:
+                        if str(d.get('id')) in secretariat_selected_ids:
+                            d['committee'] = name
+                    refresh_secretariat_table()
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Assigned committee to {len(ids)} items."), open=True)
+                else:
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Batch assign failed: {resp.text}"), open=True)
+            except Exception as exc:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Batch assign error: {exc}"), open=True)
+            page.dialog.open = False
+            page.update()
+
+        dialog = ft.AlertDialog(title=ft.Text("Assign Committee to Selected Items"), content=ft.Column([committee_field]), actions=[ft.TextButton("Cancel", on_click=lambda e: (setattr(dialog, 'open', False), page.update())), ft.ElevatedButton("Apply", on_click=do_assign)])
+        page.dialog = dialog
+        page.open_dialog(dialog)
+
+
+    def handle_export_csv(e=None):
+        ids = [int(i) for i in secretariat_selected_ids if str(i).isdigit()]
+        try:
+            if ids:
+                param = ",".join(str(i) for i in ids)
+                resp = requests.get(f"{BACKEND_URL}/documents/export", params={"item_ids": param}, verify=False)
+            else:
+                resp = requests.get(f"{BACKEND_URL}/documents/export", verify=False)
+            if resp.status_code == 200:
+                path = save_binary_file_to_workspace("secretariat_export.csv", resp.content)
+                page.snack_bar = ft.SnackBar(ft.Text(f"Export saved to {path}"), open=True)
+            else:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Export failed: {resp.text}"), open=True)
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Export error: {exc}"), open=True)
         page.update()
 
     # wire filters and search (assigned after action functions are defined)

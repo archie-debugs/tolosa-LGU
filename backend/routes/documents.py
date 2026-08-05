@@ -217,11 +217,22 @@ class BatchQrPayload(BaseModel):
     item_ids: list[int]
 
 
+class AgendaPayload(BaseModel):
+    item_ids: list[int] | None = None
+
+
 class RegisterPayload(BaseModel):
     title: str
     item_type: str
     committee: str
     source_filename: str | None = None
+
+
+class BatchUpdatePayload(BaseModel):
+    item_ids: list[int]
+    set_status: str | None = None
+    set_committee: str | None = None
+    set_source_filename: str | None = None
 
 
 @router.post("/documents/batch-qr-pdf")
@@ -239,6 +250,70 @@ def batch_qr_pdf(payload: BatchQrPayload, db: Session = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=batch_qr_stickers.pdf"},
     )
+
+
+@router.post("/documents/batch-update")
+def documents_batch_update(payload: BatchUpdatePayload, db: Session = Depends(get_db)):
+    if not payload.item_ids:
+        raise HTTPException(status_code=400, detail="No item IDs were provided")
+
+    items = db.query(models.LegislativeItem).filter(models.LegislativeItem.id.in_(payload.item_ids)).all()
+    if not items:
+        raise HTTPException(status_code=404, detail="No matching legislative items found")
+
+    updated = []
+    for item in items:
+        changed = []
+        if payload.set_status is not None:
+            item.current_status = payload.set_status
+            changed.append(f"status={payload.set_status}")
+        if payload.set_committee is not None:
+            item.assigned_committee = payload.set_committee
+            changed.append(f"committee={payload.set_committee}")
+        if payload.set_source_filename is not None:
+            item.source_filename = payload.set_source_filename
+            changed.append(f"source_filename={payload.set_source_filename}")
+        db.add(item)
+        updated.append({"id": item.id, "uuid": item.tracking_uuid, "changes": changed})
+
+    db.commit()
+
+    # record a single audit log for the batch operation
+    record_audit_log(
+        db,
+        actor="system",
+        action="BATCH_UPDATE",
+        target_type="LegislativeItem",
+        target_id=','.join(str(i) for i in payload.item_ids),
+        details=f"Batch update applied: {updated}",
+    )
+
+    return {"updated": updated}
+
+
+@router.get("/documents/export")
+def export_documents(item_ids: str | None = None, db: Session = Depends(get_db)):
+    # item_ids is comma-separated list of ints; if omitted export all
+    query = db.query(models.LegislativeItem)
+    if item_ids:
+        try:
+            ids = [int(x) for x in item_ids.split(',') if x.strip()]
+            query = query.filter(models.LegislativeItem.id.in_(ids))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid item_ids")
+
+    items = query.order_by(models.LegislativeItem.id.asc()).all()
+
+    import csv
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "title", "type", "committee", "status", "current_location", "source_filename", "uuid"])
+    for item in items:
+        writer.writerow([item.id, item.title or "", item.item_type or "", item.assigned_committee or "", item.current_status or "", item.current_location or "", item.source_filename or "", item.tracking_uuid or ""])
+
+    output.seek(0)
+    return StreamingResponse(io.BytesIO(output.getvalue().encode('utf-8')), media_type='text/csv', headers={"Content-Disposition": "attachment; filename=exported_documents.csv"})
 
 
 @router.get("/documents/next-number")
@@ -278,6 +353,55 @@ def generate_agenda(db: Session = Depends(get_db)):
             log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend_error.log'))
             with open(log_path, 'a', encoding='utf-8') as f:
                 f.write(f"[{datetime.utcnow().isoformat()}] generate_agenda error: {str(e)}\n")
+                f.write(tb + "\n")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Agenda generation failed: {str(e)}")
+
+
+@router.post("/documents/generate-agenda")
+def generate_agenda_selected(payload: AgendaPayload, db: Session = Depends(get_db)):
+    try:
+        items: list[models.LegislativeItem]
+        if payload.item_ids:
+            # Fetch requested items and preserve provided order
+            found = db.query(models.LegislativeItem).filter(models.LegislativeItem.id.in_(payload.item_ids)).all()
+            lookup = {i.id: i for i in found}
+            items = [lookup[i] for i in payload.item_ids if i in lookup]
+        else:
+            eligible_statuses = {
+                "1st Reading",
+                "2nd Reading",
+                "3rd Reading",
+                "Committee Report Submitted",
+            }
+            items = (
+                db.query(models.LegislativeItem)
+                .filter(models.LegislativeItem.current_status.in_(eligible_statuses))
+                .order_by(models.LegislativeItem.id.asc())
+                .all()
+            )
+
+        if not items:
+            raise HTTPException(status_code=404, detail="No matching legislative items found for agenda")
+
+        pdf_bytes = _build_agenda_pdf_bytes(items)
+        filename = f"session_agenda_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        try:
+            log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend_error.log'))
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.utcnow().isoformat()}] generate_agenda_selected error: {str(e)}\n")
                 f.write(tb + "\n")
         except Exception:
             pass
