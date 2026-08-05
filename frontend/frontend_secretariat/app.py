@@ -6,6 +6,7 @@ import json
 from urllib.parse import quote
 from dotenv import load_dotenv
 import flet as ft
+from flet_runtime.uploads import build_upload_url
 
 # Load .env for standalone runs
 load_dotenv()
@@ -136,6 +137,185 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
     # File picker for uploading source documents
     file_picker = ft.FilePicker(on_result=lambda e: None)
     page.overlay.append(file_picker)
+    # Upload handling variables (mirror admin flow)
+    pending_upload_filename = None
+    UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
+    UPLOAD_SECRET_KEY = os.getenv("FLET_SECRET_KEY", "sb_tolosa_tracking_secret")
+    UPLOAD_ENDPOINT = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
+    last_uploaded_filename = None
+
+    def _resolve_uploaded_file_path(path_candidate: str, filename: str) -> str | None:
+        candidates = []
+        if path_candidate:
+            if os.path.isabs(path_candidate):
+                candidates.append(path_candidate)
+            else:
+                candidates.append(os.path.join(UPLOAD_DIR, os.path.basename(path_candidate)))
+        candidates.append(os.path.join(UPLOAD_DIR, filename))
+
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                return os.path.abspath(candidate)
+
+        for root, _, files in os.walk(UPLOAD_DIR):
+            if filename in files:
+                return os.path.join(root, filename)
+
+        return None
+
+    def _process_uploaded_file(filename: str, file_path: str):
+        nonlocal last_uploaded_filename, register_title, register_type, register_committee, register_source_filename
+        try:
+            with open(file_path, 'rb') as f:
+                file_bytes = f.read()
+        except Exception as ex:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Failed to open uploaded file: {ex}"), open=True)
+            page.update()
+            return
+
+        if not filename.lower().endswith(('.docx', '.pdf')):
+            page.snack_bar = ft.SnackBar(ft.Text("Only .docx and .pdf files are supported."), open=True)
+            page.update()
+            return
+
+        files = {'file': (filename, file_bytes)}
+        response = requests.post(f"{BACKEND_URL}/legislative/parse", files=files, verify=False)
+
+        if response.status_code == 200:
+            parsed_data = response.json()
+            try:
+                register_title.value = parsed_data.get('title', register_title.value)
+                register_type.value = parsed_data.get('item_type', register_type.value)
+                register_committee.value = parsed_data.get('committee', register_committee.value)
+            except Exception:
+                pass
+            last_uploaded_filename = filename
+            register_source_filename = filename
+            page.snack_bar = ft.SnackBar(ft.Text("✓ Document template parsed successfully! Form auto-filled."), open=True, bgcolor=ft.colors.GREEN)
+            refresh_secretariat_table()
+            page.update()
+        else:
+            try:
+                error_msg = response.json().get("detail", response.text)
+            except Exception:
+                error_msg = response.text
+            page.snack_bar = ft.SnackBar(ft.Text(f"Parse error: {error_msg}"), open=True)
+            page.update()
+
+    def _try_process_pending_upload():
+        nonlocal pending_upload_filename
+        if not pending_upload_filename:
+            return False
+        uploaded_path = _resolve_uploaded_file_path(None, pending_upload_filename)
+        if uploaded_path:
+            pending_upload_filename = None
+            page.snack_bar = ft.SnackBar(ft.Text(f"Upload complete: {os.path.basename(uploaded_path)}. Parsing document..."), open=True)
+            page.update()
+            _process_uploaded_file(os.path.basename(uploaded_path), uploaded_path)
+            return True
+        return False
+
+    def handle_file_upload(e):
+        """Handle browser upload progress and errors for FilePicker."""
+        nonlocal pending_upload_filename
+
+        if getattr(e, 'error', None):
+            pending_upload_filename = None
+            page.snack_bar = ft.SnackBar(ft.Text(f"Upload error: {e.error}"), open=True, bgcolor=ft.colors.RED_400)
+            page.update()
+            return
+
+        progress_value = getattr(e, 'progress', None)
+        if progress_value is not None:
+            progress_text = ""
+            try:
+                if isinstance(progress_value, float) and 0 <= progress_value <= 1:
+                    progress_text = f"Upload progress: {int(progress_value * 100)}%"
+                elif isinstance(progress_value, int) and progress_value >= 0:
+                    progress_text = f"Upload progress: {progress_value}%"
+                else:
+                    progress_text = f"Uploaded {int(progress_value)} bytes"
+            except Exception:
+                progress_text = f"Upload progress: {progress_value}"
+
+            page.snack_bar = ft.SnackBar(ft.Text(progress_text), open=True)
+            page.update()
+
+        if not getattr(e, 'file_name', None):
+            return
+
+        uploaded_path = _resolve_uploaded_file_path(None, e.file_name)
+        if uploaded_path:
+            pending_upload_filename = None
+            page.snack_bar = ft.SnackBar(ft.Text(f"Upload complete: {e.file_name}. Parsing document..."), open=True)
+            page.update()
+            _process_uploaded_file(e.file_name, uploaded_path)
+            return
+
+        # Retry a few times because browser upload may finish after the first event.
+        if pending_upload_filename == e.file_name:
+            for _ in range(5):
+                time.sleep(0.25)
+                uploaded_path = _resolve_uploaded_file_path(None, e.file_name)
+                if uploaded_path:
+                    pending_upload_filename = None
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Upload complete: {e.file_name}. Parsing document..."), open=True)
+                    page.update()
+                    _process_uploaded_file(e.file_name, uploaded_path)
+                    return
+
+        page.snack_bar = ft.SnackBar(ft.Text(f"Upload still pending for {e.file_name}. If this repeats, verify FLET_SECRET_KEY and upload_dir settings."), open=True, bgcolor=ft.colors.YELLOW_700)
+        page.update()
+        return
+
+    def handle_file_import(e):
+        """Handle document template import and auto-fill form fields"""
+        nonlocal pending_upload_filename
+
+        if not getattr(e, 'files', None):
+            page.snack_bar = ft.SnackBar(ft.Text("No file selected."), open=True)
+            page.update()
+            return
+
+        picked = e.files[0]
+        filename = picked.name or 'document'
+        raw_path = getattr(e, 'path', None) or getattr(picked, 'path', None)
+
+        if raw_path:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Selected {filename}. raw_path={raw_path}. Uploading..."), open=True)
+        else:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Selected {filename}. Uploading to browser server..."), open=True)
+        page.update()
+
+        if raw_path:
+            resolved_path = _resolve_uploaded_file_path(raw_path, filename)
+            if resolved_path:
+                _process_uploaded_file(os.path.basename(resolved_path), resolved_path)
+                pending_upload_filename = None
+                return
+
+        # If no raw_path, we are running in browser mode and must request signed upload URLs
+        if not raw_path:
+            try:
+                expires_seconds = 60 * 60
+                upload_objs = []
+                names = []
+                for fmeta in e.files:
+                    fname = fmeta.name or filename
+                    upload_url = build_upload_url(UPLOAD_ENDPOINT, fname, expires_seconds, UPLOAD_SECRET_KEY)
+                    upload_objs.append(ft.FilePickerUploadFile(name=fname, upload_url=upload_url, method='PUT'))
+                    names.append(fname)
+
+                file_picker.upload(upload_objs)
+                page.snack_bar = ft.SnackBar(ft.Text(f"Uploading {', '.join(names)}..."), open=True)
+                page.update()
+            except Exception as exc:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Upload start failed: {exc}"), open=True)
+                page.update()
+
+        pending_upload_filename = filename
+        _try_process_pending_upload()
+        return
 
 
     def refresh_secretariat_table():
@@ -486,10 +666,15 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             page.update()
 
     # assign handler now that it's defined
+    # wire file picker callbacks to use admin-like import/upload flow
     try:
-        file_picker.on_result = handle_file_picker_result
+        file_picker.on_result = handle_file_import
+        file_picker.on_upload = handle_file_upload
     except Exception:
-        pass
+        try:
+            file_picker.on_result = handle_file_picker_result
+        except Exception:
+            pass
 
     def handle_agenda_export(e=None):
         try:
