@@ -7,17 +7,11 @@ import secrets
 import re
 import json
 import os
-import io
-from docx import Document as DocxDocument
-from pypdf import PdfReader
 from . import models
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
 WORKFLOW_CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "workflow_config.json"))
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "https://192.168.1.4:8001").rstrip("/")
-SCANNER_PUBLIC_URL = os.getenv("SCANNER_PUBLIC_URL", "https://192.168.1.4:8002").rstrip("/")
 SCANNER_SESSION_TTL_MINUTES = 12 * 60
 scanner_sessions: dict[str, dict[str, object]] = {}
 DEFAULT_WORKFLOW_STEPS = [
@@ -65,79 +59,6 @@ def record_audit_log(
     db.commit()
     db.refresh(audit_log)
     return audit_log
-
-
-def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
-    text = ""
-
-    if filename.lower().endswith('.docx'):
-        try:
-            doc = DocxDocument(io.BytesIO(file_bytes))
-            text = "\n".join([para.text for para in doc.paragraphs])
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error parsing DOCX: {str(e)}")
-
-    elif filename.lower().endswith('.pdf'):
-        try:
-            pdf_reader = PdfReader(io.BytesIO(file_bytes))
-            for page in pdf_reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error parsing PDF: {str(e)}")
-
-    else:
-        raise HTTPException(status_code=400, detail="Only .docx and .pdf files are supported")
-
-    return text
-
-
-def parse_document_content(text: str) -> dict:
-    lines = text.split('\n')
-    item_type = "Committee Report"
-    text_upper = text.upper()
-
-    if "ORDINANCE" in text_upper:
-        item_type = "Ordinance"
-    elif "RESOLUTION" in text_upper:
-        item_type = "Resolution"
-
-    committee = "General Committee"
-    committee_patterns = [
-        r"committee\s+on\s+([^\n,]+)",
-        r"assigned\s+to\s*:\s*([^\n,]+)",
-        r"committee\s+of\s+([^\n,]+)",
-    ]
-
-    for pattern in committee_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            committee = match.group(1).strip()
-            committee = " ".join([word.capitalize() for word in committee.split()])
-            break
-
-    title = "Untitled Document"
-    for line in lines:
-        line = line.strip()
-        if line and len(line) > 5 and not any(header in line.upper() for header in [
-            "ORDINANCE", "RESOLUTION", "COMMITTEE ON", "ASSIGNED TO", "PROPOSED", "BE IT",
-        ]):
-            title = line[:100]
-            break
-
-    if title == "Untitled Document":
-        for line in lines:
-            line = line.strip()
-            if ("ORDINANCE" in line.upper() or "RESOLUTION" in line.upper()) and len(line) > 10:
-                title = line[:100]
-                break
-
-    return {
-        "title": title,
-        "item_type": item_type,
-        "committee": committee,
-    }
 
 
 def normalize_workflow_steps(steps: list[str]) -> list[str]:
@@ -196,14 +117,6 @@ def create_scanner_session(username: str, role: str) -> dict[str, str]:
         "role": role,
         "expires_at": expires_at.isoformat(),
     }
-
-
-def validate_scanner_session(token: str) -> dict[str, object]:
-    _purge_expired_scanner_sessions()
-    session = scanner_sessions.get(token)
-    if not session:
-        raise HTTPException(status_code=401, detail="Scanner session expired or invalid")
-    return session
 
 
 def ensure_user_role_column() -> None:

@@ -7,9 +7,8 @@ import sys
 import time
 import urllib3
 import json
-from flet_runtime.uploads import build_upload_url
-from urllib.parse import quote
 from pathlib import Path
+from urllib.parse import quote
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -19,7 +18,6 @@ if str(PROJECT_ROOT) not in sys.path:
 # Load .env so BACKEND_URL and related overrides work for local development
 load_dotenv()
 
-from frontend.frontend_admin.documents import build_documents_view
 from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.users_roles import build_users_roles_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
@@ -123,6 +121,21 @@ print(f"FLET_SECRET_KEY={UPLOAD_SECRET_KEY}")
 print(f"BACKEND_URL={BACKEND_URL}")
 print(f"BACKEND_SCHEME={'https' if BACKEND_URL.lower().startswith('https') else 'http'}")
 UPLOAD_ENDPOINT = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT", "upload")
+
+
+def build_documents_view(*args, **kwargs):
+    return ft.Container(
+        content=ft.Column([
+            ft.Text("Document management is currently disabled in this admin view.", weight=ft.FontWeight.BOLD),
+            ft.Text("Use the committees, users, and settings sections to manage the dashboard."),
+        ], spacing=8),
+        padding=20,
+    )
+
+
+def build_upload_url(endpoint, filename, expires_seconds, secret_key):
+    return f"{endpoint}/{quote(filename)}"
+
 
 def main(page: ft.Page):
     page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
@@ -480,6 +493,13 @@ def main(page: ft.Page):
             ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
         ],
         rows=[]
+    )
+
+    empty_documents_notice = ft.Text(
+        "No documents found yet. Use the form above to register or import a document.",
+        size=13,
+        color=ft.colors.BLUE_GREY_600,
+        visible=False,
     )
 
     qr_dialog = ft.AlertDialog(
@@ -856,6 +876,7 @@ def main(page: ft.Page):
             type_filter,
             status_filter,
             data_table,
+            empty_documents_notice,
             import_button,
             submit_button,
             surface_card,
@@ -1374,7 +1395,8 @@ def main(page: ft.Page):
             
             # Add matching row to table
             data_table.rows.append(build_document_row(doc))
-        
+
+        empty_documents_notice.visible = not bool(data_table.rows)
         page.update()
 
         type_dropdown.on_change = lambda _: refresh_measure_number_preview()
