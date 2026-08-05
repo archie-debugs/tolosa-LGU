@@ -263,6 +263,13 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             # Read file bytes either from runtime-provided path or via FilePicker upload data
             file_bytes = None
             tried = []
+            # If picked is raw bytes-like
+            try:
+                if isinstance(picked, (bytes, bytearray)):
+                    file_bytes = bytes(picked)
+                    tried.append("picked_bytes")
+            except Exception:
+                pass
             # 1) Try raw path if provided (handle file:// URIs)
             if raw_path:
                 p = raw_path
@@ -279,13 +286,39 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                 except Exception as ex:
                     tried.append(f"path_error:{ex}")
 
-            # 2) Try common buffer attributes on the picked file
+            # 2) Try common buffer attributes on the picked file (attribute access)
             if file_bytes is None:
-                for attr in ("bytes", "data", "content", "raw_bytes"):
-                    file_bytes = getattr(picked, attr, None)
-                    if file_bytes is not None:
-                        tried.append(f"attr:{attr}")
-                        break
+                for attr in ("bytes", "data", "content", "raw_bytes", "file_bytes", "bytes_base64", "base64", "file"):
+                    try:
+                        val = getattr(picked, attr, None)
+                    except Exception:
+                        val = None
+                    if val:
+                        # if base64, decode
+                        if attr in ("bytes_base64", "base64") and isinstance(val, str):
+                            try:
+                                import base64 as _b64
+
+                                file_bytes = _b64.b64decode(val)
+                                tried.append(f"attr:{attr}:base64")
+                                break
+                            except Exception:
+                                continue
+                        # convert memoryview or bytearray to bytes
+                        if isinstance(val, (bytes, bytearray, memoryview)):
+                            file_bytes = bytes(val)
+                            tried.append(f"attr:{attr}")
+                            break
+                        # if it's a callable file-like getter, try call
+                        if callable(val):
+                            try:
+                                tmp = val()
+                                if isinstance(tmp, (bytes, bytearray)):
+                                    file_bytes = bytes(tmp)
+                                    tried.append(f"attr_call:{attr}")
+                                    break
+                            except Exception:
+                                pass
 
             # 3) If the picked object exposes an open/read interface, try that
             if file_bytes is None:
@@ -303,6 +336,40 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                         tried.append("open()")
                 except Exception as ex:
                     tried.append(f"open_error:{ex}")
+
+            # 4) If picked supports mapping protocol (web), try .get
+            if file_bytes is None:
+                try:
+                    get = getattr(picked, "get", None)
+                    if callable(get):
+                        for key in ("bytes", "data", "content", "file", "blob", "file_bytes"):
+                            try:
+                                v = get(key, None)
+                            except Exception:
+                                v = None
+                            if v:
+                                if isinstance(v, str):
+                                    try:
+                                        import base64 as _b64
+
+                                        file_bytes = _b64.b64decode(v)
+                                        tried.append(f"get:{key}:base64")
+                                        break
+                                    except Exception:
+                                        continue
+                                if isinstance(v, (bytes, bytearray, memoryview)):
+                                    file_bytes = bytes(v)
+                                    tried.append(f"get:{key}")
+                                    break
+                except Exception:
+                    pass
+
+            # If still nothing, record picked type to help debugging
+            if file_bytes is None:
+                try:
+                    tried.append(f"type:{type(picked).__name__}")
+                except Exception:
+                    pass
 
             if file_bytes is None:
                 page.snack_bar = ft.SnackBar(ft.Text(f"Failed to read selected file ({';'.join(tried)})"), open=True)
