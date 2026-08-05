@@ -369,3 +369,49 @@ def get_audit_logs(limit: int = 200, db: Session = Depends(get_db)):
             for log in logs
         ]
     }
+
+
+@router.post("/uploads/cleanup")
+def cleanup_orphaned_uploads(force: bool = False, db: Session = Depends(get_db)):
+    """Inspect `UPLOAD_DIR` and remove files not referenced by any LegislativeItem.source_filename.
+
+    - If `force` is False (default) the endpoint only returns the list of orphaned files.
+    - If `force` is True the endpoint attempts to delete the orphaned files and returns a report.
+    """
+    try:
+        # collect files on disk
+        if not os.path.isdir(UPLOAD_DIR):
+            return {"message": "Upload directory does not exist", "orphaned": [], "deleted": []}
+
+        disk_files = [f for f in os.listdir(UPLOAD_DIR) if os.path.isfile(os.path.join(UPLOAD_DIR, f))]
+
+        # collect referenced filenames from legislative items
+        referenced = set()
+        items = db.query(models.LegislativeItem).all()
+        for it in items:
+            if it.source_filename:
+                referenced.add(it.source_filename)
+
+        orphaned = [f for f in disk_files if f not in referenced]
+
+        if not force:
+            return {"message": "Dry run - call with force=true to delete", "orphaned": orphaned, "deleted": []}
+
+        deleted = []
+        failed = []
+        for fname in orphaned:
+            try:
+                full_path = os.path.realpath(os.path.join(UPLOAD_DIR, fname))
+                # safety: ensure full_path resides in UPLOAD_DIR
+                if os.path.commonpath([full_path, UPLOAD_DIR]) != UPLOAD_DIR:
+                    failed.append({"file": fname, "error": "path traversal detected"})
+                    continue
+                os.remove(full_path)
+                deleted.append(fname)
+                record_audit_log(db, actor="system", action="UPLOAD_FILE_DELETED", target_type="Upload", target_id=fname, details=f"Deleted orphaned upload: {fname}")
+            except Exception as exc:
+                failed.append({"file": fname, "error": str(exc)})
+
+        return {"message": "Cleanup complete", "orphaned": orphaned, "deleted": deleted, "failed": failed}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {exc}")
