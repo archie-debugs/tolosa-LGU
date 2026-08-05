@@ -433,7 +433,8 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                     ],
                 )
                 page.dialog = preview_alert
-                page.open_dialog(preview_alert)
+                preview_alert.open = True
+                page.update()
                 page.snack_bar = ft.SnackBar(ft.Text(f"Agenda PDF saved to {output_path}"), open=True)
             else:
                 page.snack_bar = ft.SnackBar(ft.Text(f"Agenda export failed: {response.text}"), open=True)
@@ -491,7 +492,8 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
 
         dialog = ft.AlertDialog(title=ft.Text("Change Status for Selected Items"), content=ft.Column([status_dropdown]), actions=[ft.TextButton("Cancel", on_click=lambda e: (setattr(dialog, 'open', False), page.update())), ft.ElevatedButton("Apply", on_click=do_set_status)])
         page.dialog = dialog
-        page.open_dialog(dialog)
+        dialog.open = True
+        page.update()
 
 
     def handle_bulk_assign_committee(e=None):
@@ -534,7 +536,8 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
 
         dialog = ft.AlertDialog(title=ft.Text("Assign Committee to Selected Items"), content=ft.Column([committee_field]), actions=[ft.TextButton("Cancel", on_click=lambda e: (setattr(dialog, 'open', False), page.update())), ft.ElevatedButton("Apply", on_click=do_assign)])
         page.dialog = dialog
-        page.open_dialog(dialog)
+        dialog.open = True
+        page.update()
 
 
     def handle_export_csv(e=None):
