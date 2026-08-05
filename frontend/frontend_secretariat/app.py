@@ -463,6 +463,8 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                 payload = {"item_ids": ids, "set_status": chosen}
                 page.snack_bar = ft.SnackBar(ft.Text(f"Sending batch update: {payload}"), open=True)
                 page.update()
+                print("DEBUG: BACKEND_URL=", BACKEND_URL)
+                print("DEBUG: secretariat_selected_ids=", secretariat_selected_ids)
                 print("DEBUG: batch-update payload:", payload)
                 resp = requests.post(f"{BACKEND_URL}/documents/batch-update", json=payload, verify=False)
                 if resp.status_code == 200:
@@ -511,6 +513,8 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                 payload = {"item_ids": ids, "set_committee": name}
                 page.snack_bar = ft.SnackBar(ft.Text(f"Sending batch assign: {payload}"), open=True)
                 page.update()
+                print("DEBUG: BACKEND_URL=", BACKEND_URL)
+                print("DEBUG: secretariat_selected_ids=", secretariat_selected_ids)
                 print("DEBUG: batch-assign payload:", payload)
                 resp = requests.post(f"{BACKEND_URL}/documents/batch-update", json=payload, verify=False)
                 if resp.status_code == 200:
