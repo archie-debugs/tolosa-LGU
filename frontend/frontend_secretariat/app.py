@@ -462,11 +462,6 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             ids = [int(i) for i in secretariat_selected_ids if str(i).isdigit()]
             try:
                 payload = {"item_ids": ids, "set_status": chosen}
-                page.snack_bar = ft.SnackBar(ft.Text(f"Sending batch update: {payload}"), open=True)
-                page.update()
-                print("DEBUG: BACKEND_URL=", BACKEND_URL)
-                print("DEBUG: secretariat_selected_ids=", secretariat_selected_ids)
-                print("DEBUG: batch-update payload:", payload)
                 resp = requests.post(f"{BACKEND_URL}/documents/batch-update", json=payload, verify=False)
                 if resp.status_code == 200:
                     for d in all_documents:
@@ -476,10 +471,8 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                     page.snack_bar = ft.SnackBar(ft.Text(f"Updated status for {len(ids)} items."), open=True)
                 else:
                     page.snack_bar = ft.SnackBar(ft.Text(f"Batch update failed (code {resp.status_code}): {resp.text}"), open=True)
-                    print("DEBUG: batch-update response", resp.status_code, resp.text)
             except Exception as exc:
                 page.snack_bar = ft.SnackBar(ft.Text(f"Batch update error: {exc}"), open=True)
-                print("DEBUG: batch-update exception", exc)
             # close dialog and refresh
             try:
                 dialog.open = False
@@ -513,11 +506,6 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             ids = [int(i) for i in secretariat_selected_ids if str(i).isdigit()]
             try:
                 payload = {"item_ids": ids, "set_committee": name}
-                page.snack_bar = ft.SnackBar(ft.Text(f"Sending batch assign: {payload}"), open=True)
-                page.update()
-                print("DEBUG: BACKEND_URL=", BACKEND_URL)
-                print("DEBUG: secretariat_selected_ids=", secretariat_selected_ids)
-                print("DEBUG: batch-assign payload:", payload)
                 resp = requests.post(f"{BACKEND_URL}/documents/batch-update", json=payload, verify=False)
                 if resp.status_code == 200:
                     for d in all_documents:
@@ -527,11 +515,15 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                     page.snack_bar = ft.SnackBar(ft.Text(f"Assigned committee to {len(ids)} items."), open=True)
                 else:
                     page.snack_bar = ft.SnackBar(ft.Text(f"Batch assign failed (code {resp.status_code}): {resp.text}"), open=True)
-                    print("DEBUG: batch-assign response", resp.status_code, resp.text)
             except Exception as exc:
                 page.snack_bar = ft.SnackBar(ft.Text(f"Batch assign error: {exc}"), open=True)
-                print("DEBUG: batch-assign exception", exc)
-            page.dialog.open = False
+            try:
+                dialog.open = False
+            except Exception:
+                try:
+                    page.dialog.open = False
+                except Exception:
+                    pass
             page.update()
 
         dialog = ft.AlertDialog(title=ft.Text("Assign Committee to Selected Items"), content=ft.Column([committee_field]), actions=[ft.TextButton("Cancel", on_click=lambda e: (setattr(dialog, 'open', False), page.update())), ft.ElevatedButton("Apply", on_click=do_assign)])
