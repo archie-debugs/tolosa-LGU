@@ -252,6 +252,9 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                 page.update()
                 return
 
+            # Prepare files payload for potential parse/upload actions
+            files_payload = {'file': (filename, file_bytes)}
+
             # If import_mode is set, parse file and open register dialog pre-filled
             if import_mode:
                 try:
@@ -273,22 +276,10 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                     import_mode = False
                     return
 
-                # Save the uploaded file to backend uploads and attach filename to register
-                try:
-                    save_resp = requests.post(f"{BACKEND_URL}/uploads", files=files_payload, verify=False)
-                    if save_resp.status_code == 200:
-                        saved_name = save_resp.json().get('filename')
-                        register_source_filename = saved_name
-                    else:
-                        page.snack_bar = ft.SnackBar(ft.Text(f"Save failed: {save_resp.text}"), open=True)
-                        page.update()
-                        import_mode = False
-                        return
-                except Exception as exc:
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Save error: {exc}"), open=True)
-                    page.update()
-                    import_mode = False
-                    return
+                # Keep file bytes in memory and defer saving/attaching until Register is confirmed
+                pending_import_bytes = file_bytes
+                pending_import_filename = filename
+                register_source_filename = None
 
                 # Open register dialog with parsed values
                 import_mode = False
@@ -349,7 +340,13 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
 
     def handle_agenda_export(e=None):
         try:
-            response = requests.get(f"{BACKEND_URL}/documents/generate-agenda", verify=False)
+            ids = [int(item_id) for item_id in secretariat_selected_ids if str(item_id).isdigit()]
+            # If ids provided, POST them to the backend; otherwise request default agenda
+            if ids:
+                response = requests.post(f"{BACKEND_URL}/documents/generate-agenda", json={"item_ids": ids}, verify=False)
+            else:
+                response = requests.get(f"{BACKEND_URL}/documents/generate-agenda", verify=False)
+
             if response.status_code == 200:
                 filename = f"session_agenda_{time.strftime('%Y%m%d_%H%M%S')}.pdf"
                 output_path = save_binary_file_to_workspace(filename, response.content)
@@ -519,6 +516,9 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
     register_type = ft.Dropdown(label="Item Type", width=220, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
     register_committee = ft.TextField(label="Assigned Committee", width=320)
     register_source_filename: str | None = None
+    # in-memory buffer for imported file until user confirms Register
+    pending_import_bytes: bytes | None = None
+    pending_import_filename: str | None = None
     
     def refresh_measure_number_preview(e=None):
         try:
@@ -554,12 +554,18 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
 
     def dialog_close(dialog):
         try:
+            nonlocal pending_import_bytes, pending_import_filename, register_source_filename
             dialog.open = False
+            # clear any staged import when dialog is closed without registering
+            pending_import_bytes = None
+            pending_import_filename = None
+            register_source_filename = None
             page.update()
         except Exception:
             pass
 
     def submit_register(dialog):
+        nonlocal pending_import_bytes, pending_import_filename, register_source_filename
         title = (register_title.value or "").strip()
         item_type = (register_type.value or "Ordinance").strip()
         committee = (register_committee.value or "").strip()
@@ -568,6 +574,21 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
             page.update()
             return
         try:
+            # If there's a pending imported file buffered in memory, upload it first
+            if pending_import_bytes and not register_source_filename:
+                try:
+                    upload_payload = {'file': (pending_import_filename, pending_import_bytes)}
+                    up_resp = requests.post(f"{BACKEND_URL}/uploads", files=upload_payload, verify=False)
+                    if up_resp.status_code == 200:
+                        register_source_filename = up_resp.json().get('filename')
+                    else:
+                        page.snack_bar = ft.SnackBar(ft.Text(f"Failed to attach imported file: {up_resp.text}"), open=True)
+                        page.update()
+                        return
+                except Exception as exc:
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Upload error: {exc}"), open=True)
+                    page.update()
+                    return
             response = requests.post(
                 f"{BACKEND_URL}/legislative/register",
                 json={"title": title, "item_type": item_type, "committee": committee, "source_filename": register_source_filename},
@@ -585,6 +606,11 @@ def build_secretariat_view(page: ft.Page, current_user_role, workflow_steps, all
                     "uuid": result.get("tracking_uuid"),
                     "source_filename": result.get("source_filename") or register_source_filename,
                 })
+                # clear any pending import buffer now that file (if any) has been uploaded and attached
+                pending_import_bytes = None
+                pending_import_filename = None
+                register_source_filename = None
+
                 register_title.value = ""
                 register_committee.value = ""
                 dialog.open = False
