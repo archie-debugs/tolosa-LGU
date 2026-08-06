@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, constr, Field
 import re
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from ..database import get_db
@@ -47,7 +48,7 @@ def _generate_registration_reference(db: Session) -> str:
     like_pattern = f"{prefix}%"
     # Fetch max existing numeric suffix
     rows = db.execute(
-        "SELECT registration_reference FROM registration_requests WHERE registration_reference LIKE :pat",
+        text("SELECT registration_reference FROM registration_requests WHERE registration_reference LIKE :pat"),
         {"pat": like_pattern},
     ).fetchall()
     existing = [r[0] for r in rows]

@@ -63,8 +63,8 @@ with engine.connect() as conn:
     print('DB reg row:', row)
     if not row:
         print('Registration row missing in DB; abort'); sys.exit(1)
-    reg_id = row['id']
-    hashed = row['hashed_password']
+    reg_id = row[0]
+    hashed = row[2]
     if hashed == approve_user['password']:
         print('ERROR: password stored in plaintext')
     else:
@@ -88,8 +88,8 @@ with engine.connect() as conn:
     print('User row:', user_row)
     if not user_row:
         print('User was not created; abort'); sys.exit(1)
-    created['user_id'] = user_row['id']
-    created['user_role'] = user_row['role']
+    created['user_id'] = user_row[0]
+    created['user_role'] = user_row[3]
 
 # G. Confirm final role
 print('Final role from DB:', created['user_role'])
@@ -101,7 +101,7 @@ if r2.status_code != 201:
 reg_ref_b = r2.json().get('registration_reference')
 with engine.connect() as conn:
     rowb = conn.execute(text("SELECT id FROM registration_requests WHERE registration_reference = :r"), {'r':reg_ref_b}).fetchone()
-    reg_id_b = rowb['id']
+    reg_id_b = rowb[0]
     created['reject_ref'] = reg_ref_b
     created['reject_id'] = reg_id_b
 
