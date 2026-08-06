@@ -14,6 +14,7 @@ load_dotenv()
 
 from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.documents import build_documents_view
+from frontend.frontend_admin.registration_requests import build_registration_requests_view
 from frontend.frontend_admin.users_roles import build_users_roles_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
 from frontend.frontend_admin.admin_shell import render_shell
@@ -383,11 +384,25 @@ def main(page: ft.Page):
             ]
         page.update()
 
+    registration_requests_content = build_registration_requests_view(page, surface_card, section_header)
+
     def audit_logs_view():
-        return build_audit_logs_view(audit_logs_table, load_audit_logs_view, surface_card, section_header)
+        try:
+            return build_audit_logs_view(audit_logs_table, load_audit_logs_view, surface_card, section_header)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print("audit_logs_view error:\n", tb)
+            return ft.Column([ft.Text("Error building Audit Logs view"), ft.Text(str(e)), ft.Text(tb)])
 
     def build_dashboard_view():
-        return build_admin_dashboard_view(surface_card, section_header, open_preview_notice)
+        try:
+            return build_admin_dashboard_view(surface_card, section_header, open_preview_notice)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print("dashboard_view error:\n", tb)
+            return ft.Column([ft.Text("Error building Dashboard view"), ft.Text(str(e)), ft.Text(tb)])
 
     def committees_view():
         committee_rows = []
@@ -419,20 +434,33 @@ def main(page: ft.Page):
             rows=committee_rows,
             column_spacing=12,
         )
-        return build_committees_view(committee_table, open_committee_dialog, surface_card, section_header)
+        try:
+            return build_committees_view(committee_table, open_committee_dialog, surface_card, section_header)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print("committees_view error:\n", tb)
+            return ft.Column([ft.Text("Error building Committees view"), ft.Text(str(e)), ft.Text(tb)])
 
     def users_roles_view():
-        load_users_table()
-        return build_users_roles_view(
-            user_username_input,
-            user_password_input,
-            user_role_input,
-            users_notice,
-            users_table,
-            create_user_record,
-            surface_card,
-            section_header,
-        )
+        try:
+            load_users_table()
+            return build_users_roles_view(
+                user_username_input,
+                user_password_input,
+                user_role_input,
+                users_notice,
+                users_table,
+                create_user_record,
+                surface_card,
+                section_header,
+                None,
+            )
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print("users_roles_view error:\n", tb)
+            return ft.Column([ft.Text("Error building Users & Roles view"), ft.Text(str(e)), ft.Text(tb)])
 
     DOCUMENTS_SAMPLE = [
         {
@@ -494,13 +522,19 @@ def main(page: ft.Page):
         page.update()
 
     def documents_view():
-        return build_documents_view(
-            documents_table,
-            documents_notice,
-            open_documents_view,
-            surface_card,
-            section_header,
-        )
+        try:
+            return build_documents_view(
+                documents_table,
+                documents_notice,
+                open_documents_view,
+                surface_card,
+                section_header,
+            )
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print("documents_view error:\n", tb)
+            return ft.Column([ft.Text("Error building Documents view"), ft.Text(str(e)), ft.Text(tb)])
 
     def settings_view():
         return ft.Column(

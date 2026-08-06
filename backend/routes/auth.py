@@ -39,66 +39,6 @@ def register_user(username: str, password: str, role: str = "Admin", db: Session
 
     return {"message": "User registered successfully", "username": new_user.username}
 
-
-@router.get("/auth/users")
-def list_users(db: Session = Depends(get_db)):
-    users = db.query(models.User).order_by(models.User.id.asc()).all()
-    return {
-        "items": [
-            {
-                "id": user.id,
-                "username": user.username,
-                "role": user.role or "Admin",
-            }
-            for user in users
-        ]
-    }
-
-
-@router.put("/auth/users/{username}/role")
-def update_user_role(username: str, role: str, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.role = role.strip() or "Admin"
-    db.commit()
-    db.refresh(user)
-
-    record_audit_log(
-        db,
-        actor="system",
-        action="USER_ROLE_UPDATED",
-        target_type="User",
-        target_id=str(user.id),
-        details=f"Updated {user.username} role to {user.role}",
-    )
-
-    return {"message": "User role updated", "username": user.username, "role": user.role}
-
-
-@router.delete("/auth/users/{username}")
-def delete_user(username: str, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user_id = user.id
-    db.delete(user)
-    db.commit()
-
-    record_audit_log(
-        db,
-        actor="system",
-        action="USER_DELETED",
-        target_type="User",
-        target_id=str(user_id),
-        details=f"Deleted user {username}",
-    )
-
-    return {"message": "User deleted", "username": username}
-
-
 @router.post("/auth/login")
 def login_user(username: str, password: str, db: Session = Depends(get_db)):
     if not username or not password:

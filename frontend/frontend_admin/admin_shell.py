@@ -1,4 +1,5 @@
 import flet as ft
+import traceback
 
 
 def render_shell(page, current_user, logout_user, nav_items, content_view):
@@ -11,10 +12,47 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
         build_nav()
         try:
             next_view = nav_items[index][2]()
-        except Exception:
-            next_view = ft.Text("Error loading view")
-        content_holder.content = next_view
-        page.update()
+        except Exception as exc:
+            tb = traceback.format_exc()
+            print("Error building view:\n", tb)
+            # Show a helpful error box in the UI so it's clear what failed
+            next_view = ft.Container(
+                content=ft.Column([
+                    ft.Text("Error loading view", size=18, weight=ft.FontWeight.BOLD, color=ft.colors.RED_700),
+                    ft.Text(str(exc), size=12, color=ft.colors.RED_700),
+                    ft.Container(height=8),
+                    ft.Text("Traceback:", size=12, weight=ft.FontWeight.BOLD),
+                    ft.Text(tb, size=10),
+                ], spacing=8),
+                padding=16,
+                bgcolor=ft.colors.WHITE,
+                border=ft.border.all(1, ft.colors.RED_100),
+                border_radius=8,
+            )
+        try:
+            content_holder.content = next_view
+            page.update()
+        except Exception as exc2:
+            tb2 = traceback.format_exc()
+            print("Error assigning/updating view:\n", tb2)
+            fallback = ft.Container(
+                content=ft.Column([
+                    ft.Text("Error rendering view", size=18, weight=ft.FontWeight.BOLD, color=ft.colors.RED_700),
+                    ft.Text(str(exc2), size=12, color=ft.colors.RED_700),
+                    ft.Container(height=8),
+                    ft.Text("Traceback:", size=12, weight=ft.FontWeight.BOLD),
+                    ft.Text(tb2, size=10),
+                ], spacing=8),
+                padding=16,
+                bgcolor=ft.colors.WHITE,
+                border=ft.border.all(1, ft.colors.RED_100),
+                border_radius=8,
+            )
+            content_holder.content = fallback
+            try:
+                page.update()
+            except Exception:
+                pass
 
     def build_nav():
         nav_container.controls.clear()
