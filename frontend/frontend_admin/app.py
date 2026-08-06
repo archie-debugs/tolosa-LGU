@@ -39,7 +39,10 @@ def main(page: ft.Page):
         columns=[
             ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Full Name", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Created Date", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
         ],
         rows=[],
@@ -52,8 +55,8 @@ def main(page: ft.Page):
         width=220,
         options=[
             ft.dropdown.Option("Admin"),
-            ft.dropdown.Option("SB Member"),
-            ft.dropdown.Option("Mayor's Office"),
+            ft.dropdown.Option("Secretary / Vice Mayor"),
+            ft.dropdown.Option("Staff"),
         ],
         value="Admin",
     )
@@ -116,6 +119,13 @@ def main(page: ft.Page):
     delete_dialog = ft.AlertDialog(title=ft.Text("Confirm Action"), content=ft.Text(""), actions=[])
     page.overlay.append(delete_dialog)
 
+    user_details_dialog = ft.AlertDialog(
+        title=ft.Text("User Details"),
+        content=ft.Container(content=ft.Text(""), padding=8),
+        actions=[ft.TextButton("Close", on_click=lambda _: close_user_details_dialog())],
+    )
+    page.overlay.append(user_details_dialog)
+
     dashboard_action_dialog = ft.AlertDialog(
         title=ft.Text("Frontend preview"),
         content=ft.Text("This action is only a visual preview. No backend or database changes are performed."),
@@ -163,13 +173,40 @@ def main(page: ft.Page):
         dashboard_action_dialog.open = False
         page.update()
 
+    def close_user_details_dialog():
+        user_details_dialog.open = False
+        page.update()
+
+    def show_user_details(user):
+        user_details_dialog.title = ft.Text("User Details")
+        user_details_dialog.content = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Username", size=12, color=ft.colors.BLUE_GREY_600),
+                    ft.Text(user.get("username", "-"), size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text("Role", size=12, color=ft.colors.BLUE_GREY_600),
+                    ft.Text(user.get("role", "Admin"), size=14),
+                    ft.Text("Status", size=12, color=ft.colors.BLUE_GREY_600),
+                    ft.Text(user.get("status", "Active"), size=14),
+                ],
+                spacing=8,
+            ),
+            padding=8,
+        )
+        user_details_dialog.open = True
+        page.update()
+
+    def show_not_implemented_action(action_name):
+        users_notice.value = f"{action_name} is not yet implemented in the backend."
+        page.update()
+
     def open_preview_notice(_=None):
         dashboard_action_dialog.open = True
         page.update()
 
     def load_users_table():
         try:
-            response = requests.get(f"{BACKEND_URL}/auth/users", verify=False)
+            response = requests.get(f"{BACKEND_URL}/auth/users", verify=False, timeout=10)
             if response.status_code == 200:
                 users = response.json().get("items", [])
                 refresh_user_display_ids(users)
@@ -180,15 +217,22 @@ def main(page: ft.Page):
                             cells=[
                                 ft.DataCell(ft.Text(str(user.get("display_id", user.get("id", "-"))))),
                                 ft.DataCell(ft.Text(user.get("username", "-"))),
+                                ft.DataCell(ft.Text(user.get("full_name") or user.get("username", "-"))),
                                 ft.DataCell(ft.Text(user.get("role", "Admin"))),
+                                ft.DataCell(ft.Text(user.get("status", "Active"))),
+                                ft.DataCell(ft.Text(user.get("created_at") or "—")),
                                 ft.DataCell(
                                     ft.PopupMenuButton(
                                         icon=ft.icons.MORE_VERT,
                                         tooltip="User actions",
                                         items=[
+                                            ft.PopupMenuItem(text="View User", on_click=lambda _, u=user: show_user_details(u)),
                                             ft.PopupMenuItem(text="Set Admin", on_click=lambda _, u=user: update_user_role(u, "Admin")),
-                                            ft.PopupMenuItem(text="Set SB Member", on_click=lambda _, u=user: update_user_role(u, "SB Member")),
-                                            ft.PopupMenuItem(text="Set Mayor's Office", on_click=lambda _, u=user: update_user_role(u, "Mayor's Office")),
+                                            ft.PopupMenuItem(text="Set Secretary / Vice Mayor", on_click=lambda _, u=user: update_user_role(u, "Secretary / Vice Mayor")),
+                                            ft.PopupMenuItem(text="Set Staff", on_click=lambda _, u=user: update_user_role(u, "Staff")),
+                                            ft.PopupMenuItem(text="Activate Account", on_click=lambda _, u=user: show_not_implemented_action("Activate Account")),
+                                            ft.PopupMenuItem(text="Deactivate Account", on_click=lambda _, u=user: show_not_implemented_action("Deactivate Account")),
+                                            ft.PopupMenuItem(text="Reset Password", on_click=lambda _, u=user: show_not_implemented_action("Reset Password")),
                                             ft.PopupMenuItem(text="Delete User", on_click=lambda _, u=user: confirm_delete_user(u)),
                                         ],
                                     )
@@ -197,6 +241,7 @@ def main(page: ft.Page):
                         )
                     )
                 users_table.rows = rows
+                users_notice.value = "" if rows else "No users found in the current database."
             else:
                 users_table.rows = []
                 users_notice.value = f"Load failed: {response.text}"
@@ -220,6 +265,7 @@ def main(page: ft.Page):
                     "role": user_role_input.value or "Admin",
                 },
                 verify=False,
+                timeout=10,
             )
             if response.status_code == 200:
                 user_username_input.value = ""
@@ -238,6 +284,7 @@ def main(page: ft.Page):
                 f"{BACKEND_URL}/auth/users/{requests.utils.quote(user['username'])}/role",
                 params={"role": role},
                 verify=False,
+                timeout=10,
             )
             if response.status_code == 200:
                 load_users_table()
@@ -253,6 +300,7 @@ def main(page: ft.Page):
             response = requests.delete(
                 f"{BACKEND_URL}/auth/users/{requests.utils.quote(user['username'])}",
                 verify=False,
+                timeout=10,
             )
             if response.status_code == 200:
                 users_notice.value = response.json().get("message", "User deleted.")
@@ -580,28 +628,39 @@ def main(page: ft.Page):
 
         username_field = ft.TextField(label="Username", width=300, icon=ft.icons.PERSON)
         password_field = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK)
+        login_error = ft.Text("", size=12, color=ft.colors.RED_700)
 
         def attempt_login(_):
             nonlocal current_user, current_user_role
-            if not username_field.value or not password_field.value:
-                page.snack_bar = ft.SnackBar(ft.Text("Please fill out both fields."), open=True)
+            username = (username_field.value or "").strip()
+            password = password_field.value or ""
+            login_error.value = ""
+
+            if not username or not password:
+                login_error.value = "Please fill out both fields."
                 page.update()
                 return
 
             try:
-                params = {"username": username_field.value, "password": password_field.value}
-                res = requests.post(f"{BACKEND_URL}/auth/login", params=params, verify=False)
+                res = requests.post(f"{BACKEND_URL}/auth/login", params={"username": username, "password": password}, verify=False, timeout=10)
                 if res.status_code == 200:
                     payload = res.json()
                     role = (payload.get("role") or "Admin").strip()
                     current_user = payload.get("username")
                     current_user_role = role
-                    render_shell(page, current_user, logout_user, nav_items, build_dashboard_view())
+                    if role == "Admin":
+                        render_shell(page, current_user, logout_user, nav_items, build_dashboard_view())
+                    elif role in {"Secretary / Vice Mayor", "Secretary"}:
+                        render_shell(page, current_user, logout_user, nav_items, documents_view())
+                    else:
+                        page.snack_bar = ft.SnackBar(ft.Text("Your account is not approved for access yet."), open=True)
+                        page.update()
                 else:
-                    page.snack_bar = ft.SnackBar(ft.Text("Invalid credentials."), open=True)
+                    detail = res.json().get("detail", "Invalid credentials.") if res.headers.get("content-type", "").startswith("application/json") else "Invalid credentials."
+                    login_error.value = detail
                     page.update()
             except Exception as ex:
-                page.snack_bar = ft.SnackBar(ft.Text(f"Connection Failed: Ensure Backend is running. {ex}"), open=True)
+                login_error.value = f"Connection failed: {ex}"
                 page.update()
 
         login_btn = ft.ElevatedButton("Log In", width=300, on_click=attempt_login, bgcolor=ft.colors.BLUE_800, color=ft.colors.WHITE)
@@ -621,6 +680,7 @@ def main(page: ft.Page):
                     ft.Container(height=4),
                     username_field,
                     password_field,
+                    login_error,
                     ft.Container(height=6),
                     login_btn,
                     signup_link,
@@ -636,33 +696,95 @@ def main(page: ft.Page):
         page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         page.vertical_alignment = ft.MainAxisAlignment.CENTER
 
+        reg_first_name = ft.TextField(label="First Name", width=300, icon=ft.icons.PERSON)
+        reg_last_name = ft.TextField(label="Last Name", width=300, icon=ft.icons.PERSON)
+        reg_email = ft.TextField(label="Email", width=300, icon=ft.icons.EMAIL)
         reg_username = ft.TextField(label="Desired Username", width=300, icon=ft.icons.PERSON_ADD)
         reg_password = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK_OUTLINE)
         reg_confirm_password = ft.TextField(label="Confirm Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK)
+        reg_office = ft.TextField(label="Office", width=300, icon=ft.icons.BUSINESS)
+        reg_position = ft.TextField(label="Position", width=300, icon=ft.icons.WORK)
+        reg_notes = ft.TextField(label="Notes", width=300, multiline=True, min_lines=2, max_lines=4, icon=ft.icons.NOTES)
+        signup_error = ft.Text("", size=12, color=ft.colors.RED_700)
 
         def attempt_signup(_):
-            if not reg_username.value or not reg_password.value or not reg_confirm_password.value:
-                page.snack_bar = ft.SnackBar(ft.Text("Please fill out all registration fields."), open=True)
+            first_name = (reg_first_name.value or "").strip()
+            last_name = (reg_last_name.value or "").strip()
+            email = (reg_email.value or "").strip()
+            username = (reg_username.value or "").strip()
+            password = reg_password.value or ""
+            confirm_password = reg_confirm_password.value or ""
+            signup_error.value = ""
+
+            if not first_name or not last_name or not email or not username or not password or not confirm_password:
+                signup_error.value = "Please fill out all required fields."
                 page.update()
                 return
 
-            if reg_password.value != reg_confirm_password.value:
-                page.snack_bar = ft.SnackBar(ft.Text("Passwords do not match!"), open=True)
+            if password != confirm_password:
+                signup_error.value = "Passwords do not match."
                 page.update()
                 return
+
+            if len(password) < 8:
+                signup_error.value = "Password must be at least 8 characters."
+                page.update()
+                return
+
+            if "@" not in email or "." not in email:
+                signup_error.value = "Please enter a valid email address."
+                page.update()
+                return
+
+            payload = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+                "username": username,
+                "password": password,
+                "office": (reg_office.value or "").strip() or None,
+                "position": (reg_position.value or "").strip() or None,
+                "notes": (reg_notes.value or "").strip() or None,
+            }
 
             try:
-                params = {"username": reg_username.value.strip(), "password": reg_password.value, "role": "Admin"}
-                res = requests.post(f"{BACKEND_URL}/auth/register", params=params, verify=False)
-                if res.status_code == 200:
-                    page.snack_bar = ft.SnackBar(ft.Text("Account created successfully! You can now log in."), open=True)
-                    show_login()
+                res = requests.post(f"{BACKEND_URL}/registration/requests", json=payload, verify=False, timeout=10)
+                if res.status_code == 201:
+                    page.clean()
+                    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+                    page.vertical_alignment = ft.MainAxisAlignment.CENTER
+                    ref = res.json().get("registration_reference", "N/A")
+                    page.add(
+                        surface_card(
+                            ft.Column([
+                                ft.Container(
+                                    content=ft.Icon(ft.icons.CHECK_CIRCLE_OUTLINE, size=52, color=ft.colors.GREEN_700),
+                                    padding=14,
+                                    bgcolor=ft.colors.GREEN_50,
+                                    border_radius=20,
+                                ),
+                                ft.Text("Registration Submitted Successfully", size=22, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_800),
+                                ft.Text("Reference Number:", size=13, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(f"({ref})", size=16, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                                ft.Text("Status:", size=13, color=ft.colors.BLUE_GREY_600),
+                                ft.Text("Pending Administrator Approval", size=16, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
+                                ft.Text("Your registration request has been submitted successfully. Your account cannot log in until it has been reviewed and approved by the System Administrator.", size=13, color=ft.colors.BLUE_GREY_600, text_align=ft.TextAlign.CENTER),
+                                ft.Row([
+                                    ft.ElevatedButton("Return to Login", on_click=lambda _: show_login(), bgcolor=ft.colors.BLUE_800, color=ft.colors.WHITE),
+                                    ft.OutlinedButton("Register Another Account", on_click=lambda _: show_signup()),
+                                ], spacing=12),
+                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
+                            width=520,
+                            padding=36,
+                        )
+                    )
+                    page.update()
                 else:
-                    error_msg = res.json().get("detail", "Registration failed.")
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Error: {error_msg}"), open=True)
-                page.update()
+                    detail = res.json().get("detail", "Registration failed.") if res.headers.get("content-type", "").startswith("application/json") else "Registration failed."
+                    signup_error.value = detail
+                    page.update()
             except Exception as ex:
-                page.snack_bar = ft.SnackBar(ft.Text(f"Connection Failed: Ensure Backend is running. {ex}"), open=True)
+                signup_error.value = f"Connection failed: {ex}"
                 page.update()
 
         register_btn = ft.ElevatedButton("Register Account", width=300, on_click=attempt_signup, bgcolor=ft.colors.GREEN_700, color=ft.colors.WHITE)
@@ -680,14 +802,21 @@ def main(page: ft.Page):
                     ft.Text("Create Administrator Account", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_800),
                     ft.Text("Sangguniang Bayan Registry", size=14, color=ft.colors.BLUE_GREY_600),
                     ft.Container(height=4),
+                    reg_first_name,
+                    reg_last_name,
+                    reg_email,
                     reg_username,
                     reg_password,
                     reg_confirm_password,
+                    reg_office,
+                    reg_position,
+                    reg_notes,
+                    signup_error,
                     ft.Container(height=6),
                     register_btn,
                     back_to_login,
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
-                width=420,
+                width=520,
                 padding=36,
             )
         )

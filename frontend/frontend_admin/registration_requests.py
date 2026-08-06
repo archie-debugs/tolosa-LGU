@@ -1,132 +1,12 @@
+import os
 import flet as ft
+import requests
 
-mock_registration_requests = [
-    {
-        "id": "REG-2026-0042",
-        "applicant": {
-            "name": "Juan Santos Dela Cruz",
-            "firstName": "Juan",
-            "middleName": "Santos",
-            "lastName": "Dela Cruz",
-            "suffix": "",
-            "contact": "0917-123-4567",
-            "email": "juan.delacruz@example.com",
-        },
-        "username": "juan.delacruz",
-        "office": "Sangguniang Bayan",
-        "position": "Staff",
-        "requestedAccess": "Staff",
-        "status": "Pending",
-        "submittedDate": "August 6, 2026",
-        "submittedTime": "9:30 AM",
-        "idType": "Government ID",
-        "idNumber": "********1234",
-        "idFileName": "juan_dela_cruz_id.pdf",
-        "finalRole": "Staff",
-        "accountStatus": "Pending",
-        "notes": "",
-        "rejectionReason": "",
-        "approvedBy": "",
-        "approvedDate": "",
-        "rejectedBy": "",
-        "rejectedDate": "",
-    },
-    {
-        "id": "REG-2026-0041",
-        "applicant": {
-            "name": "Maria Victoria Santos",
-            "firstName": "Maria",
-            "middleName": "Victoria",
-            "lastName": "Santos",
-            "suffix": "",
-            "contact": "0917-765-4321",
-            "email": "maria.santos@example.com",
-        },
-        "username": "maria.santos",
-        "office": "Sangguniang Bayan",
-        "position": "Staff",
-        "requestedAccess": "Staff",
-        "status": "Pending",
-        "submittedDate": "August 6, 2026",
-        "submittedTime": "10:05 AM",
-        "idType": "Government ID",
-        "idNumber": "********5678",
-        "idFileName": "maria_santos_id.pdf",
-        "finalRole": "Staff",
-        "accountStatus": "Pending",
-        "notes": "",
-        "rejectionReason": "",
-        "approvedBy": "",
-        "approvedDate": "",
-        "rejectedBy": "",
-        "rejectedDate": "",
-    },
-    {
-        "id": "REG-2026-0039",
-        "applicant": {
-            "name": "Carlos R. Reyes",
-            "firstName": "Carlos",
-            "middleName": "Rivera",
-            "lastName": "Reyes",
-            "suffix": "",
-            "contact": "0917-234-9876",
-            "email": "carlos.reyes@example.com",
-        },
-        "username": "carlos.reyes",
-        "office": "Sangguniang Bayan",
-        "position": "Staff",
-        "requestedAccess": "Staff",
-        "status": "Approved",
-        "submittedDate": "August 5, 2026",
-        "submittedTime": "2:15 PM",
-        "idType": "Government ID",
-        "idNumber": "********4321",
-        "idFileName": "carlos_reyes_id.pdf",
-        "finalRole": "Staff",
-        "accountStatus": "Active",
-        "notes": "Approved with verified ID.",
-        "rejectionReason": "",
-        "approvedBy": "Administrator",
-        "approvedDate": "August 6, 2026",
-        "rejectedBy": "",
-        "rejectedDate": "",
-    },
-    {
-        "id": "REG-2026-0035",
-        "applicant": {
-            "name": "Rosario Delos Santos",
-            "firstName": "Rosario",
-            "middleName": "M.",
-            "lastName": "Delos Santos",
-            "suffix": "",
-            "contact": "0917-987-6543",
-            "email": "rosario.delossantos@example.com",
-        },
-        "username": "rosario.delossantos",
-        "office": "Sangguniang Bayan",
-        "position": "Staff",
-        "requestedAccess": "Staff",
-        "status": "Rejected",
-        "submittedDate": "August 3, 2026",
-        "submittedTime": "11:55 AM",
-        "idType": "Government ID",
-        "idNumber": "********6789",
-        "idFileName": "rosario_delossantos_id.pdf",
-        "finalRole": "Staff",
-        "accountStatus": "Inactive",
-        "notes": "Rejected due to mismatched identification.",
-        "rejectionReason": "Identification Could Not Be Verified",
-        "approvedBy": "",
-        "approvedDate": "",
-        "rejectedBy": "Administrator",
-        "rejectedDate": "August 6, 2026",
-    },
-]
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 
 STATUS_OPTIONS = ["All", "Pending", "Approved", "Rejected"]
-POSITION_OPTIONS = ["All", "Staff", "Secretary / Vice Mayor", "Admin"]
-DATE_OPTIONS = ["All", "August 6, 2026", "August 5, 2026", "August 3, 2026"]
-ROLE_OPTIONS = ["Staff", "Secretary / Vice Mayor", "Admin"]
+POSITION_OPTIONS = ["All", "Admin", "Secretary / Vice Mayor", "Staff"]
+ROLE_OPTIONS = ["Admin", "Secretary / Vice Mayor", "Staff"]
 REJECTION_REASONS = [
     "Invalid Information",
     "Identification Could Not Be Verified",
@@ -136,9 +16,39 @@ REJECTION_REASONS = [
 ]
 
 
+def _format_badge(status: str):
+    style = {
+        "Pending": (ft.colors.AMBER_100, ft.colors.AMBER_900, "⏳ Pending"),
+        "Approved": (ft.colors.GREEN_100, ft.colors.GREEN_900, "✓ Approved"),
+        "Rejected": (ft.colors.RED_100, ft.colors.RED_900, "✕ Rejected"),
+    }.get(status, (ft.colors.BLUE_GREY_50, ft.colors.BLUE_GREY_700, status))
+    return ft.Container(
+        content=ft.Text(style[2], size=12, weight=ft.FontWeight.BOLD, color=style[1]),
+        padding=ft.padding.symmetric(horizontal=10, vertical=6),
+        bgcolor=style[0],
+        border_radius=12,
+    )
+
+
+def _safe_text(value, fallback="—"):
+    if value in (None, ""):
+        return fallback
+    return str(value)
+
+
+def _format_submission_date(value):
+    if not value:
+        return "Not available"
+    if isinstance(value, str):
+        value = value.replace("Z", "+00:00")
+    try:
+        return str(value).split("T")[0]
+    except Exception:
+        return str(value)
+
+
 def build_registration_requests_view(page, surface_card, section_header):
-    requests = [request.copy() for request in mock_registration_requests]
-    active_filter = "All"
+    requests_data = []
     active_status_tab = "All"
     active_position = "All"
     active_date = "All"
@@ -147,12 +57,12 @@ def build_registration_requests_view(page, surface_card, section_header):
     selected_rejection_reason = REJECTION_REASONS[0]
     custom_rejection_note = ""
     selected_final_role = "Staff"
+    available_dates = ["All"]
 
-    request_details_holder = ft.Container()
     id_preview_dialog = ft.AlertDialog(
         title=ft.Text("ID Preview"),
         content=ft.Container(
-            content=ft.Text("ID preview is a visual placeholder for the submitted identification document."),
+            content=ft.Text("The uploaded identification document is not available in this build."),
             padding=20,
             width=550,
             height=300,
@@ -184,34 +94,22 @@ def build_registration_requests_view(page, surface_card, section_header):
         modal=True,
         title=ft.Text("Registration Application"),
         content=ft.Column([], spacing=18),
-        actions=[
-            ft.TextButton("Close", on_click=lambda _: close_review_dialog()),
-        ],
+        actions=[ft.TextButton("Close", on_click=lambda _: close_review_dialog())],
         actions_alignment=ft.MainAxisAlignment.END,
     )
-
-    def format_badge(status: str):
-        style = {
-            "Pending": (ft.colors.AMBER_100, ft.colors.AMBER_900, "⏳ Pending"),
-            "Approved": (ft.colors.GREEN_100, ft.colors.GREEN_900, "✓ Approved"),
-            "Rejected": (ft.colors.RED_100, ft.colors.RED_900, "✕ Rejected"),
-        }.get(status, (ft.colors.BLUE_GREY_50, ft.colors.BLUE_GREY_700, status))
-        return ft.Container(
-            content=ft.Text(style[2], size=12, weight=ft.FontWeight.BOLD, color=style[1]),
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-            bgcolor=style[0],
-            border_radius=12,
-        )
 
     def summary_card(title, value, icon, accent):
         return surface_card(
             ft.Column(
                 [
-                    ft.Row([
-                        ft.Icon(icon, color=accent, size=20),
-                        ft.Container(width=8),
-                        ft.Text(title, size=13, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_GREY_800),
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row(
+                        [
+                            ft.Icon(icon, color=accent, size=20),
+                            ft.Container(width=8),
+                            ft.Text(title, size=13, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_GREY_800),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
                     ft.Text(value, size=28, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
                 ],
                 spacing=8,
@@ -221,29 +119,25 @@ def build_registration_requests_view(page, surface_card, section_header):
 
     def get_summary_counts():
         counts = {"Pending": 0, "Approved": 0, "Rejected": 0}
-        for item in requests:
-            counts[item["status"]] += 1
+        for item in requests_data:
+            counts[item.get("status", "Pending")] += 1
         return counts
 
     def filter_requests():
         filtered = []
         query = search_query.strip().lower()
-        for item in requests:
-            if active_status_tab != "All" and item["status"] != active_status_tab:
+        for item in requests_data:
+            status = item.get("status", "Pending")
+            position = item.get("position") or ""
+            submitted_date = _format_submission_date(item.get("created_at"))
+            if active_status_tab != "All" and status != active_status_tab:
                 continue
-            if active_position != "All" and item["position"] != active_position:
+            if active_position != "All" and position != active_position:
                 continue
-            if active_date != "All" and item["submittedDate"] != active_date:
+            if active_date != "All" and submitted_date != active_date:
                 continue
             if query:
-                target = " ".join(
-                    [
-                        item["applicant"]["name"],
-                        item["username"],
-                        item["applicant"]["email"],
-                        item["id"],
-                    ]
-                ).lower()
+                target = " ".join([item.get("applicant_name", ""), item.get("username", ""), item.get("email", ""), item.get("registration_reference", "")]).lower()
                 if query not in target:
                     continue
             filtered.append(item)
@@ -255,18 +149,23 @@ def build_registration_requests_view(page, surface_card, section_header):
         tabs_row.controls.clear()
         tabs_row.controls.extend([build_filter_tab(name, summary_counts) for name in STATUS_OPTIONS])
         summary_row.controls.clear()
-        summary_row.controls.extend([
-            summary_card("⏳ Pending", summary_counts["Pending"], ft.icons.HOURGLASS_TOP, ft.colors.AMBER_700),
-            summary_card("✓ Approved", summary_counts["Approved"], ft.icons.CHECK_CIRCLE, ft.colors.GREEN_700),
-            summary_card("✕ Rejected", summary_counts["Rejected"], ft.icons.CANCEL, ft.colors.RED_700),
-            summary_card("Total", len(requests), ft.icons.DESCRIPTION_OUTLINED, ft.colors.BLUE_700),
-        ])
+        summary_row.controls.extend(
+            [
+                summary_card("⏳ Pending", summary_counts["Pending"], ft.icons.HOURGLASS_TOP, ft.colors.AMBER_700),
+                summary_card("✓ Approved", summary_counts["Approved"], ft.icons.CHECK_CIRCLE, ft.colors.GREEN_700),
+                summary_card("✕ Rejected", summary_counts["Rejected"], ft.icons.CANCEL, ft.colors.RED_700),
+                summary_card("Total", len(requests_data), ft.icons.DESCRIPTION_OUTLINED, ft.colors.BLUE_700),
+            ]
+        )
         body_holder.content = build_requests_body(filtered)
+        date_filter_dropdown.options = [ft.dropdown.Option(option) for option in available_dates]
+        if active_date not in available_dates:
+            active_date = "All"
         page.update()
 
     def build_filter_tab(name, summary_counts):
-        count = len(filter_requests()) if name == active_status_tab else summary_counts.get(name, len(requests))
-        label = f"{name} ({count})" if name != "All" else f"All ({len(requests)})"
+        count = len(filter_requests()) if name == active_status_tab else summary_counts.get(name, len(requests_data))
+        label = f"{name} ({count})" if name != "All" else f"All ({len(requests_data)})"
         selected = name == active_status_tab
         return ft.Container(
             content=ft.Text(label, size=12, weight=ft.FontWeight.W_600, color=ft.colors.BLUE_900 if selected else ft.colors.BLUE_GREY_800),
@@ -290,7 +189,7 @@ def build_registration_requests_view(page, surface_card, section_header):
         search_field.value = ""
         position_dropdown.value = "All"
         status_dropdown.value = "All"
-        date_dropdown.value = "All"
+        date_filter_dropdown.value = "All"
         update_requests_view()
 
     def build_requests_body(filtered):
@@ -301,7 +200,7 @@ def build_registration_requests_view(page, surface_card, section_header):
                         content=ft.Column(
                             [
                                 ft.Text("No registration requests found.", size=18, weight=ft.FontWeight.BOLD),
-                                ft.Text("Try changing your search or filters.", size=13, color=ft.colors.BLUE_GREY_600),
+                                ft.Text("The backend currently has no registration requests to display, or the database is empty.", size=13, color=ft.colors.BLUE_GREY_600),
                                 ft.ElevatedButton("Clear Filters", on_click=clear_filters),
                             ],
                             spacing=12,
@@ -322,54 +221,57 @@ def build_registration_requests_view(page, surface_card, section_header):
             cards = [build_request_card(item) for item in filtered]
             return ft.Column(cards, spacing=16)
 
-        return ft.Column([
-            ft.Container(
-                content=ft.DataTable(
-                    columns=[
-                        ft.DataColumn(ft.Text("Registration Reference", weight=ft.FontWeight.BOLD)),
-                        ft.DataColumn(ft.Text("Applicant", weight=ft.FontWeight.BOLD)),
-                        ft.DataColumn(ft.Text("Position", weight=ft.FontWeight.BOLD)),
-                        ft.DataColumn(ft.Text("Office", weight=ft.FontWeight.BOLD)),
-                        ft.DataColumn(ft.Text("Requested Access", weight=ft.FontWeight.BOLD)),
-                        ft.DataColumn(ft.Text("Submitted", weight=ft.FontWeight.BOLD)),
-                        ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
-                        ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
-                    ],
-                    rows=[
-                        ft.DataRow(
-                            cells=[
-                                ft.DataCell(ft.Text(item["id"])),
-                                ft.DataCell(ft.Text(item["applicant"]["name"])),
-                                ft.DataCell(ft.Text(item["position"])),
-                                ft.DataCell(ft.Text(item["office"])),
-                                ft.DataCell(ft.Text(item["requestedAccess"])),
-                                ft.DataCell(ft.Text(item["submittedDate"])),
-                                ft.DataCell(format_badge(item["status"])),
-                                ft.DataCell(
-                                    ft.Row(
-                                        [
-                                            ft.ElevatedButton(
-                                                "Review" if item["status"] == "Pending" else "View",
-                                                on_click=lambda e, req=item: open_review(req),
-                                                bgcolor=ft.colors.BLUE_800,
-                                                color=ft.colors.WHITE,
-                                            )
-                                        ],
-                                        alignment=ft.MainAxisAlignment.END,
-                                    )
-                                ),
-                            ]
-                        )
-                        for item in filtered
-                    ],
-                    heading_row_height=40,
-                    border=ft.border.all(1, ft.colors.BLUE_GREY_100),
-                ),
-                padding=12,
-                bgcolor=ft.colors.BLUE_GREY_50,
-                border_radius=18,
-            )
-        ], spacing=12)
+        return ft.Column(
+            [
+                ft.Container(
+                    content=ft.DataTable(
+                        columns=[
+                            ft.DataColumn(ft.Text("Registration Reference", weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Applicant", weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Position", weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Office", weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Requested Access", weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Submitted", weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
+                        ],
+                        rows=[
+                            ft.DataRow(
+                                cells=[
+                                    ft.DataCell(ft.Text(_safe_text(item.get("registration_reference"), "-"))),
+                                    ft.DataCell(ft.Text(_safe_text(item.get("applicant_name"), "-"))),
+                                    ft.DataCell(ft.Text(_safe_text(item.get("position"), "-"))),
+                                    ft.DataCell(ft.Text(_safe_text(item.get("office"), "-"))),
+                                    ft.DataCell(ft.Text(_safe_text(item.get("requested_access"), "-"))),
+                                    ft.DataCell(ft.Text(_format_submission_date(item.get("created_at")))),
+                                    ft.DataCell(_format_badge(item.get("status", "Pending"))),
+                                    ft.DataCell(
+                                        ft.Row(
+                                            [
+                                                ft.ElevatedButton(
+                                                    "Review" if item.get("status") == "Pending" else "View",
+                                                    on_click=lambda e, req=item: open_review(req),
+                                                    bgcolor=ft.colors.BLUE_800,
+                                                    color=ft.colors.WHITE,
+                                                )
+                                            ],
+                                            alignment=ft.MainAxisAlignment.END,
+                                        )
+                                    ),
+                                ]
+                            )
+                            for item in filtered
+                        ],
+                        heading_row_height=40,
+                        border=ft.border.all(1, ft.colors.BLUE_GREY_100),
+                    ),
+                    padding=12,
+                    bgcolor=ft.colors.BLUE_GREY_50,
+                    border_radius=18,
+                )
+            ],
+            spacing=12,
+        )
 
     def build_request_card(item):
         return surface_card(
@@ -377,45 +279,42 @@ def build_registration_requests_view(page, surface_card, section_header):
                 [
                     ft.Row(
                         [
-                            ft.Column([
-                                ft.Text(item["id"], weight=ft.FontWeight.BOLD),
-                                ft.Text(item["applicant"]["name"], size=13, color=ft.colors.BLUE_GREY_700),
-                            ], expand=True),
-                            format_badge(item["status"]),
+                            ft.Column(
+                                [
+                                    ft.Text(_safe_text(item.get("registration_reference"), "-"), weight=ft.FontWeight.BOLD),
+                                    ft.Text(_safe_text(item.get("applicant_name"), "-"), size=13, color=ft.colors.BLUE_GREY_700),
+                                ],
+                                expand=True,
+                            ),
+                            _format_badge(item.get("status", "Pending")),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     ft.Row(
                         [
-                            ft.Column([
-                                ft.Text("Position", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(item["position"], size=13),
-                            ], expand=True),
-                            ft.Column([
-                                ft.Text("Office", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(item["office"], size=13),
-                            ], expand=True),
-                        ], spacing=16),
+                            ft.Column([ft.Text("Position", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_safe_text(item.get("position"), "-"), size=13)], expand=True),
+                            ft.Column([ft.Text("Office", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_safe_text(item.get("office"), "-"), size=13)], expand=True),
+                        ],
+                        spacing=16,
+                    ),
                     ft.Row(
                         [
-                            ft.Column([
-                                ft.Text("Requested Access", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(item["requestedAccess"], size=13),
-                            ], expand=True),
-                            ft.Column([
-                                ft.Text("Submitted", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(item["submittedDate"], size=13),
-                            ], expand=True),
-                        ], spacing=16),
+                            ft.Column([ft.Text("Requested Access", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_safe_text(item.get("requested_access"), "-"), size=13)], expand=True),
+                            ft.Column([ft.Text("Submitted", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_format_submission_date(item.get("created_at")), size=13)], expand=True),
+                        ],
+                        spacing=16,
+                    ),
                     ft.Row(
                         [
                             ft.ElevatedButton(
-                                "Review" if item["status"] == "Pending" else "View",
+                                "Review" if item.get("status") == "Pending" else "View",
                                 on_click=lambda e, req=item: open_review(req),
                                 bgcolor=ft.colors.BLUE_800,
                                 color=ft.colors.WHITE,
                             )
-                        ], alignment=ft.MainAxisAlignment.END),
+                        ],
+                        alignment=ft.MainAxisAlignment.END,
+                    ),
                 ],
                 spacing=14,
             ),
@@ -434,118 +333,139 @@ def build_registration_requests_view(page, surface_card, section_header):
     def open_review(request):
         nonlocal selected_request, selected_final_role, selected_rejection_reason, custom_rejection_note
         selected_request = request
-        selected_final_role = request.get("finalRole", request["requestedAccess"])
+        selected_final_role = request.get("requested_access") or "Staff"
         selected_rejection_reason = REJECTION_REASONS[0]
         custom_rejection_note = ""
+
+        try:
+            response = requests.get(f"{BACKEND_URL}/registration/requests/{request['id']}", verify=False, timeout=10)
+            if response.status_code == 200:
+                details = response.json()
+            else:
+                raise ValueError(response.text)
+        except Exception:
+            details = request
+
         review_dialog.content = ft.Column(
             [
-                ft.Row([
-                    ft.Text("Registration Application", size=20, weight=ft.FontWeight.BOLD),
-                    format_badge(request["status"]),
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Text("Review the application details and update the request status.", size=13, color=ft.colors.BLUE_GREY_600),
+                ft.Row(
+                    [
+                        ft.Text("Registration Application", size=20, weight=ft.FontWeight.BOLD),
+                        _format_badge(details.get("status", "Pending")),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                ft.Text("Review the applicant details and choose the final system role.", size=13, color=ft.colors.BLUE_GREY_600),
                 ft.Divider(height=1),
-                ft.Row([
-                    ft.Column([
-                        ft.Text("Personal Information", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Row([
-                            ft.Column([
-                                ft.Text("Full Name", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(request["applicant"]["name"], size=13),
-                            ], expand=True),
-                            ft.Column([
-                                ft.Text("Contact Number", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(request["applicant"]["contact"], size=13),
-                            ], expand=True),
-                        ], spacing=16),
-                        ft.Row([
-                            ft.Column([
-                                ft.Text("Email Address", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(request["applicant"]["email"], size=13),
-                            ], expand=True),
-                            ft.Column([
-                                ft.Text("Username", size=12, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(request["username"], size=13),
-                            ], expand=True),
-                        ], spacing=16),
-                    ], expand=True),
-                    ft.Column([
-                        ft.Text("Identity Verification", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Text("ID Type", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request["idType"], size=13),
-                        ft.Text("ID Number", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request["idNumber"], size=13),
-                        ft.Text("Uploaded File", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Row([
-                            ft.Text(request["idFileName"], size=13),
-                            ft.Container(width=12),
-                            ft.TextButton("View ID", on_click=lambda _: open_id_preview()),
-                        ]),
-                    ], width=280),
-                ], spacing=24, vertical_alignment=ft.CrossAxisAlignment.START),
-                ft.Divider(height=1),
-                ft.Row([
-                    ft.Column([
-                        ft.Text("Office & Position", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Text("Office", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request["office"], size=13),
-                        ft.Text("Position", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request["position"], size=13),
-                        ft.Text("Applicant's Requested Access", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request["requestedAccess"], size=13, weight=ft.FontWeight.W_600),
-                    ], expand=True),
-                    ft.Column([
-                        ft.Text("System Role Assignment", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Text("Final System Role", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Dropdown(
-                            width=260,
-                            options=[ft.dropdown.Option(role) for role in ROLE_OPTIONS],
-                            value=selected_final_role,
-                            on_change=lambda e: set_final_role(e.control.value),
-                            disabled=request["status"] != "Pending",
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text("Personal Information", size=16, weight=ft.FontWeight.BOLD),
+                                ft.Row(
+                                    [
+                                        ft.Column([ft.Text("Full Name", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_safe_text(details.get("first_name")) + " " + _safe_text(details.get("last_name")), size=13)], expand=True),
+                                        ft.Column([ft.Text("Contact Number", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_safe_text(details.get("contact_number"), "-"), size=13)], expand=True),
+                                    ],
+                                    spacing=16,
+                                ),
+                                ft.Row(
+                                    [
+                                        ft.Column([ft.Text("Email Address", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_safe_text(details.get("email"), "-"), size=13)], expand=True),
+                                        ft.Column([ft.Text("Username", size=12, color=ft.colors.BLUE_GREY_600), ft.Text(_safe_text(details.get("username"), "-"), size=13)], expand=True),
+                                    ],
+                                    spacing=16,
+                                ),
+                            ],
+                            expand=True,
                         ),
-                        ft.Container(height=12),
-                        ft.Text(
-                            "Final system permissions are assigned by an authorized administrator. The applicant's requested access does not automatically determine their system role.",
-                            size=12,
-                            color=ft.colors.BLUE_GREY_600,
+                        ft.Column(
+                            [
+                                ft.Text("Office Information", size=16, weight=ft.FontWeight.BOLD),
+                                ft.Text("Office", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("office"), "-"), size=13),
+                                ft.Text("Position", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("position"), "-"), size=13),
+                                ft.Text("Requested Access", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("requested_access"), "-"), size=13, weight=ft.FontWeight.W_600),
+                            ],
+                            width=280,
                         ),
-                    ], width=320),
-                ], spacing=24),
+                    ],
+                    spacing=24,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
                 ft.Divider(height=1),
-                ft.Row([
-                    ft.Column([
-                        ft.Text("Application Timeline", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Column([
-                            build_timeline_step("✓ Registration Submitted", f"{request['submittedDate']} — {request['submittedTime']}", True),
-                            build_timeline_step("● Pending Administrator Review", "Current", request["status"] == "Pending"),
-                            build_timeline_step("○ Administrator Decision", "Pending", request["status"] == "Pending"),
-                        ], spacing=8),
-                    ], expand=True),
-                    ft.Column([
-                        ft.Text("Account Information", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Text("Registration Reference", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request["id"], size=13),
-                        ft.Text("Registration Date", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request["submittedDate"], size=13),
-                        ft.Text("Account Status", size=12, color=ft.colors.BLUE_GREY_600),
-                        ft.Text(request.get("accountStatus", "Pending"), size=13),
-                    ], width=280),
-                ], spacing=24),
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text("Registration Details", size=16, weight=ft.FontWeight.BOLD),
+                                ft.Text("Registration Reference", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("registration_reference"), "-"), size=13),
+                                ft.Text("Submission Date", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_format_submission_date(details.get("created_at")), size=13),
+                                ft.Text("Current Status", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("status"), "Pending"), size=13),
+                            ],
+                            expand=True,
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text("System Role Assignment", size=16, weight=ft.FontWeight.BOLD),
+                                ft.Text("Final Role", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Dropdown(
+                                    width=260,
+                                    options=[ft.dropdown.Option(role) for role in ROLE_OPTIONS],
+                                    value=selected_final_role,
+                                    on_change=lambda e: set_final_role(e.control.value),
+                                    disabled=details.get("status") != "Pending",
+                                ),
+                                ft.Container(height=12),
+                                ft.Text("The requested access is a request only. The administrator selects the final role.", size=12, color=ft.colors.BLUE_GREY_600),
+                            ],
+                            width=320,
+                        ),
+                    ],
+                    spacing=24,
+                ),
+                ft.Divider(height=1),
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text("Contact & Identity", size=16, weight=ft.FontWeight.BOLD),
+                                ft.Text("Email", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("email"), "-"), size=13),
+                                ft.Text("ID Type", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("id_type"), "-"), size=13),
+                                ft.Text("Uploaded ID", size=12, color=ft.colors.BLUE_GREY_600),
+                                ft.Text(_safe_text(details.get("id_file_path"), "Not available"), size=13),
+                            ],
+                            expand=True,
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text("Notes", size=16, weight=ft.FontWeight.BOLD),
+                                ft.Text(_safe_text(details.get("notes"), "No notes provided."), size=13),
+                            ],
+                            width=320,
+                        ),
+                    ],
+                    spacing=24,
+                ),
             ],
             spacing=16,
         )
 
-        if request["status"] == "Pending":
+        if details.get("status") == "Pending":
             review_dialog.actions = [
                 ft.TextButton("Close", on_click=lambda _: close_review_dialog()),
                 ft.OutlinedButton("Reject Registration", on_click=lambda _: open_reject_dialog()),
                 ft.ElevatedButton("Approve Registration", on_click=lambda _: open_approve_dialog(), bgcolor=ft.colors.GREEN_700, color=ft.colors.WHITE),
             ]
         else:
-            review_dialog.actions = [
-                ft.TextButton("Close", on_click=lambda _: close_review_dialog()),
-            ]
+            review_dialog.actions = [ft.TextButton("Close", on_click=lambda _: close_review_dialog())]
 
         page.dialog = review_dialog
         review_dialog.open = True
@@ -556,31 +476,18 @@ def build_registration_requests_view(page, surface_card, section_header):
         selected_final_role = value
         page.update()
 
-    def build_timeline_step(label, detail, active):
-        return ft.Row(
-            [
-                ft.Icon(ft.icons.CIRCLE, size=12, color=ft.colors.GREEN_700 if active else ft.colors.BLUE_GREY_300),
-                ft.Container(width=8),
-                ft.Column([
-                    ft.Text(label, size=12, weight=ft.FontWeight.W_600 if active else ft.FontWeight.NORMAL),
-                    ft.Text(detail, size=11, color=ft.colors.BLUE_GREY_600),
-                ]),
-            ],
-            spacing=10,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        )
-
     def open_approve_dialog():
         if not selected_request:
             return
         approve_dialog.content = ft.Column(
             [
-                ft.Text(f"Applicant: {selected_request['applicant']['name']}", size=13),
-                ft.Text(f"Position: {selected_request['position']}", size=13),
-                ft.Text(f"Requested Access: {selected_request['requestedAccess']}", size=13),
-                ft.Text(f"Final System Role: {selected_final_role}", size=13),
-                ft.Text("This registration will be approved and the account will be marked as active.", size=12, color=ft.colors.BLUE_GREY_600),
-            ], spacing=10)
+                ft.Text(f"Applicant: {selected_request.get('applicant_name', 'Applicant')}", size=13),
+                ft.Text(f"Requested Access: {selected_request.get('requested_access', '-')}", size=13),
+                ft.Text(f"Final Role: {selected_final_role}", size=13),
+                ft.Text("This approval will create a user and mark the registration as approved.", size=12, color=ft.colors.BLUE_GREY_600),
+            ],
+            spacing=10,
+        )
         page.dialog = approve_dialog
         approve_dialog.open = True
         page.update()
@@ -589,26 +496,29 @@ def build_registration_requests_view(page, surface_card, section_header):
         nonlocal selected_request
         if not selected_request:
             return
-        selected_request["status"] = "Approved"
-        selected_request["finalRole"] = selected_final_role
-        selected_request["accountStatus"] = "Active"
-        selected_request["approvedBy"] = "Administrator"
-        selected_request["approvedDate"] = "August 6, 2026"
-        selected_request["rejectionReason"] = ""
-        selected_request["rejectedBy"] = ""
-        selected_request["rejectedDate"] = ""
-        approve_dialog.open = False
-        review_dialog.open = False
-        page.snack_bar = ft.SnackBar(ft.Text("Registration approved successfully."), open=True)
-        page.update()
-        update_requests_view()
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/registration/requests/{selected_request['id']}/approve",
+                json={"final_role": selected_final_role},
+                verify=False,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                raise ValueError(response.text)
+            page.snack_bar = ft.SnackBar(ft.Text("Registration approved successfully."), open=True)
+            approve_dialog.open = False
+            review_dialog.open = False
+            load_requests()
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Approval failed: {exc}"), open=True)
+            page.update()
 
     def open_reject_dialog():
         if not selected_request:
             return
         reject_dialog.content = ft.Column(
             [
-                ft.Text(f"Applicant: {selected_request['applicant']['name']}", size=13),
+                ft.Text(f"Applicant: {selected_request.get('applicant_name', 'Applicant')}", size=13),
                 ft.Text("Reason for Rejection:", size=13, weight=ft.FontWeight.BOLD),
                 ft.Dropdown(
                     width=400,
@@ -617,13 +527,7 @@ def build_registration_requests_view(page, surface_card, section_header):
                     on_change=lambda e: set_rejection_reason(e.control.value),
                 ),
                 ft.Text("Custom reason (optional)", size=12, color=ft.colors.BLUE_GREY_600),
-                ft.TextField(
-                    width=400,
-                    height=100,
-                    multiline=True,
-                    value=custom_rejection_note,
-                    on_change=lambda e: set_custom_rejection_note(e.control.value),
-                ),
+                ft.TextField(width=400, height=100, multiline=True, value=custom_rejection_note, on_change=lambda e: set_custom_rejection_note(e.control.value)),
             ],
             spacing=10,
         )
@@ -645,18 +549,27 @@ def build_registration_requests_view(page, surface_card, section_header):
         nonlocal selected_request
         if not selected_request:
             return
-        selected_request["status"] = "Rejected"
-        selected_request["accountStatus"] = "Inactive"
-        selected_request["rejectionReason"] = selected_rejection_reason if selected_rejection_reason != "Other" else (custom_rejection_note or "Other")
-        selected_request["rejectedBy"] = "Administrator"
-        selected_request["rejectedDate"] = "August 6, 2026"
-        selected_request["approvedBy"] = ""
-        selected_request["approvedDate"] = ""
-        reject_dialog.open = False
-        review_dialog.open = False
-        page.snack_bar = ft.SnackBar(ft.Text("Registration rejected."), open=True)
-        page.update()
-        update_requests_view()
+        reason = selected_rejection_reason if selected_rejection_reason != "Other" else (custom_rejection_note or "Other")
+        if not reason.strip():
+            page.snack_bar = ft.SnackBar(ft.Text("Please enter a rejection reason."), open=True)
+            page.update()
+            return
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/registration/requests/{selected_request['id']}/reject",
+                json={"reason": reason},
+                verify=False,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                raise ValueError(response.text)
+            page.snack_bar = ft.SnackBar(ft.Text("Registration rejected."), open=True)
+            reject_dialog.open = False
+            review_dialog.open = False
+            load_requests()
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Rejection failed: {exc}"), open=True)
+            page.update()
 
     def close_review_dialog():
         review_dialog.open = False
@@ -670,14 +583,32 @@ def build_registration_requests_view(page, surface_card, section_header):
         reject_dialog.open = False
         page.update()
 
+    def load_requests():
+        nonlocal requests_data, available_dates
+        try:
+            response = requests.get(f"{BACKEND_URL}/registration/requests", verify=False, timeout=10)
+            if response.status_code != 200:
+                raise ValueError(response.text)
+            payload = response.json()
+            requests_data = payload.get("items", [])
+            available_dates = ["All"] + sorted({ _format_submission_date(item.get("created_at")) for item in requests_data if item.get("created_at") })
+        except Exception as exc:
+            requests_data = []
+            available_dates = ["All"]
+            page.snack_bar = ft.SnackBar(ft.Text(f"Unable to load registration requests: {exc}"), open=True)
+        update_requests_view()
+
     def build_requests_header():
         return ft.Row(
             [
-                ft.Column([
-                    ft.Text("Registration Requests", size=22, weight=ft.FontWeight.BOLD),
-                    ft.Text("Review and manage user registration requests.", size=13, color=ft.colors.BLUE_GREY_600),
-                ], expand=True),
-                ft.ElevatedButton("Refresh", icon=ft.icons.REFRESH, on_click=lambda _: update_requests_view(), bgcolor=ft.colors.BLUE_800, color=ft.colors.WHITE),
+                ft.Column(
+                    [
+                        ft.Text("Registration Requests", size=22, weight=ft.FontWeight.BOLD),
+                        ft.Text("Review and manage user registration requests.", size=13, color=ft.colors.BLUE_GREY_600),
+                    ],
+                    expand=True,
+                ),
+                ft.ElevatedButton("Refresh", icon=ft.icons.REFRESH, on_click=lambda _: load_requests(), bgcolor=ft.colors.BLUE_800, color=ft.colors.WHITE),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
@@ -685,36 +616,15 @@ def build_registration_requests_view(page, surface_card, section_header):
     def build_search_area():
         return ft.Row(
             [
-                ft.TextField(
-                    label="Search applicants...",
-                    width=320,
-                    value=search_query,
-                    on_change=lambda e: set_search_query(e.control.value),
-                    prefix_icon=ft.icons.SEARCH,
-                ),
-                ft.Dropdown(
-                    label="Position",
-                    width=180,
-                    options=[ft.dropdown.Option(option) for option in POSITION_OPTIONS],
-                    value=active_position,
-                    on_change=lambda e: set_position_filter(e.control.value),
-                ),
-                ft.Dropdown(
-                    label="Status",
-                    width=180,
-                    options=[ft.dropdown.Option(option) for option in STATUS_OPTIONS],
-                    value=active_status_tab,
-                    on_change=lambda e: set_status_filter(e.control.value),
-                ),
-                ft.Dropdown(
-                    label="Date",
-                    width=180,
-                    options=[ft.dropdown.Option(option) for option in DATE_OPTIONS],
-                    value=active_date,
-                    on_change=lambda e: set_date_filter(e.control.value),
-                ),
+                ft.TextField(label="Search applicants...", width=320, value=search_query, on_change=lambda e: set_search_query(e.control.value), prefix_icon=ft.icons.SEARCH),
+                ft.Dropdown(label="Position", width=180, options=[ft.dropdown.Option(option) for option in POSITION_OPTIONS], value=active_position, on_change=lambda e: set_position_filter(e.control.value)),
+                ft.Dropdown(label="Status", width=180, options=[ft.dropdown.Option(option) for option in STATUS_OPTIONS], value=active_status_tab, on_change=lambda e: set_status_filter(e.control.value)),
+                ft.Dropdown(label="Date", width=180, options=[ft.dropdown.Option(option) for option in available_dates], value=active_date, on_change=lambda e: set_date_filter(e.control.value)),
                 ft.TextButton("Clear Filters", on_click=clear_filters),
-            ], spacing=12, wrap=True)
+            ],
+            spacing=12,
+            wrap=True,
+        )
 
     def set_search_query(value):
         nonlocal search_query
@@ -740,7 +650,7 @@ def build_registration_requests_view(page, surface_card, section_header):
     search_field = ft.TextField()
     position_dropdown = ft.Dropdown()
     status_dropdown = ft.Dropdown()
-    date_dropdown = ft.Dropdown()
+    date_filter_dropdown = ft.Dropdown()
     body_holder = ft.Container()
 
     def on_resize(e=None):
@@ -761,8 +671,7 @@ def build_registration_requests_view(page, surface_card, section_header):
         expand=True,
     )
 
-    update_requests_view()
-
+    load_requests()
     page.dialog = page.dialog or None
     page.overlay.append(id_preview_dialog)
     page.overlay.append(approve_dialog)
