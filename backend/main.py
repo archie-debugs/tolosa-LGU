@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine
 from . import models
-from .core import ensure_user_role_column
+from .core import ensure_schema_columns, ensure_user_role_column
 from .routes.auth import router as auth_router
 from .routes.user_roles import router as user_roles_router
 from .routes.status import router as status_router
@@ -28,6 +28,7 @@ models.Base.metadata.create_all(bind=engine)
 
 try:
     ensure_user_role_column()
+    ensure_schema_columns()
 except Exception:
     pass
 

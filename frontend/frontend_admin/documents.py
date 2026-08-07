@@ -16,8 +16,8 @@ def build_documents_view(
                         section_header(
                             "Documents",
                             "View and manage legislative documents and tracking status.",
-                            ft.icons.DESCRIPTION_OUTLINED,
-                            ft.colors.BLUE_700,
+                            ft.Icons.DESCRIPTION_OUTLINED,
+                            ft.Colors.BLUE_700,
                         ),
                         ft.Divider(height=1),
                         ft.Row(
@@ -25,12 +25,12 @@ def build_documents_view(
                                 ft.Text(
                                     "This UI is a frontend-only preview. Document data is static for now.",
                                     size=13,
-                                    color=ft.colors.BLUE_GREY_600,
+                                    color=ft.Colors.BLUE_GREY_600,
                                     expand=True,
                                 ),
-                                ft.ElevatedButton(
+                                ft.Button(
                                     "Refresh Preview",
-                                    icon=ft.icons.REFRESH,
+                                    icon=ft.Icons.REFRESH,
                                     on_click=lambda _: open_document_dialog(None),
                                 ),
                             ],
@@ -38,11 +38,11 @@ def build_documents_view(
                         ),
                         ft.Container(
                             content=documents_table,
-                            bgcolor=ft.colors.BLUE_GREY_50,
+                            bgcolor=ft.Colors.BLUE_GREY_50,
                             border_radius=18,
                             padding=12,
                         ),
-                        ft.Text(documents_notice.value, size=12, color=ft.colors.BLUE_GREY_600),
+                        ft.Text(documents_notice.value, size=12, color=ft.Colors.BLUE_GREY_600),
                     ],
                     spacing=16,
                 ),

@@ -1,14 +1,19 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text
 from datetime import datetime, timezone
 from .database import Base
 
+
 class User(Base):
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String, nullable=False, default="Admin")
+    status = Column(String, nullable=False, default="Active", index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
 
 class RegistrationRequest(Base):
@@ -29,6 +34,7 @@ class RegistrationRequest(Base):
     office = Column(String, nullable=True)
     position = Column(String, nullable=True)
     requested_access = Column(String, nullable=True)
+    assigned_role = Column(String, nullable=True)
 
     id_type = Column(String, nullable=True)
     id_number = Column(String, nullable=True)
@@ -42,11 +48,16 @@ class RegistrationRequest(Base):
 
     reviewed_by = Column(String, nullable=True, index=True)
     reviewed_at = Column(DateTime, nullable=True, index=True)
+    approved_by = Column(String, nullable=True, index=True)
+    approved_at = Column(DateTime, nullable=True, index=True)
+    rejected_by = Column(String, nullable=True, index=True)
+    rejected_at = Column(DateTime, nullable=True, index=True)
 
     notes = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"

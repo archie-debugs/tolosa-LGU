@@ -19,8 +19,8 @@ def build_users_roles_view(
                     section_header(
                         "Users & Roles",
                         "Manage admin users, roles, and account access for the system.",
-                        ft.icons.PEOPLE,
-                        ft.colors.BLUE_700,
+                        ft.Icons.PEOPLE,
+                        ft.Colors.BLUE_700,
                     ),
                     ft.Divider(height=1),
                     ft.Row(
@@ -30,11 +30,11 @@ def build_users_roles_view(
                                     user_username_input,
                                     user_password_input,
                                     user_role_input,
-                                    ft.ElevatedButton(
+                                    ft.Button(
                                         "Create User",
                                         on_click=create_user_record,
-                                        bgcolor=ft.colors.BLUE_800,
-                                        color=ft.colors.WHITE,
+                                        bgcolor=ft.Colors.BLUE_800,
+                                        color=ft.Colors.WHITE,
                                     ),
                                     users_notice,
                                 ],
@@ -42,18 +42,25 @@ def build_users_roles_view(
                                 width=360,
                             ),
                             ft.Container(
-                                content=ft.Column([
-                                    users_table,
-                                ]),
+                                content=ft.Column(
+                                    [
+                                        ft.Container(
+                                            content=users_table,
+                                            expand=True,
+                                        ),
+                                    ],
+                                    scroll=ft.ScrollMode.AUTO,
+                                    expand=True,
+                                ),
                                 expand=True,
-                                bgcolor=ft.colors.BLUE_GREY_50,
+                                bgcolor=ft.Colors.BLUE_GREY_50,
                                 border_radius=18,
                                 padding=12,
                                 height=240,
                             ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        spacing=20,
+                        spacing=12,
                     ),
                 ],
                 spacing=16,
@@ -71,11 +78,11 @@ def build_users_roles_view(
         if len(rows) == 0:
             placeholder = ft.Container(
                 content=ft.Column([
-                    ft.Text("No users loaded", size=14, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_GREY_700),
-                    ft.Text("The user list is empty — backend may be offline or no users exist.", size=12, color=ft.colors.BLUE_GREY_400),
+                    ft.Text("No users loaded", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
+                    ft.Text("The user list is empty — backend may be offline or no users exist.", size=12, color=ft.Colors.BLUE_GREY_400),
                 ], spacing=6),
                 padding=18,
-                bgcolor=ft.colors.TRANSPARENT,
+                bgcolor=ft.Colors.TRANSPARENT,
             )
             # insert placeholder into the users table container (Row is at index 2 of the Column)
             # find the main Row and append placeholder below the table container (its right-side child is controls[1])

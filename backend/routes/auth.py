@@ -6,6 +6,7 @@ from ..core import get_password_hash, verify_password, record_audit_log
 
 router = APIRouter()
 
+
 @router.post("/auth/register")
 def register_user(username: str, password: str, role: str = "Admin", db: Session = Depends(get_db)):
     if not username or not password:
@@ -19,7 +20,9 @@ def register_user(username: str, password: str, role: str = "Admin", db: Session
         new_user = models.User(
             username=username,
             hashed_password=get_password_hash(password),
-            role=role.strip() or "Admin",
+            role=(role or "Admin").strip() or "Admin",
+            status="Active",
+            is_active=True,
         )
         db.add(new_user)
         db.commit()
@@ -39,6 +42,7 @@ def register_user(username: str, password: str, role: str = "Admin", db: Session
 
     return {"message": "User registered successfully", "username": new_user.username}
 
+
 @router.post("/auth/login")
 def login_user(username: str, password: str, db: Session = Depends(get_db)):
     if not username or not password:
@@ -47,6 +51,13 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if getattr(user, "status", "Active") == "Pending":
+        raise HTTPException(status_code=403, detail="Your account is awaiting administrator approval.")
+    if getattr(user, "status", "Active") == "Rejected":
+        raise HTTPException(status_code=403, detail="Your registration request has been rejected. Please contact the system administrator.")
+    if getattr(user, "status", "Active") == "Inactive" or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Your account has been deactivated.")
 
     record_audit_log(
         db,

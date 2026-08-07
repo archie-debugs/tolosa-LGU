@@ -4,6 +4,7 @@ import os
 import sys
 import json
 from pathlib import Path
+from datetime import datetime
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -14,7 +15,6 @@ load_dotenv()
 
 from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.documents import build_documents_view
-from frontend.frontend_admin.registration_requests import build_registration_requests_view
 from frontend.frontend_admin.users_roles import build_users_roles_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
 from frontend.frontend_admin.admin_shell import render_shell
@@ -26,7 +26,7 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 def main(page: ft.Page):
     page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.bgcolor = ft.colors.BLUE_GREY_100
+    page.bgcolor = ft.Colors.BLUE_GREY_100
     page.scroll = ft.ScrollMode.AUTO
     page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
     page.vertical_alignment = ft.MainAxisAlignment.START
@@ -35,17 +35,40 @@ def main(page: ft.Page):
     current_user = None
     current_user_role = None
 
+    def get_admin_headers():
+        hdrs = {}
+        if current_user:
+            hdrs["X-Admin-Username"] = current_user
+        if current_user_role:
+            hdrs["X-Admin-Role"] = current_user_role
+        return hdrs
+
+    def format_created_date(value):
+        if not value:
+            return "—"
+        try:
+            dt = datetime.fromisoformat(value)
+            return dt.strftime("%m/%d/%Y")
+        except Exception:
+            return value
+
     users_table = ft.DataTable(
         columns=[
-            ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Full Name", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Created Date", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
+            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD), expand=1),
+            ft.DataColumn(ft.Text("Full Name", weight=ft.FontWeight.BOLD), expand=2),
+            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
+            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
+            ft.DataColumn(ft.Text("Created Date", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER, expand=1),
         ],
         rows=[],
+        expand=True,
+        column_spacing=12,
+        horizontal_margin=0,
+        data_row_min_height=44,
+        data_text_style=ft.TextStyle(size=13),
+        heading_text_style=ft.TextStyle(size=12, weight=ft.FontWeight.BOLD),
     )
 
     user_username_input = ft.TextField(label="Username", width=280)
@@ -61,11 +84,11 @@ def main(page: ft.Page):
         value="Admin",
     )
 
-    users_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
+    users_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
     pending_delete_user = None
 
     committee_editor_column = ft.Column(spacing=10)
-    committee_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
+    committee_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
     pending_delete_committee = None
     committee_edit_index = None
     committee_name_input = ft.TextField(label="Committee Name", width=420)
@@ -81,7 +104,7 @@ def main(page: ft.Page):
         content=committee_name_input,
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_committee_dialog()),
-            ft.ElevatedButton("Save", on_click=lambda _: on_committee_save()),
+            ft.Button("Save", on_click=lambda _: on_committee_save()),
         ],
     )
     delete_committee_dialog = ft.AlertDialog(
@@ -89,7 +112,7 @@ def main(page: ft.Page):
         content=ft.Text(""),
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_delete_committee_dialog()),
-            ft.ElevatedButton("Delete", on_click=lambda _: delete_committee_action(), bgcolor=ft.colors.RED_700, color=ft.colors.WHITE),
+            ft.Button("Delete", on_click=lambda _: delete_committee_action(), bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
         ],
     )
     page.overlay.append(delete_committee_dialog)
@@ -143,7 +166,7 @@ def main(page: ft.Page):
             width=width,
             expand=expand,
             padding=padding,
-            bgcolor=ft.colors.WHITE,
+            bgcolor=ft.Colors.WHITE,
             border_radius=24,
         )
 
@@ -153,13 +176,13 @@ def main(page: ft.Page):
                 ft.Container(
                     content=ft.Icon(icon, color=accent_color, size=24),
                     padding=10,
-                    bgcolor=ft.colors.BLUE_GREY_50,
+                    bgcolor=ft.Colors.BLUE_GREY_50,
                     border_radius=14,
                 ),
                 ft.Column(
                     [
                         ft.Text(title, size=18, weight=ft.FontWeight.BOLD),
-                        ft.Text(subtitle, size=13, color=ft.colors.BLUE_GREY_600),
+                        ft.Text(subtitle, size=13, color=ft.Colors.BLUE_GREY_600),
                     ],
                     spacing=2,
                     expand=True,
@@ -182,11 +205,11 @@ def main(page: ft.Page):
         user_details_dialog.content = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Username", size=12, color=ft.colors.BLUE_GREY_600),
+                    ft.Text("Username", size=12, color=ft.Colors.BLUE_GREY_600),
                     ft.Text(user.get("username", "-"), size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text("Role", size=12, color=ft.colors.BLUE_GREY_600),
+                    ft.Text("Role", size=12, color=ft.Colors.BLUE_GREY_600),
                     ft.Text(user.get("role", "Admin"), size=14),
-                    ft.Text("Status", size=12, color=ft.colors.BLUE_GREY_600),
+                    ft.Text("Status", size=12, color=ft.Colors.BLUE_GREY_600),
                     ft.Text(user.get("status", "Active"), size=14),
                 ],
                 spacing=8,
@@ -194,6 +217,65 @@ def main(page: ft.Page):
             padding=8,
         )
         user_details_dialog.open = True
+        page.update()
+
+    def show_registration_details(reg):
+        user_details_dialog.title = ft.Text("Registration Details")
+        user_details_dialog.content = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Username", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text(reg.get("username", "-"), size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text("Full Name", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text(reg.get("full_name") or reg.get("applicant_name", "-"), size=14),
+                    ft.Text("Requested Role", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text(reg.get("requested_access") or reg.get("role", "-"), size=14),
+                    ft.Text("Status", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text(reg.get("status", "Pending"), size=14),
+                    ft.Text("Created Date", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text(reg.get("created_at") or "—", size=14),
+                ],
+                spacing=8,
+            ),
+            padding=8,
+        )
+        user_details_dialog.open = True
+        page.update()
+
+    def approve_registration(reg):
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/registration/requests/{reg.get('id')}/approve",
+                headers=get_admin_headers(),
+                json={"final_role": reg.get("requested_access") or "Staff"},
+                verify=False,
+                timeout=10,
+            )
+            if response.status_code == 200:
+                page.snack_bar = ft.SnackBar(ft.Text("Registration approved."), open=True)
+                load_users_table()
+            else:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Approve failed: {response.text}"), open=True)
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Approve error: {exc}"), open=True)
+        page.update()
+
+    def reject_registration(reg):
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/registration/requests/{reg.get('id')}/reject",
+                headers=get_admin_headers(),
+                json={"reason": "Rejected by admin"},
+                verify=False,
+                timeout=10,
+            )
+            if response.status_code == 200:
+                page.snack_bar = ft.SnackBar(ft.Text("Registration rejected."), open=True)
+                load_users_table()
+            else:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Reject failed: {response.text}"), open=True)
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Reject error: {exc}"), open=True)
         page.update()
 
     def show_not_implemented_action(action_name):
@@ -206,45 +288,154 @@ def main(page: ft.Page):
 
     def load_users_table():
         try:
-            response = requests.get(f"{BACKEND_URL}/auth/users", verify=False, timeout=10)
-            if response.status_code == 200:
-                users = response.json().get("items", [])
-                refresh_user_display_ids(users)
-                rows = []
-                for user in users:
-                    rows.append(
-                        ft.DataRow(
-                            cells=[
-                                ft.DataCell(ft.Text(str(user.get("display_id", user.get("id", "-"))))),
-                                ft.DataCell(ft.Text(user.get("username", "-"))),
-                                ft.DataCell(ft.Text(user.get("full_name") or user.get("username", "-"))),
-                                ft.DataCell(ft.Text(user.get("role", "Admin"))),
-                                ft.DataCell(ft.Text(user.get("status", "Active"))),
-                                ft.DataCell(ft.Text(user.get("created_at") or "—")),
-                                ft.DataCell(
-                                    ft.PopupMenuButton(
-                                        icon=ft.icons.MORE_VERT,
+            users_response = requests.get(
+                f"{BACKEND_URL}/auth/users",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=10,
+            )
+            users = users_response.json().get("items", []) if users_response.status_code == 200 else []
+
+            regs_response = requests.get(
+                f"{BACKEND_URL}/registration/requests",
+                headers=get_admin_headers(),
+                params={"status": "Pending"},
+                verify=False,
+                timeout=10,
+            )
+            regs = regs_response.json().get("items", []) if regs_response.status_code == 200 else []
+
+            usernames = {u.get("username") for u in users if u.get("username")}
+            accounts = []
+
+            for user in users:
+                accounts.append(
+                    {
+                        "source": "user",
+                        "id": user.get("id"),
+                        "username": user.get("username"),
+                        "full_name": user.get("full_name") or user.get("username"),
+                        "role": user.get("role", "Admin"),
+                        "status": user.get("status", "Active"),
+                        "created_at": user.get("created_at") or "—",
+                        "raw": user,
+                    }
+                )
+
+            for reg in regs:
+                status = (reg.get("status") or "Pending").strip()
+                if status != "Pending":
+                    continue
+                if reg.get("username") in usernames:
+                    continue
+                accounts.append(
+                    {
+                        "source": "registration",
+                        "id": reg.get("id"),
+                        "username": reg.get("username") or reg.get("email") or "-",
+                        "full_name": reg.get("full_name") or reg.get("applicant_name") or f"{(reg.get('first_name') or '').strip()} {(reg.get('last_name') or '').strip()}".strip(),
+                        "role": reg.get("requested_access") or "-",
+                        "status": status,
+                        "created_at": reg.get("created_at") or "—",
+                        "raw": reg,
+                    }
+                )
+
+            refresh_user_display_ids(accounts)
+            rows = []
+            for acct in accounts:
+                display_id = acct.get("display_id") or acct.get("id") or "-"
+                if acct["source"] == "registration":
+                    actions = [
+                        ft.PopupMenuItem(content="View Details", on_click=lambda _, a=acct: show_registration_details(a)),
+                        ft.PopupMenuItem(content="Approve Registration", on_click=lambda _, a=acct: approve_registration(a)),
+                        ft.PopupMenuItem(content="Reject Registration", on_click=lambda _, a=acct: reject_registration(a)),
+                    ]
+                else:
+                    actions = [
+                        ft.PopupMenuItem(content="View User", on_click=lambda _, a=acct: show_user_details(a.get("raw", {}))),
+                        ft.PopupMenuItem(content="Set Admin", on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Admin")),
+                        ft.PopupMenuItem(content="Set Secretary / Vice Mayor", on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Secretary / Vice Mayor")),
+                        ft.PopupMenuItem(content="Set Staff", on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Staff")),
+                        ft.PopupMenuItem(content="Activate Account", on_click=lambda _, a=acct: show_not_implemented_action("Activate Account")),
+                        ft.PopupMenuItem(content="Deactivate Account", on_click=lambda _, a=acct: show_not_implemented_action("Deactivate Account")),
+                        ft.PopupMenuItem(content="Reset Password", on_click=lambda _, a=acct: show_not_implemented_action("Reset Password")),
+                        ft.PopupMenuItem(content="Delete User", on_click=lambda _, a=acct: confirm_delete_user(a.get("raw", {}))),
+                    ]
+
+                rows.append(
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(
+                                ft.Container(
+                                    content=ft.Text(str(display_id), size=13),
+                                    width=60,
+                                    alignment=ft.Alignment.CENTER,
+                                )
+                            ),
+                            ft.DataCell(
+                                ft.Container(
+                                    content=ft.Text(
+                                        acct.get("username", "-"),
+                                        size=13,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                        no_wrap=True,
+                                    ),
+                                )
+                            ),
+                            ft.DataCell(
+                                ft.Container(
+                                    content=ft.Text(
+                                        acct.get("full_name") or acct.get("username", "-"),
+                                        size=13,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                        no_wrap=True,
+                                    ),
+                                )
+                            ),
+                            ft.DataCell(
+                                ft.Container(
+                                    content=ft.Text(
+                                        acct.get("role", "-"),
+                                        size=13,
+                                    ),
+                                    width=120,
+                                    alignment=ft.Alignment.CENTER,
+                                )
+                            ),
+                            ft.DataCell(
+                                ft.Container(
+                                    content=ft.Text(
+                                        acct.get("status", "Pending"),
+                                        size=13,
+                                    ),
+                                    width=110,
+                                    alignment=ft.Alignment.CENTER,
+                                )
+                            ),
+                            ft.DataCell(
+                                ft.Container(
+                                    content=ft.Text(format_created_date(acct.get("created_at")), size=13),
+                                    width=100,
+                                    alignment=ft.Alignment.CENTER,
+                                )
+                            ),
+                            ft.DataCell(
+                                ft.Container(
+                                    content=ft.PopupMenuButton(
+                                        icon=ft.Icons.MORE_VERT,
                                         tooltip="User actions",
-                                        items=[
-                                            ft.PopupMenuItem(text="View User", on_click=lambda _, u=user: show_user_details(u)),
-                                            ft.PopupMenuItem(text="Set Admin", on_click=lambda _, u=user: update_user_role(u, "Admin")),
-                                            ft.PopupMenuItem(text="Set Secretary / Vice Mayor", on_click=lambda _, u=user: update_user_role(u, "Secretary / Vice Mayor")),
-                                            ft.PopupMenuItem(text="Set Staff", on_click=lambda _, u=user: update_user_role(u, "Staff")),
-                                            ft.PopupMenuItem(text="Activate Account", on_click=lambda _, u=user: show_not_implemented_action("Activate Account")),
-                                            ft.PopupMenuItem(text="Deactivate Account", on_click=lambda _, u=user: show_not_implemented_action("Deactivate Account")),
-                                            ft.PopupMenuItem(text="Reset Password", on_click=lambda _, u=user: show_not_implemented_action("Reset Password")),
-                                            ft.PopupMenuItem(text="Delete User", on_click=lambda _, u=user: confirm_delete_user(u)),
-                                        ],
-                                    )
-                                ),
-                            ],
-                        )
+                                        items=actions,
+                                    ),
+                                    width=140,
+                                    alignment=ft.Alignment.CENTER,
+                                )
+                            ),
+                        ],
                     )
-                users_table.rows = rows
-                users_notice.value = "" if rows else "No users found in the current database."
-            else:
-                users_table.rows = []
-                users_notice.value = f"Load failed: {response.text}"
+                )
+            users_table.rows = rows
+            users_notice.value = "" if rows else "No users found in the current database."
         except Exception as exc:
             users_table.rows = []
             users_notice.value = f"Load error: {exc}"
@@ -282,6 +473,7 @@ def main(page: ft.Page):
         try:
             response = requests.put(
                 f"{BACKEND_URL}/auth/users/{requests.utils.quote(user['username'])}/role",
+                headers=get_admin_headers(),
                 params={"role": role},
                 verify=False,
                 timeout=10,
@@ -299,6 +491,7 @@ def main(page: ft.Page):
         try:
             response = requests.delete(
                 f"{BACKEND_URL}/auth/users/{requests.utils.quote(user['username'])}",
+                headers=get_admin_headers(),
                 verify=False,
                 timeout=10,
             )
@@ -318,11 +511,11 @@ def main(page: ft.Page):
         delete_dialog.content = ft.Text(f"Delete user \"{user.get('username', 'this user')}\"? This cannot be undone.")
         delete_dialog.actions = [
             ft.TextButton("Cancel", on_click=lambda _: close_delete_dialog()),
-            ft.ElevatedButton(
+            ft.Button(
                 "Delete",
-                icon=ft.icons.DELETE_OUTLINE,
-                bgcolor=ft.colors.RED_700,
-                color=ft.colors.WHITE,
+                icon=ft.Icons.DELETE_OUTLINE,
+                bgcolor=ft.Colors.RED_700,
+                color=ft.Colors.WHITE,
                 on_click=lambda _: run_delete_user_action(),
             ),
         ]
@@ -395,11 +588,11 @@ def main(page: ft.Page):
         page.update()
 
     def workflow_summary_section():
-        return ft.Text("The admin dashboard includes user, committee, and audit tools.", size=13, color=ft.colors.BLUE_GREY_600)
+        return ft.Text("The admin dashboard includes user, committee, and audit tools.", size=13, color=ft.Colors.BLUE_GREY_600)
 
     def load_audit_logs_view():
         try:
-            response = requests.get(f"{BACKEND_URL}/audit/logs", verify=False)
+            response = requests.get(f"{BACKEND_URL}/audit/logs", headers=get_admin_headers(), verify=False)
             if response.status_code == 200:
                 payload = response.json()
                 items = payload.get("items", [])
@@ -432,8 +625,6 @@ def main(page: ft.Page):
             ]
         page.update()
 
-    registration_requests_content = build_registration_requests_view(page, surface_card, section_header)
-
     def audit_logs_view():
         try:
             return build_audit_logs_view(audit_logs_table, load_audit_logs_view, surface_card, section_header)
@@ -463,8 +654,8 @@ def main(page: ft.Page):
                         ft.DataCell(
                             ft.Row(
                                 [
-                                    ft.IconButton(ft.icons.EDIT, tooltip="Edit", on_click=lambda _, idx=index: open_committee_dialog(idx)),
-                                    ft.IconButton(ft.icons.DELETE, tooltip="Delete", on_click=lambda _, idx=index: confirm_delete_committee(idx)),
+                                    ft.IconButton(ft.Icons.EDIT, tooltip="Edit", on_click=lambda _, idx=index: open_committee_dialog(idx)),
+                                    ft.IconButton(ft.Icons.DELETE, tooltip="Delete", on_click=lambda _, idx=index: confirm_delete_committee(idx)),
                                 ],
                                 spacing=4,
                             )
@@ -502,7 +693,6 @@ def main(page: ft.Page):
                 create_user_record,
                 surface_card,
                 section_header,
-                None,
             )
         except Exception as e:
             import traceback
@@ -545,7 +735,7 @@ def main(page: ft.Page):
         rows=[],
     )
 
-    documents_notice = ft.Text("", size=12, color=ft.colors.BLUE_GREY_600)
+    documents_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
 
     def load_documents_table():
         rows = []
@@ -593,19 +783,19 @@ def main(page: ft.Page):
                             section_header(
                                 "Settings",
                                 "System configuration and operational preferences.",
-                                ft.icons.SETTINGS,
-                                ft.colors.BLUE_GREY_700,
+                                ft.Icons.SETTINGS,
+                                ft.Colors.BLUE_GREY_700,
                             ),
                             ft.Divider(height=1),
                             ft.Text(
                                 "This admin system provides dashboard monitoring, user management, and audit log visibility.",
                                 size=13,
-                                color=ft.colors.BLUE_GREY_600,
+                                color=ft.Colors.BLUE_GREY_600,
                             ),
                             ft.Text(
                                 "Update backend deployment or environment settings to adjust service behavior.",
                                 size=13,
-                                color=ft.colors.BLUE_GREY_600,
+                                color=ft.Colors.BLUE_GREY_600,
                             ),
                         ],
                         spacing=14,
@@ -626,9 +816,9 @@ def main(page: ft.Page):
         page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         page.vertical_alignment = ft.MainAxisAlignment.CENTER
 
-        username_field = ft.TextField(label="Username", width=300, icon=ft.icons.PERSON)
-        password_field = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK)
-        login_error = ft.Text("", size=12, color=ft.colors.RED_700)
+        username_field = ft.TextField(label="Username", width=300, icon=ft.Icons.PERSON)
+        password_field = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.Icons.LOCK)
+        login_error = ft.Text("", size=12, color=ft.Colors.RED_700)
 
         def attempt_login(_):
             nonlocal current_user, current_user_role
@@ -663,20 +853,20 @@ def main(page: ft.Page):
                 login_error.value = f"Connection failed: {ex}"
                 page.update()
 
-        login_btn = ft.ElevatedButton("Log In", width=300, on_click=attempt_login, bgcolor=ft.colors.BLUE_800, color=ft.colors.WHITE)
+        login_btn = ft.Button("Log In", width=300, on_click=attempt_login, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE)
         signup_link = ft.TextButton("Don't have an account? Sign Up", on_click=lambda _: show_signup())
 
         page.add(
             surface_card(
                 ft.Column([
                     ft.Container(
-                        content=ft.Icon(ft.icons.ACCOUNT_BALANCE, size=52, color=ft.colors.BLUE_800),
+                        content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, size=52, color=ft.Colors.BLUE_800),
                         padding=14,
-                        bgcolor=ft.colors.BLUE_GREY_50,
+                        bgcolor=ft.Colors.BLUE_GREY_50,
                         border_radius=20,
                     ),
-                    ft.Text("LGU Tolosa - Sangguniang Bayan", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
-                    ft.Text("Administration System Login", size=14, color=ft.colors.BLUE_GREY_600),
+                    ft.Text("LGU Tolosa - Sangguniang Bayan", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
+                    ft.Text("Administration System Login", size=14, color=ft.Colors.BLUE_GREY_600),
                     ft.Container(height=4),
                     username_field,
                     password_field,
@@ -696,16 +886,16 @@ def main(page: ft.Page):
         page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         page.vertical_alignment = ft.MainAxisAlignment.CENTER
 
-        reg_first_name = ft.TextField(label="First Name", width=300, icon=ft.icons.PERSON)
-        reg_last_name = ft.TextField(label="Last Name", width=300, icon=ft.icons.PERSON)
-        reg_email = ft.TextField(label="Email", width=300, icon=ft.icons.EMAIL)
-        reg_username = ft.TextField(label="Desired Username", width=300, icon=ft.icons.PERSON_ADD)
-        reg_password = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK_OUTLINE)
-        reg_confirm_password = ft.TextField(label="Confirm Password", width=300, password=True, can_reveal_password=True, icon=ft.icons.LOCK)
-        reg_office = ft.TextField(label="Office", width=300, icon=ft.icons.BUSINESS)
-        reg_position = ft.TextField(label="Position", width=300, icon=ft.icons.WORK)
-        reg_notes = ft.TextField(label="Notes", width=300, multiline=True, min_lines=2, max_lines=4, icon=ft.icons.NOTES)
-        signup_error = ft.Text("", size=12, color=ft.colors.RED_700)
+        reg_first_name = ft.TextField(label="First Name", width=300, icon=ft.Icons.PERSON)
+        reg_last_name = ft.TextField(label="Last Name", width=300, icon=ft.Icons.PERSON)
+        reg_email = ft.TextField(label="Email", width=300, icon=ft.Icons.EMAIL)
+        reg_username = ft.TextField(label="Desired Username", width=300, icon=ft.Icons.PERSON_ADD)
+        reg_password = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.Icons.LOCK_OUTLINE)
+        reg_confirm_password = ft.TextField(label="Confirm Password", width=300, password=True, can_reveal_password=True, icon=ft.Icons.LOCK)
+        reg_office = ft.TextField(label="Office", width=300, icon=ft.Icons.BUSINESS)
+        reg_position = ft.TextField(label="Position", width=300, icon=ft.Icons.WORK)
+        reg_notes = ft.TextField(label="Notes", width=300, multiline=True, min_lines=2, max_lines=4, icon=ft.Icons.NOTES)
+        signup_error = ft.Text("", size=12, color=ft.Colors.RED_700)
 
         def attempt_signup(_):
             first_name = (reg_first_name.value or "").strip()
@@ -758,19 +948,19 @@ def main(page: ft.Page):
                         surface_card(
                             ft.Column([
                                 ft.Container(
-                                    content=ft.Icon(ft.icons.CHECK_CIRCLE_OUTLINE, size=52, color=ft.colors.GREEN_700),
+                                    content=ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=52, color=ft.Colors.GREEN_700),
                                     padding=14,
-                                    bgcolor=ft.colors.GREEN_50,
+                                    bgcolor=ft.Colors.GREEN_50,
                                     border_radius=20,
                                 ),
-                                ft.Text("Registration Submitted Successfully", size=22, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_800),
-                                ft.Text("Reference Number:", size=13, color=ft.colors.BLUE_GREY_600),
-                                ft.Text(f"({ref})", size=16, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
-                                ft.Text("Status:", size=13, color=ft.colors.BLUE_GREY_600),
-                                ft.Text("Pending Administrator Approval", size=16, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
-                                ft.Text("Your registration request has been submitted successfully. Your account cannot log in until it has been reviewed and approved by the System Administrator.", size=13, color=ft.colors.BLUE_GREY_600, text_align=ft.TextAlign.CENTER),
+                                ft.Text("Registration Submitted Successfully", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_800),
+                                ft.Text("Reference Number:", size=13, color=ft.Colors.BLUE_GREY_600),
+                                ft.Text(f"({ref})", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
+                                ft.Text("Status:", size=13, color=ft.Colors.BLUE_GREY_600),
+                                ft.Text("Pending Administrator Approval", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
+                                ft.Text("Your registration request has been submitted successfully. Your account cannot log in until it has been reviewed and approved by the System Administrator.", size=13, color=ft.Colors.BLUE_GREY_600, text_align=ft.TextAlign.CENTER),
                                 ft.Row([
-                                    ft.ElevatedButton("Return to Login", on_click=lambda _: show_login(), bgcolor=ft.colors.BLUE_800, color=ft.colors.WHITE),
+                                    ft.Button("Return to Login", on_click=lambda _: show_login(), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
                                     ft.OutlinedButton("Register Another Account", on_click=lambda _: show_signup()),
                                 ], spacing=12),
                             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
@@ -787,20 +977,20 @@ def main(page: ft.Page):
                 signup_error.value = f"Connection failed: {ex}"
                 page.update()
 
-        register_btn = ft.ElevatedButton("Register Account", width=300, on_click=attempt_signup, bgcolor=ft.colors.GREEN_700, color=ft.colors.WHITE)
+        register_btn = ft.Button("Register Account", width=300, on_click=attempt_signup, bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE)
         back_to_login = ft.TextButton("Already have an account? Log In", on_click=lambda e: show_login())
 
         page.add(
             surface_card(
                 ft.Column([
                     ft.Container(
-                        content=ft.Icon(ft.icons.PERSON_ADD, size=52, color=ft.colors.GREEN_700),
+                        content=ft.Icon(ft.Icons.PERSON_ADD, size=52, color=ft.Colors.GREEN_700),
                         padding=14,
-                        bgcolor=ft.colors.GREEN_50,
+                        bgcolor=ft.Colors.GREEN_50,
                         border_radius=20,
                     ),
-                    ft.Text("Create Administrator Account", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_800),
-                    ft.Text("Sangguniang Bayan Registry", size=14, color=ft.colors.BLUE_GREY_600),
+                    ft.Text("Create Administrator Account", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_800),
+                    ft.Text("Sangguniang Bayan Registry", size=14, color=ft.Colors.BLUE_GREY_600),
                     ft.Container(height=4),
                     reg_first_name,
                     reg_last_name,
@@ -823,16 +1013,16 @@ def main(page: ft.Page):
         page.update()
 
     nav_items = [
-        (ft.icons.DASHBOARD_OUTLINED, "Dashboard", lambda: build_dashboard_view()),
-        (ft.icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()),
-        (ft.icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
-        (ft.icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),
-        (ft.icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()),
-        (ft.icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()),
+        (ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: build_dashboard_view()),
+        (ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()),
+        (ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
+        (ft.Icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),
+        (ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()),
+        (ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()),
     ]
 
     show_login()
 
 
 if __name__ == "__main__":
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER)
+    ft.run(main, view=ft.AppView.WEB_BROWSER)

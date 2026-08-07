@@ -18,15 +18,15 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
             # Show a helpful error box in the UI so it's clear what failed
             next_view = ft.Container(
                 content=ft.Column([
-                    ft.Text("Error loading view", size=18, weight=ft.FontWeight.BOLD, color=ft.colors.RED_700),
-                    ft.Text(str(exc), size=12, color=ft.colors.RED_700),
+                    ft.Text("Error loading view", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_700),
+                    ft.Text(str(exc), size=12, color=ft.Colors.RED_700),
                     ft.Container(height=8),
                     ft.Text("Traceback:", size=12, weight=ft.FontWeight.BOLD),
                     ft.Text(tb, size=10),
                 ], spacing=8),
                 padding=16,
-                bgcolor=ft.colors.WHITE,
-                border=ft.border.all(1, ft.colors.RED_100),
+                bgcolor=ft.Colors.WHITE,
+                border=ft.Border.all(1, ft.Colors.RED_100),
                 border_radius=8,
             )
         try:
@@ -37,15 +37,15 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
             print("Error assigning/updating view:\n", tb2)
             fallback = ft.Container(
                 content=ft.Column([
-                    ft.Text("Error rendering view", size=18, weight=ft.FontWeight.BOLD, color=ft.colors.RED_700),
-                    ft.Text(str(exc2), size=12, color=ft.colors.RED_700),
+                    ft.Text("Error rendering view", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_700),
+                    ft.Text(str(exc2), size=12, color=ft.Colors.RED_700),
                     ft.Container(height=8),
                     ft.Text("Traceback:", size=12, weight=ft.FontWeight.BOLD),
                     ft.Text(tb2, size=10),
                 ], spacing=8),
                 padding=16,
-                bgcolor=ft.colors.WHITE,
-                border=ft.border.all(1, ft.colors.RED_100),
+                bgcolor=ft.Colors.WHITE,
+                border=ft.Border.all(1, ft.Colors.RED_100),
                 border_radius=8,
             )
             content_holder.content = fallback
@@ -61,19 +61,19 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
                 content=ft.Column(
                     [
                         ft.Container(
-                            content=ft.Icon(ft.icons.ACCOUNT_BALANCE, color=ft.colors.WHITE),
+                            content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE),
                             padding=10,
-                            bgcolor=ft.colors.BLUE_800,
+                            bgcolor=ft.Colors.BLUE_800,
                             border_radius=12,
                         ),
-                        ft.Text("SB Tolosa", size=14, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_900),
-                        ft.Text("Admin Dashboard", size=12, color=ft.colors.BLUE_GREY_600),
+                        ft.Text("SB Tolosa", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
+                        ft.Text("Admin Dashboard", size=12, color=ft.Colors.BLUE_GREY_600),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=6,
                 ),
-                padding=ft.padding.only(top=6, bottom=8),
-                alignment=ft.alignment.top_center,
+                padding=ft.Padding.only(top=6, bottom=8),
+                alignment=ft.Alignment.TOP_CENTER,
             )
         )
         for idx, (icon, label, _) in enumerate(nav_items):
@@ -82,15 +82,15 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
                 ft.Container(
                     content=ft.Row(
                         [
-                            ft.Icon(icon, color=ft.colors.BLUE_800 if is_selected else ft.colors.BLUE_GREY_700),
+                            ft.Icon(icon, color=ft.Colors.BLUE_800 if is_selected else ft.Colors.BLUE_GREY_700),
                             ft.Container(width=8),
-                            ft.Text(label, size=12, color=ft.colors.BLUE_800 if is_selected else ft.colors.BLUE_GREY_700),
+                            ft.Text(label, size=12, color=ft.Colors.BLUE_800 if is_selected else ft.Colors.BLUE_GREY_700),
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    padding=ft.padding.symmetric(vertical=10, horizontal=12),
+                    padding=ft.Padding.symmetric(vertical=10, horizontal=12),
                     width=200,
-                    bgcolor=ft.colors.BLUE_50 if is_selected else None,
+                    bgcolor=ft.Colors.BLUE_50 if is_selected else None,
                     border_radius=10,
                     on_click=lambda e, i=idx: switch_view(i),
                 )
@@ -99,13 +99,13 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
             ft.Container(
                 content=ft.Row(
                     [
-                        ft.Icon(ft.icons.LOGOUT, color=ft.colors.RED_700),
+                        ft.Icon(ft.Icons.LOGOUT, color=ft.Colors.RED_700),
                         ft.Container(width=8),
-                        ft.Text("Log out", size=12, color=ft.colors.RED_700),
+                        ft.Text("Log out", size=12, color=ft.Colors.RED_700),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=ft.padding.symmetric(vertical=10, horizontal=12),
+                padding=ft.Padding.symmetric(vertical=10, horizontal=12),
                 width=200,
                 border_radius=10,
                 on_click=lambda e: logout_user(),
@@ -114,7 +114,7 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
 
     content_holder = ft.Container(
         expand=True,
-        content=content_view if content_view is not None else ft.Text("Documents view unavailable"),
+        content=content_view if content_view is not None else ft.Container(content=ft.Text("Documents view unavailable")),
         padding=0,
     )
 
@@ -127,21 +127,21 @@ def render_shell(page, current_user, logout_user, nav_items, content_view):
             [
                 ft.Container(
                     width=220,
-                    padding=ft.padding.only(top=8, right=6),
+                    padding=ft.Padding.only(top=8, right=6),
                     content=nav_container,
                     bgcolor=None,
                     border_radius=12,
-                    alignment=ft.alignment.top_center,
+                    alignment=ft.Alignment.TOP_CENTER,
                 ),
                 ft.Container(
                     expand=True,
-                    padding=ft.padding.only(top=8),
+                    padding=ft.Padding.only(top=8),
                     content=ft.Container(
                         expand=True,
                         padding=20,
-                        bgcolor=ft.colors.WHITE,
+                        bgcolor=ft.Colors.WHITE,
                         border_radius=12,
-                        border=ft.border.all(1, ft.colors.BLUE_GREY_50),
+                        border=ft.Border.all(1, ft.Colors.BLUE_GREY_50),
                         content=content_holder,
                     ),
                 ),

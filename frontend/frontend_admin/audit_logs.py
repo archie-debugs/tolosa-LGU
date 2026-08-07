@@ -16,13 +16,13 @@ def build_audit_logs_view(
                         section_header(
                             "Audit Logs",
                             "System Activity & History Logs",
-                            ft.icons.HISTORY,
-                            ft.colors.ORANGE_700,
+                            ft.Icons.HISTORY,
+                            ft.Colors.ORANGE_700,
                         ),
                         ft.Divider(height=1),
                         ft.Container(
                             content=audit_logs_table,
-                            bgcolor=ft.colors.BLUE_GREY_50,
+                            bgcolor=ft.Colors.BLUE_GREY_50,
                             border_radius=18,
                             padding=12,
                         ),

@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, constr, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, constr
 import re
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from ..database import get_db
 from .. import models
-from ..core import get_password_hash, record_audit_log
+from ..core import get_password_hash, record_audit_log, get_current_admin_user
 
 router = APIRouter()
 
@@ -44,9 +44,7 @@ class RejectRequest(BaseModel):
 def _generate_registration_reference(db: Session) -> str:
     year = datetime.now(timezone.utc).year
     prefix = f"REG-{year}-"
-    # Simple sequence: count existing for year + 1
     like_pattern = f"{prefix}%"
-    # Fetch max existing numeric suffix
     rows = db.execute(
         text("SELECT registration_reference FROM registration_requests WHERE registration_reference LIKE :pat"),
         {"pat": like_pattern},
@@ -68,16 +66,13 @@ def _generate_registration_reference(db: Session) -> str:
 
 @router.post("/registration/requests", status_code=status.HTTP_201_CREATED)
 def create_registration(request: RegistrationCreate, db: Session = Depends(get_db)):
-    # Validate email format
     if not re.match(r"[^@]+@[^@]+\.[^@]+", request.email):
         raise HTTPException(status_code=400, detail="Invalid email address")
 
-    # Validate username uniqueness in users
     existing_user = db.query(models.User).filter(models.User.username == request.username).first()
     if existing_user:
         raise HTTPException(status_code=409, detail="Username already exists")
 
-    # Check for existing pending registration with same username or email
     dup = (
         db.query(models.RegistrationRequest)
         .filter(models.RegistrationRequest.status == "Pending")
@@ -87,10 +82,7 @@ def create_registration(request: RegistrationCreate, db: Session = Depends(get_d
     if dup:
         raise HTTPException(status_code=409, detail="A pending registration for this username or email already exists")
 
-    # Create hashed password
     hashed = get_password_hash(request.password)
-
-    # Generate unique registration reference
     reg_ref = _generate_registration_reference(db)
 
     reg = models.RegistrationRequest(
@@ -122,8 +114,18 @@ def create_registration(request: RegistrationCreate, db: Session = Depends(get_d
 
 
 @router.get("/registration/requests")
-def list_registration_requests(db: Session = Depends(get_db)):
-    rows = db.query(models.RegistrationRequest).order_by(models.RegistrationRequest.created_at.desc()).all()
+def list_registration_requests(
+    status: str | None = Query("Pending", description="Filter registration requests by status"),
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    normalized_status = (status or "Pending").strip().title()
+    if normalized_status not in {"All", "Pending", "Approved", "Rejected"}:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+    query = db.query(models.RegistrationRequest)
+    if normalized_status != "All":
+        query = query.filter(models.RegistrationRequest.status == normalized_status)
+    rows = query.order_by(models.RegistrationRequest.created_at.desc()).all()
     items = []
     for r in rows:
         items.append(
@@ -131,6 +133,7 @@ def list_registration_requests(db: Session = Depends(get_db)):
                 "id": r.id,
                 "registration_reference": r.registration_reference,
                 "applicant_name": f"{r.first_name} {r.last_name}",
+                "full_name": f"{r.first_name} {r.last_name}",
                 "username": r.username,
                 "email": r.email,
                 "office": r.office,
@@ -139,13 +142,17 @@ def list_registration_requests(db: Session = Depends(get_db)):
                 "status": r.status,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+                "approved_by": r.approved_by,
+                "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+                "rejected_by": r.rejected_by,
+                "rejected_at": r.rejected_at.isoformat() if r.rejected_at else None,
             }
         )
     return {"items": items}
 
 
 @router.get("/registration/requests/{request_id}")
-def get_registration_request(request_id: int, db: Session = Depends(get_db)):
+def get_registration_request(request_id: int, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin_user)):
     r = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.id == request_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Registration request not found")
@@ -169,6 +176,10 @@ def get_registration_request(request_id: int, db: Session = Depends(get_db)):
         "rejection_reason": r.rejection_reason,
         "reviewed_by": r.reviewed_by,
         "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+        "approved_by": r.approved_by,
+        "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+        "rejected_by": r.rejected_by,
+        "rejected_at": r.rejected_at.isoformat() if r.rejected_at else None,
         "notes": r.notes,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
@@ -176,8 +187,8 @@ def get_registration_request(request_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/registration/requests/{request_id}/approve")
-def approve_registration_request(request_id: int, payload: ApproveRequest, db: Session = Depends(get_db)):
-    allowed_roles = {"Admin", "Staff", "Secretary / Vice Mayor"}
+def approve_registration_request(request_id: int, payload: ApproveRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin_user)):
+    allowed_roles = {"Admin", "SB Member", "Staff", "Secretary / Vice Mayor"}
     final_role = payload.final_role.strip()
     if final_role not in allowed_roles:
         raise HTTPException(status_code=400, detail="Invalid final role")
@@ -188,32 +199,48 @@ def approve_registration_request(request_id: int, payload: ApproveRequest, db: S
     if reg.status != "Pending":
         raise HTTPException(status_code=400, detail="Registration request has already been processed")
 
-    # Check username still not taken
     existing_user = db.query(models.User).filter(models.User.username == reg.username).first()
     if existing_user:
         raise HTTPException(status_code=409, detail="Username already exists")
 
-    # Transactional create user + update registration
     try:
-        user = models.User(username=reg.username, hashed_password=reg.hashed_password, role=final_role)
+        user = models.User(
+            username=reg.username,
+            hashed_password=reg.hashed_password,
+            role=final_role,
+            status="Active",
+            is_active=True,
+        )
         db.add(user)
         reg.status = "Approved"
-        reg.reviewed_by = "system"
+        reg.assigned_role = final_role
+        reg.approved_by = current_admin.username
+        reg.approved_at = datetime.now(timezone.utc)
+        reg.reviewed_by = current_admin.username
         reg.reviewed_at = datetime.now(timezone.utc)
-        db.commit()
+        reg.updated_at = datetime.now(timezone.utc)
+        db.flush()
         db.refresh(user)
         db.refresh(reg)
+        db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Approval failed: {exc}") from exc
 
-    record_audit_log(db, actor="system", action="REGISTRATION_APPROVED", target_type="RegistrationRequest", target_id=reg.registration_reference, details=f"Approved and created user {user.username} with role {final_role}")
+    record_audit_log(
+        db,
+        actor=current_admin.username,
+        action="Approved Registration",
+        target_type="RegistrationRequest",
+        target_id=reg.registration_reference,
+        details=f"Approved {reg.username} and assigned role {final_role}",
+    )
 
     return {"message": "Registration approved and user created", "username": user.username, "role": user.role}
 
 
 @router.put("/registration/requests/{request_id}/reject")
-def reject_registration_request(request_id: int, payload: RejectRequest, db: Session = Depends(get_db)):
+def reject_registration_request(request_id: int, payload: RejectRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin_user)):
     reason = payload.reason.strip()
     if not reason:
         raise HTTPException(status_code=400, detail="Rejection reason is required")
@@ -227,14 +254,25 @@ def reject_registration_request(request_id: int, payload: RejectRequest, db: Ses
     try:
         reg.status = "Rejected"
         reg.rejection_reason = reason
-        reg.reviewed_by = "system"
+        reg.rejected_by = current_admin.username
+        reg.rejected_at = datetime.now(timezone.utc)
+        reg.reviewed_by = current_admin.username
         reg.reviewed_at = datetime.now(timezone.utc)
-        db.commit()
+        reg.updated_at = datetime.now(timezone.utc)
+        db.flush()
         db.refresh(reg)
+        db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Rejection failed: {exc}") from exc
 
-    record_audit_log(db, actor="system", action="REGISTRATION_REJECTED", target_type="RegistrationRequest", target_id=reg.registration_reference, details=f"Rejected registration {reg.registration_reference}: {reason}")
+    record_audit_log(
+        db,
+        actor=current_admin.username,
+        action="Rejected Registration",
+        target_type="RegistrationRequest",
+        target_id=reg.registration_reference,
+        details=f"Rejected {reg.username}: {reason}",
+    )
 
     return {"message": "Registration rejected", "registration_reference": reg.registration_reference}

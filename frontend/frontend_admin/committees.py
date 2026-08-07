@@ -15,21 +15,21 @@ def build_committees_view(
                         section_header(
                             "Committees",
                             "Reference list of SB committee assignments and organization.",
-                            ft.icons.GROUP,
-                            ft.colors.GREEN_700,
+                            ft.Icons.GROUP,
+                            ft.Colors.GREEN_700,
                         ),
                         ft.Divider(height=1),
                         ft.Row([
                             ft.Text(
                                 "These are the standing committee names used for document assignment and reporting.",
                                 size=13,
-                                color=ft.colors.BLUE_GREY_600,
+                                color=ft.Colors.BLUE_GREY_600,
                             ),
-                            ft.ElevatedButton("Add Committee", icon=ft.icons.ADD, on_click=lambda _: open_committee_dialog(None)),
+                            ft.Button("Add Committee", icon=ft.Icons.ADD, on_click=lambda _: open_committee_dialog(None)),
                         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                         ft.Container(
                             content=committee_table,
-                            bgcolor=ft.colors.BLUE_GREY_50,
+                            bgcolor=ft.Colors.BLUE_GREY_50,
                             border_radius=18,
                             padding=12,
                         ),
