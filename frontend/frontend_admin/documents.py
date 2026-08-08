@@ -47,6 +47,8 @@ def build_documents_view(
     start_date_filter = documents_controls.get("start_date_filter")
     end_date_filter = documents_controls.get("end_date_filter")
 
+    documents_empty_state = documents_controls.get("empty_state")
+
     # =========================================================
     # DOCUMENTS HEADER
     # =========================================================
@@ -211,19 +213,21 @@ def build_documents_view(
         alignment=ft.MainAxisAlignment.START,
     )
 
-    empty_state = ft.Container(
-        content=ft.Text(
-            "No documents match your search.",
-            size=13,
-            color=ft.Colors.BLUE_GREY_600,
-            text_align=ft.TextAlign.CENTER,
-        ),
-        width=fixed_table_width,
-        height=40,
-        alignment=ft.Alignment.CENTER,
-        visible=not has_rows,
-        padding=ft.Padding(left=0, top=8, right=0, bottom=8),
-    )
+    empty_state = documents_empty_state
+    if empty_state is None:
+        empty_state = ft.Container(
+            content=ft.Text(
+                "No documents match your search.",
+                size=13,
+                color=ft.Colors.BLUE_GREY_600,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            width=fixed_table_width,
+            height=40,
+            alignment=ft.Alignment.CENTER,
+            visible=not has_rows,
+            padding=ft.Padding(left=0, top=8, right=0, bottom=8),
+        )
 
     side = ft.BorderSide(1, ft.Colors.BLUE_GREY_100)
 

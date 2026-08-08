@@ -838,7 +838,7 @@ def main(page: ft.Page):
         hint_text="Search by Tracking ID, title, type, status, or location...",
         prefix_icon=ft.Icon(ft.Icons.SEARCH, size=18, color=ft.Colors.BLUE_GREY_600),
         expand=True,
-        on_change=lambda _: apply_document_search_to_current_view(),
+        on_change=lambda _: load_documents_table(),
     )
     documents_filter_status = ft.Dropdown(
         label="Status",
@@ -872,10 +872,10 @@ def main(page: ft.Page):
     )
     documents_filter_start_date = ft.TextField(label="Start Date", hint_text="YYYY-MM-DD", width=140)
     documents_filter_end_date = ft.TextField(label="End Date", hint_text="YYYY-MM-DD", width=140)
+    documents_year_filter = ft.TextField(label="Year", hint_text="YYYY", width=100)
     documents_status_filter = documents_filter_status
     documents_category_filter = documents_filter_category
     documents_type_filter = documents_filter_type
-    documents_year_filter = documents_filter_start_date
     documents_assigned_filter = documents_filter_office
 
     documents_form_tracking = ft.TextField(label="Tracking Number", expand=True)
@@ -1067,6 +1067,20 @@ def main(page: ft.Page):
 
     documents_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
 
+    documents_empty_state = ft.Container(
+        content=ft.Text(
+            "No documents match your search.",
+            size=13,
+            color=ft.Colors.BLUE_GREY_600,
+            text_align=ft.TextAlign.CENTER,
+        ),
+        width=1600,
+        height=40,
+        alignment=ft.Alignment.CENTER,
+        visible=False,
+        padding=ft.Padding(left=0, top=8, right=0, bottom=8),
+    )
+
     def normalize_search_text(value):
         if value is None:
             return ""
@@ -1155,13 +1169,16 @@ def main(page: ft.Page):
                 filtered.append(doc)
         return filtered
 
-    def update_document_result_indicator(display_documents):
+    def update_document_result_indicator(display_documents, visible_count=None):
         search_text = normalize_search_text(documents_search_field.value)
         mode_text = get_document_search_mode(search_text)
         if not display_documents:
             documents_notice.value = f"{mode_text} • No matching documents"
             return
         count_label = "document" if len(display_documents) == 1 else "documents"
+        if visible_count is not None and visible_count < len(display_documents):
+            documents_notice.value = f"{mode_text} • Showing {visible_count} of {len(display_documents)} matching {count_label}"
+            return
         documents_notice.value = f"{mode_text} • Showing {len(display_documents)} {count_label}"
 
     def show_document_notice(message):
@@ -1425,36 +1442,7 @@ def main(page: ft.Page):
                     ],
                     spacing=16,
                 ),
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("QR Preview", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
-                            ft.Container(
-                                content=ft.Column(
-                                    [
-                                        ft.Icon(ft.Icons.QR_CODE_2, size=64, color=ft.Colors.BLUE_700),
-                                        ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=12, color=ft.Colors.BLUE_GREY_600),
-                                    ],
-                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                    spacing=6,
-                                ),
-                                width=180,
-                                padding=18,
-                                bgcolor=ft.Colors.BLUE_GREY_50,
-                                border_radius=18,
-                            ),
-                            ft.Row(
-                                [
-                                    ft.OutlinedButton("Generate QR", icon=ft.Icons.QR_CODE_2, on_click=lambda _, d=doc: regenerate_qr_code(d.get("id"))),
-                                    ft.OutlinedButton("Print QR", icon=ft.Icons.PRINT_OUTLINED, on_click=lambda _: show_document_notice("QR print preview activated.")),
-                                ],
-                                spacing=8,
-                            ),
-                        ],
-                        spacing=10,
-                    ),
-                    padding=6,
-                ),
+                # QR preview removed for routing-history-only view
                 ft.Text("Routing History", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
                 ft.Column(
                     [
@@ -1487,15 +1475,7 @@ def main(page: ft.Page):
         documents_details_dialog.open = True
         page.update()
 
-    def regenerate_qr_code(document_id):
-        try:
-            response = requests.post(f"{BACKEND_URL}/documents/{document_id}/qr", verify=False, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.text)
-            load_documents_table()
-            show_document_notice("QR regenerated successfully.")
-        except Exception as exc:
-            show_document_notice(f"QR failed: {exc}")
+    # QR generation/print functionality removed from frontend.
 
     def build_document_summary_cards():
         total_documents = len(documents_data)
@@ -1631,9 +1611,10 @@ def main(page: ft.Page):
         else:
             visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=True)
 
-        filtered_documents = apply_document_search(visible_documents)
+        # Backend already filters and searches the documents dataset.
+        rendered_documents = visible_documents[:10]
         rows = []
-        for doc in filtered_documents:
+        for doc in rendered_documents:
             status = doc.get("status", "Pending")
             status_color, status_bg = get_document_status_style(status)
             document_title = str(doc.get("title", "-") or "-")
@@ -1664,8 +1645,7 @@ def main(page: ft.Page):
                 ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, d=doc: open_document_form(d)),
                 ft.PopupMenuItem(content=ft.Text("Route Document"), on_click=lambda _, d=doc: open_route_dialog(d)),
                 ft.PopupMenuItem(content=ft.Text("View Routing History"), on_click=lambda _, d=doc: show_document_details(d)),
-                ft.PopupMenuItem(content=ft.Text("Generate QR"), on_click=lambda _, d=doc: regenerate_qr_code(d.get("id"))),
-                ft.PopupMenuItem(content=ft.Text("Print QR"), on_click=lambda _: show_document_notice("QR print preview enabled.")),
+                # QR actions removed from row popup to streamline routing-history view
                 ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _: show_document_notice("Download action preview enabled.")),
                 ft.PopupMenuItem(content=ft.Text("Delete Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
             ]
@@ -1704,12 +1684,15 @@ def main(page: ft.Page):
             )
 
         documents_table.rows = rows
-        update_document_result_indicator(filtered_documents)
+        documents_empty_state.visible = len(rows) == 0
+        update_document_result_indicator(visible_documents, visible_count=len(rows))
         page.update()
 
     def load_documents_table():
         try:
             params = {}
+            if documents_search_field.value:
+                params["search"] = documents_search_field.value
             if documents_status_filter.value and documents_status_filter.value != "All":
                 params["status"] = documents_status_filter.value
             if documents_type_filter.value and documents_type_filter.value != "All":
@@ -1719,7 +1702,9 @@ def main(page: ft.Page):
             if documents_assigned_filter.value and documents_assigned_filter.value != "All":
                 params["current_office"] = documents_assigned_filter.value
             if documents_year_filter.value:
-                params["start_date"] = documents_year_filter.value
+                params["year"] = documents_year_filter.value
+            if documents_filter_start_date.value:
+                params["start_date"] = documents_filter_start_date.value
             if documents_filter_end_date.value:
                 params["end_date"] = documents_filter_end_date.value
             response = requests.get(f"{BACKEND_URL}/documents", params=params, verify=False, timeout=10)
@@ -1729,6 +1714,8 @@ def main(page: ft.Page):
             documents_data[:] = [normalize_document(doc) for doc in payload]
         except Exception as exc:
             documents_data[:] = []
+            documents_table.rows = []
+            documents_empty_state.visible = True
             documents_notice.value = f"Unable to load documents: {exc}"
             page.update()
             return
@@ -1743,6 +1730,7 @@ def main(page: ft.Page):
         documents_assigned_filter.value = "All"
         documents_sort_filter.value = "Newest"
         documents_year_filter.value = ""
+        documents_filter_start_date.value = ""
         documents_filter_end_date.value = ""
         load_documents_table()
         page.update()
@@ -1775,6 +1763,7 @@ def main(page: ft.Page):
                 "start_date_filter": documents_filter_start_date,
                 "end_date_filter": documents_filter_end_date,
                 "empty_state_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_document_form()),
+                "empty_state": documents_empty_state,
             }
             return build_documents_view(
                 documents_table,

@@ -1,9 +1,11 @@
 import json
 import io
 import csv
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
@@ -136,6 +138,18 @@ def _get_or_create_by_name(db: Session, Model, name: str):
         return existing.id if existing else None
 
 
+def _normalize_tracking_query(search: str | None) -> str | None:
+    if search is None:
+        return None
+    text = str(search).strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([1-9][0-9]*|0)", text)
+    if match:
+        return match.group(1)
+    return None
+
+
 @router.get("", response_model=list[schemas.DocumentResponse])
 def list_documents(
     search: str | None = Query(default=None),
@@ -143,33 +157,59 @@ def list_documents(
     document_type: str | None = None,
     category: str | None = None,
     current_office: str | None = None,
+    year: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     db: Session = Depends(get_db),
 ):
         query = db.query(models.Document).filter(models.Document.archived.is_(False))
         if search:
+            normalized_tracking = _normalize_tracking_query(search)
+            if normalized_tracking is not None and re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([1-9][0-9]*|0)", str(search).strip()):
+                canonical_tracking = f"DOC-{int(normalized_tracking)}"
+                query = query.filter(
+                    or_(
+                        models.Document.tracking_number == canonical_tracking,
+                        models.Document.tracking_number == str(search).strip().upper(),
+                    )
+                )
+            else:
                 like = f"%{search.lower()}%"
                 query = query.filter(
-                        models.Document.tracking_number.ilike(like)
-                        | models.Document.title.ilike(like)
-                        | models.Document.category.ilike(like)
-                        | models.Document.document_type.ilike(like)
-                        | models.Document.assigned_to.ilike(like)
-                        | models.Document.status.ilike(like)
+                    or_(
+                        models.Document.tracking_number.ilike(like),
+                        models.Document.title.ilike(like),
+                        models.Document.description.ilike(like),
+                        models.Document.document_type.ilike(like),
+                        models.Document.category.ilike(like),
+                        models.Document.originating_office.ilike(like),
+                        models.Document.current_office.ilike(like),
+                        models.Document.assigned_to.ilike(like),
+                        models.Document.status.ilike(like),
+                        models.Document.remarks.ilike(like),
+                        models.Document.author.ilike(like),
+                        models.Document.session.ilike(like),
+                        models.Document.created_by.ilike(like),
+                    )
                 )
         if status:
-                query = query.filter(models.Document.status == status)
+            query = query.filter(models.Document.status == status)
         if document_type:
-                query = query.filter(models.Document.document_type == document_type)
+            query = query.filter(models.Document.document_type == document_type)
         if category:
-                query = query.filter(models.Document.category == category)
+            query = query.filter(models.Document.category == category)
         if current_office:
-                query = query.filter(models.Document.current_office == current_office)
+            query = query.filter(models.Document.current_office == current_office)
+        if year:
+            year_text = str(year).strip()
+            if year_text.isdigit() and len(year_text) == 4:
+                start_year = datetime(int(year_text), 1, 1, tzinfo=timezone.utc)
+                end_year = datetime(int(year_text) + 1, 1, 1, tzinfo=timezone.utc)
+                query = query.filter(models.Document.created_at >= start_year, models.Document.created_at < end_year)
         if start_date:
-                query = query.filter(models.Document.created_at >= start_date)
+            query = query.filter(models.Document.created_at >= start_date)
         if end_date:
-                query = query.filter(models.Document.created_at <= end_date)
+            query = query.filter(models.Document.created_at <= end_date)
 
         docs = query.order_by(models.Document.created_at.desc()).all()
         return [_serialize_document(doc) for doc in docs]
