@@ -11,6 +11,7 @@ from .database import get_db
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
+TEMP_UPLOAD_DIR = os.path.abspath(os.path.join(UPLOAD_DIR, "tmp"))
 
 
 def get_password_hash(password: str) -> str:
@@ -105,6 +106,12 @@ def ensure_schema_columns() -> None:
             _add_column_if_missing(connection, "registration_requests", "approved_at", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"))
             _add_column_if_missing(connection, "registration_requests", "rejected_by", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS rejected_by VARCHAR"))
             _add_column_if_missing(connection, "registration_requests", "rejected_at", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP"))
+            _add_column_if_missing(connection, "documents", "author", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS author VARCHAR"))
+            _add_column_if_missing(connection, "documents", "session", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS session VARCHAR"))
+            _add_column_if_missing(connection, "documents", "date_registered", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS date_registered VARCHAR"))
+            _add_column_if_missing(connection, "documents", "attachment_name", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS attachment_name VARCHAR"))
+            _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
+            _add_column_if_missing(connection, "documents", "routing_history", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS routing_history TEXT"))
 
         connection.execute(text("UPDATE users SET role = 'Admin' WHERE role IS NULL OR role = ''"))
         connection.execute(text("UPDATE users SET status = 'Active' WHERE status IS NULL OR status = ''"))
@@ -123,3 +130,23 @@ def get_current_admin_user(
     if not user or user.role != "Admin" or not getattr(user, "is_active", True):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+def get_current_documents_import_user(
+    db: Session = Depends(get_db),
+    import_username: str | None = Header(default=None, alias="X-Admin-Username"),
+    import_role: str | None = Header(default=None, alias="X-Admin-Role"),
+):
+    if not import_username or not import_role:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    normalized_role = (import_role or "").strip()
+    allowed_roles = {"Admin", "Secretary / Vice Mayor", "SB Member"}
+    user = db.query(models.User).filter(models.User.username == import_username).first()
+    if not user or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if user.role == "Admin" or normalized_role in allowed_roles:
+        return user
+
+    raise HTTPException(status_code=403, detail="Access denied")

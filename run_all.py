@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Run the backend and frontends together for development.
+r"""Run the backend and frontends together for development.
 
 Usage:
-  .venv\Scripts\python.exe run_all.py
+    .venv\Scripts\python.exe run_all.py
 
 Options:
-    --no-admin        Don't start the admin frontend
+        --no-admin        Don't start the admin frontend
 
 The script starts child processes and will terminate them on Ctrl+C.
 """

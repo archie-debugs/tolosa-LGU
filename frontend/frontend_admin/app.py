@@ -1,11 +1,19 @@
 import flet as ft
+if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
+    ft.Colors = ft.colors
 import requests
+import io
+import mimetypes
 import os
 import sys
 import json
+import secrets
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import quote
 from dotenv import load_dotenv
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,9 +27,6 @@ from frontend.frontend_admin.users_roles import build_users_roles_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
 from frontend.frontend_admin.admin_shell import render_shell
 from frontend.frontend_admin.admindashboard import build_admin_dashboard_view
-
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
-
 
 def main(page: ft.Page):
     page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
@@ -54,13 +59,13 @@ def main(page: ft.Page):
 
     users_table = ft.DataTable(
         columns=[
-            ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
-            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD), expand=1),
-            ft.DataColumn(ft.Text("Full Name", weight=ft.FontWeight.BOLD), expand=2),
-            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
-            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
-            ft.DataColumn(ft.Text("Created Date", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER),
-            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD), heading_row_alignment=ft.MainAxisAlignment.CENTER, expand=1),
+            ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Full Name", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Created Date", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
         ],
         rows=[],
         expand=True,
@@ -700,59 +705,735 @@ def main(page: ft.Page):
             print("users_roles_view error:\n", tb)
             return ft.Column([ft.Text("Error building Users & Roles view"), ft.Text(str(e)), ft.Text(tb)])
 
-    DOCUMENTS_SAMPLE = [
-        {
-            "id": "DOC-2026-0015",
-            "title": "Proposed Ordinance on Local Revenue",
-            "type": "Ordinance",
-            "status": "Under Review",
-            "assigned_committee": "Committee on Finance",
-        },
-        {
-            "id": "DOC-2026-0016",
-            "title": "Resolution No. 2026-008",
-            "type": "Resolution",
-            "status": "Routed",
-            "assigned_committee": "Committee on Health",
-        },
-        {
-            "id": "DOC-2026-0017",
-            "title": "Committee Report No. 04",
-            "type": "Committee Report",
-            "status": "Completed",
-            "assigned_committee": "SB Office",
-        },
-    ]
+    documents_data = []
+
+    def get_document_status_style(status):
+        normalized = (status or "").strip().lower()
+        if normalized in {"pending", "under review"}:
+            return ft.Colors.ORANGE_700, ft.Colors.ORANGE_50
+        if normalized in {"in routing", "routed"}:
+            return ft.Colors.BLUE_700, ft.Colors.BLUE_50
+        if normalized in {"received"}:
+            return ft.Colors.CYAN_700, ft.Colors.CYAN_50
+        if normalized in {"approved", "completed"}:
+            return ft.Colors.GREEN_700, ft.Colors.GREEN_50
+        if normalized in {"returned"}:
+            return ft.Colors.RED_700, ft.Colors.RED_50
+        if normalized in {"archived"}:
+            return ft.Colors.BLUE_GREY_700, ft.Colors.BLUE_GREY_50
+        return ft.Colors.BLUE_GREY_700, ft.Colors.BLUE_GREY_50
+
+    documents_search_field = ft.TextField(
+        label="Search documents",
+        hint_text="Tracking No., title, office",
+        expand=True,
+        on_change=lambda _: load_documents_table(),
+    )
+    documents_filter_status = ft.Dropdown(
+        label="Status",
+        width=140,
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Pending"), ft.dropdown.Option("In Routing"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
+        value="All",
+    )
+    documents_filter_type = ft.Dropdown(
+        label="Document Type",
+        width=160,
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")],
+        value="All",
+    )
+    documents_filter_category = ft.Dropdown(
+        label="Category",
+        width=140,
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")],
+        value="All",
+    )
+    documents_filter_office = ft.Dropdown(
+        label="Current Office",
+        width=180,
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("SB Secretariat"), ft.dropdown.Option("Office of the Mayor"), ft.dropdown.Option("Committee on Health")],
+        value="All",
+    )
+    documents_sort_filter = ft.Dropdown(
+        label="Sort",
+        width=140,
+        options=[ft.dropdown.Option("Newest"), ft.dropdown.Option("Oldest"), ft.dropdown.Option("Title")],
+        value="Newest",
+    )
+    documents_filter_start_date = ft.TextField(label="Start Date", hint_text="YYYY-MM-DD", width=140)
+    documents_filter_end_date = ft.TextField(label="End Date", hint_text="YYYY-MM-DD", width=140)
+    documents_status_filter = documents_filter_status
+    documents_category_filter = documents_filter_category
+    documents_type_filter = documents_filter_type
+    documents_year_filter = documents_filter_start_date
+    documents_assigned_filter = documents_filter_office
+
+    documents_form_tracking = ft.TextField(label="Tracking Number", expand=True)
+    documents_form_tracking.disabled = True
+    documents_form_title = ft.TextField(label="Title", expand=True)
+    def on_title_change(e):
+        nonlocal documents_form_title_auto_generated
+        documents_form_title_auto_generated = False
+    documents_form_title.on_change = on_title_change
+    documents_form_description = ft.TextField(label="Description", multiline=True, min_lines=3, max_lines=6, expand=True)
+    documents_form_document_type = ft.TextField(label="Document Type", expand=True)
+    documents_form_category = ft.TextField(label="Category", expand=True)
+    documents_form_originating_office = ft.TextField(label="Originating Office", expand=True)
+    documents_form_current_office = ft.TextField(label="Current Office", expand=True)
+    documents_form_assigned_to = ft.TextField(label="Assigned To", expand=True)
+    documents_form_status = ft.Dropdown(
+        label="Status",
+        width=180,
+        options=[
+            ft.dropdown.Option("Pending"),
+            ft.dropdown.Option("In Routing"),
+            ft.dropdown.Option("Received"),
+            ft.dropdown.Option("Approved"),
+            ft.dropdown.Option("Returned"),
+            ft.dropdown.Option("Archived"),
+        ],
+        value="Pending",
+    )
+    documents_form_priority = ft.Dropdown(
+        label="Priority",
+        width=180,
+        options=[ft.dropdown.Option("Low"), ft.dropdown.Option("Medium"), ft.dropdown.Option("High")],
+        value="Medium",
+    )
+    documents_form_remarks = ft.TextField(label="Remarks", multiline=True, min_lines=2, max_lines=4, expand=True)
+    documents_form_created_by = ft.TextField(label="Created By", expand=True)
+    documents_form_author = ft.TextField(label="Author", expand=True)
+    documents_form_session = ft.TextField(label="Session", expand=True)
+    documents_form_date_registered = ft.TextField(label="Date Registered", expand=True, hint_text="YYYY-MM-DD")
+    documents_form_attachment_file = None
+    documents_form_attachment_file_name = ""
+    documents_form_attachment_name = ft.TextField(value="", visible=False)
+    documents_form_attachment_display = ft.Text("No file selected", size=13, color=ft.Colors.BLUE_GREY_700)
+    documents_form_title_auto_generated = False
+
+    documents_form_mode = "create"
+    documents_form_target_id = None
+
+    # Choose file coroutine using the FilePicker service (Flet 0.86.5)
+    async def choose_attachment_file():
+        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
+        try:
+            file_picker = ft.FilePicker()
+            files = await file_picker.pick_files(
+                dialog_title="Choose attachment",
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["pdf", "doc", "docx"],
+                allow_multiple=False,
+                with_data=True,
+            )
+            if not files:
+                # user cancelled
+                return
+            selected = files[0]
+            # Verify bytes available
+            if not selected.bytes:
+                show_document_notice("Unable to read the selected file. Please try again.")
+                return
+            documents_form_attachment_file = selected.bytes
+            documents_form_attachment_file_name = selected.name
+            documents_form_attachment_display.value = selected.name
+            # Auto-populate title if user hasn't typed one (or previous title was auto-generated)
+            if (not documents_form_title.value or documents_form_title.value.strip() == "") or documents_form_title_auto_generated:
+                base = os.path.splitext(selected.name)[0]
+                title = base.replace("_", " ")
+                title = " ".join(title.split())
+                documents_form_title.value = title
+                documents_form_title_auto_generated = True
+            page.update()
+        except Exception as exc:
+            show_document_notice(f"File selection failed: {exc}")
+
+    documents_form_dialog = ft.AlertDialog(
+        title=ft.Text("Register Document"),
+        content=ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Capture a new document record for routing and tracking.", size=13, color=ft.Colors.BLUE_GREY_600),
+                    ft.Row([documents_form_tracking, documents_form_status], spacing=12),
+                    documents_form_title,
+                    documents_form_description,
+                    ft.Row([documents_form_document_type, documents_form_category], spacing=12),
+                    ft.Row([documents_form_originating_office, documents_form_current_office], spacing=12),
+                    ft.Row([documents_form_author, documents_form_session], spacing=12),
+                    documents_form_date_registered,
+                    ft.Divider(height=1),
+                    ft.Text("Attachment", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text("Selected File:", size=12, color=ft.Colors.BLUE_GREY_600),
+                                    documents_form_attachment_display,
+                                    ft.Text(
+                                        "Accepted formats: PDF (.pdf), Microsoft Word (.doc), Microsoft Word (.docx)",
+                                        size=12,
+                                        color=ft.Colors.BLUE_GREY_600,
+                                    ),
+                                ],
+                                expand=True,
+                                spacing=6,
+                            ),
+                            ft.Container(
+                                content=ft.Button("Choose File", icon=ft.Icons.ATTACH_FILE, on_click=lambda e: page.run_task(choose_attachment_file)),
+                                alignment=ft.Alignment.CENTER,
+                            ),
+                        ],
+                        spacing=12,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Row([documents_form_assigned_to, documents_form_priority], spacing=12),
+                    documents_form_remarks,
+                    documents_form_created_by,
+                ],
+                spacing=10,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            width=620,
+            padding=8,
+        ),
+        actions=[ft.TextButton("Cancel", on_click=lambda _: close_documents_form_dialog()), ft.Button("Save", on_click=lambda _: submit_document_form())],
+    )
+    page.overlay.append(documents_form_dialog)
+
+    documents_details_dialog = ft.AlertDialog(
+        title=ft.Text("Document Details"),
+        content=ft.Container(content=ft.Text(""), padding=8),
+        actions=[ft.TextButton("Close", on_click=lambda _: close_documents_details_dialog())],
+    )
+    page.overlay.append(documents_details_dialog)
 
     documents_table = ft.DataTable(
         columns=[
-            ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Tracking No.", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Title", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Type", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Document Type", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Category", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Originating Office", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Current Office", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Assigned To", weight=ft.FontWeight.BOLD)),
             ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Assigned Committee", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Priority", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Date Received", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Last Updated", weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
         ],
         rows=[],
+        expand=True,
+        column_spacing=10,
+        horizontal_margin=0,
+        data_row_min_height=52,
+        data_text_style=ft.TextStyle(size=13),
+        heading_text_style=ft.TextStyle(size=12, weight=ft.FontWeight.BOLD),
     )
 
     documents_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
 
+    def show_document_notice(message):
+        page.snack_bar = ft.SnackBar(ft.Text(message), open=True)
+        page.update()
+
+    # File selection for attachment inside Register Document form
+    # Uses inline FilePicker coroutine (no overlay append, no separate page)
+
+    def close_documents_form_dialog():
+        documents_form_dialog.open = False
+        page.update()
+
+    def close_documents_details_dialog():
+        documents_details_dialog.open = False
+        page.update()
+
+    def generate_tracking_number():
+        return f"DOC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+    def reset_document_form():
+        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
+        documents_form_tracking.value = ""
+        documents_form_title.value = ""
+        documents_form_description.value = ""
+        documents_form_document_type.value = ""
+        documents_form_category.value = ""
+        documents_form_originating_office.value = ""
+        documents_form_current_office.value = ""
+        documents_form_assigned_to.value = ""
+        documents_form_status.value = "Pending"
+        documents_form_priority.value = "Medium"
+        documents_form_remarks.value = ""
+        documents_form_created_by.value = ""
+        documents_form_author.value = ""
+        documents_form_session.value = ""
+        documents_form_date_registered.value = datetime.now().strftime("%Y-%m-%d")
+        documents_form_attachment_name.value = ""
+        documents_form_attachment_file = None
+        documents_form_attachment_file_name = ""
+        documents_form_attachment_display.value = "No file selected"
+        documents_form_title_auto_generated = False
+
+    def populate_document_form(doc):
+        documents_form_tracking.value = doc.get("tracking_number", "") or ""
+        documents_form_title.value = doc.get("title", "") or ""
+        documents_form_description.value = doc.get("description", "") or ""
+        documents_form_document_type.value = doc.get("document_type", "") or ""
+        documents_form_category.value = doc.get("category", "") or ""
+        documents_form_originating_office.value = doc.get("originating_office", "") or ""
+        documents_form_current_office.value = doc.get("current_office", "") or ""
+        documents_form_assigned_to.value = doc.get("assigned_to", "") or ""
+        documents_form_status.value = doc.get("status") or "Pending"
+        documents_form_priority.value = doc.get("priority") or "Medium"
+        documents_form_remarks.value = doc.get("remarks", "") or ""
+        documents_form_created_by.value = doc.get("created_by", "") or ""
+        documents_form_author.value = doc.get("author", "") or ""
+        documents_form_session.value = doc.get("session", "") or ""
+        documents_form_date_registered.value = doc.get("date_registered", "") or ""
+        documents_form_attachment_name.value = doc.get("attachment_name", "") or ""
+        # when editing an existing record we don't have file bytes in frontend
+        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
+        documents_form_attachment_file = None
+        documents_form_attachment_file_name = ""
+        documents_form_attachment_display.value = doc.get("attachment_name", "") or "No file selected"
+        documents_form_title_auto_generated = False
+
+    def open_document_form(doc=None):
+        nonlocal documents_form_mode, documents_form_target_id
+        documents_form_mode = "edit" if doc and doc.get("id") else "create"
+        documents_form_target_id = doc.get("id") if doc and doc.get("id") else None
+        documents_form_dialog.title = ft.Text("Edit Document" if documents_form_mode == "edit" else "Register Document")
+        if doc:
+            populate_document_form(doc)
+        else:
+            reset_document_form()
+            documents_form_tracking.value = generate_tracking_number()
+        documents_form_dialog.open = True
+        page.update()
+
+    def submit_document_form():
+        payload = {
+            "tracking_number": (documents_form_tracking.value or "").strip(),
+            "title": (documents_form_title.value or "").strip(),
+            "description": (documents_form_description.value or "").strip() or None,
+            "document_type": (documents_form_document_type.value or "").strip() or None,
+            "category": (documents_form_category.value or "").strip() or None,
+            "originating_office": (documents_form_originating_office.value or "").strip() or None,
+            "current_office": (documents_form_current_office.value or "").strip() or None,
+            "assigned_to": (documents_form_assigned_to.value or "").strip() or None,
+            "status": (documents_form_status.value or "Pending").strip() or "Pending",
+            "priority": (documents_form_priority.value or "Medium").strip() or "Medium",
+            "remarks": (documents_form_remarks.value or "").strip() or None,
+            "created_by": (documents_form_created_by.value or "").strip() or None,
+            "author": (documents_form_author.value or "").strip() or None,
+            "session": (documents_form_session.value or "").strip() or None,
+            "date_registered": (documents_form_date_registered.value or "").strip() or None,
+            "attachment_name": (documents_form_attachment_name.value or "").strip() or None,
+        }
+        if not payload["title"]:
+            show_document_notice("Title is required.")
+            return
+        if not payload["tracking_number"]:
+            payload["tracking_number"] = generate_tracking_number()
+        if documents_form_mode == "edit" and documents_form_target_id is not None:
+            update_document_record(documents_form_target_id, payload)
+        else:
+            create_document_record(payload)
+        close_documents_form_dialog()
+
+    def open_route_dialog(doc):
+        route_destination = ft.TextField(label="Destination Office", width=300)
+        route_user = ft.TextField(label="Assigned User", width=300)
+        route_remarks = ft.TextField(label="Remarks", multiline=True, min_lines=3, max_lines=5, width=300)
+        route_value = ft.Dropdown(label="Route", width=200, options=[ft.dropdown.Option("Routing"), ft.dropdown.Option("Forward"), ft.dropdown.Option("Review")], value="Routing")
+        route_dialog = ft.AlertDialog(
+            title=ft.Text("Route Document"),
+            content=ft.Column([route_destination, route_user, route_remarks, route_value], spacing=10),
+            actions=[ft.TextButton("Cancel", on_click=lambda _: close_route_dialog()), ft.Button("Route", on_click=lambda _: submit_route(doc, route_destination, route_user, route_remarks, route_value))],
+        )
+        def close_route_dialog():
+            route_dialog.open = False
+            page.update()
+        def submit_route(document, destination_field, user_field, remarks_field, route_field):
+            payload = {
+                "destination_office": (destination_field.value or "").strip(),
+                "assigned_user": (user_field.value or "").strip(),
+                "remarks": (remarks_field.value or "").strip(),
+                "route": (route_field.value or "Routing").strip(),
+                "status": "In Routing",
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "time": datetime.now().strftime("%H:%M"),
+            }
+            try:
+                response = requests.post(f"{BACKEND_URL}/documents/{document.get('id')}/route", json=payload, verify=False, timeout=10)
+                if response.status_code != 200:
+                    raise Exception(response.text)
+                load_documents_table()
+                close_route_dialog()
+                show_document_notice("Document routed successfully.")
+            except Exception as exc:
+                show_document_notice(f"Routing failed: {exc}")
+        page.overlay.append(route_dialog)
+        route_dialog.open = True
+        page.update()
+
+    def show_document_details(doc):
+        try:
+            response = requests.get(f"{BACKEND_URL}/documents/{doc.get('id')}", verify=False, timeout=10)
+            if response.status_code == 200:
+                doc = normalize_document(response.json())
+            else:
+                raise Exception(response.text)
+        except Exception as exc:
+            show_document_notice(f"Unable to load document details: {exc}")
+            return
+
+        status_color, status_bg = get_document_status_style(doc.get("status", "Pending"))
+        details_content = ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=ft.Colors.BLUE_700, size=26),
+                        ft.Column(
+                            [
+                                ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13, weight=ft.FontWeight.BOLD),
+                                ft.Text(doc.get("title", "-"), size=16, weight=ft.FontWeight.BOLD),
+                            ],
+                            spacing=2,
+                            expand=True,
+                        ),
+                        ft.Container(
+                            content=ft.Text(doc.get("status", "Pending"), size=12, weight=ft.FontWeight.BOLD, color=status_color),
+                            bgcolor=status_bg,
+                            padding=8,
+                            border_radius=14,
+                        ),
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Divider(height=1),
+                ft.Text(doc.get("description", "No description provided."), size=13, color=ft.Colors.BLUE_GREY_700),
+                ft.Row(
+                    [
+                        ft.Column([ft.Text("Document Type", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("document_type", "-"), size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("Category", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("category", "-"), size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
+                ft.Row(
+                    [
+                        ft.Column([ft.Text("Originating Office", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("originating_office", "-"), size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("Current Office", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("current_office", "-"), size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
+                ft.Row(
+                    [
+                        ft.Column([ft.Text("Assigned User", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("assigned_to", "-"), size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("Priority", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("priority", "-"), size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
+                ft.Row(
+                    [
+                        ft.Column([ft.Text("Author", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("author", "-"), size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("Session", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("session", "-"), size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
+                ft.Row(
+                    [
+                        ft.Column([ft.Text("Date Registered", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("date_registered", doc.get("date_received", "-")), size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("Created By", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("created_by", "-"), size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
+                ft.Row(
+                    [
+                        ft.Column([ft.Text("Attachment", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("attachment_name", "-"), size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("Updated Date", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("last_updated", "-"), size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text("QR Preview", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
+                            ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Icon(ft.Icons.QR_CODE_2, size=64, color=ft.Colors.BLUE_700),
+                                        ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=12, color=ft.Colors.BLUE_GREY_600),
+                                    ],
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=6,
+                                ),
+                                width=180,
+                                padding=18,
+                                bgcolor=ft.Colors.BLUE_GREY_50,
+                                border_radius=18,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.OutlinedButton("Generate QR", icon=ft.Icons.QR_CODE_2, on_click=lambda _, d=doc: regenerate_qr_code(d.get("id"))),
+                                    ft.OutlinedButton("Print QR", icon=ft.Icons.PRINT_OUTLINED, on_click=lambda _: show_document_notice("QR print preview activated.")),
+                                ],
+                                spacing=8,
+                            ),
+                        ],
+                        spacing=10,
+                    ),
+                    padding=6,
+                ),
+                ft.Text("Routing History", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                ft.Column(
+                    [
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(item.get("route", item.get("action", "Action")), size=12, weight=ft.FontWeight.BOLD),
+                                    ft.Text(f"{item.get('date', '-')} {item.get('time', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
+                                    ft.Text(f"From: {item.get('from', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
+                                    ft.Text(f"To: {item.get('to', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
+                                    ft.Text(f"User: {item.get('user', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
+                                    ft.Text(f"Remarks: {item.get('remarks', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
+                                    ft.Text(f"Status: {item.get('status', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
+                                ],
+                                spacing=3,
+                            ),
+                            padding=10,
+                            bgcolor=ft.Colors.BLUE_GREY_50,
+                            border_radius=14,
+                        )
+                        for item in sorted(doc.get("routing_history", []), key=lambda item: item.get("date", "") + item.get("time", ""), reverse=True)
+                    ],
+                    spacing=8,
+                ),
+            ],
+            spacing=12,
+            scroll=ft.ScrollMode.AUTO,
+        )
+        documents_details_dialog.content = ft.Container(content=details_content, padding=8, width=540)
+        documents_details_dialog.open = True
+        page.update()
+
+    def regenerate_qr_code(document_id):
+        try:
+            response = requests.post(f"{BACKEND_URL}/documents/{document_id}/qr", verify=False, timeout=10)
+            if response.status_code != 200:
+                raise Exception(response.text)
+            load_documents_table()
+            show_document_notice("QR regenerated successfully.")
+        except Exception as exc:
+            show_document_notice(f"QR failed: {exc}")
+
+    def build_document_summary_cards():
+        total_documents = len(documents_data)
+        pending_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "pending")
+        routing_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"in routing", "routed"})
+        completed_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"approved", "completed"})
+        archived_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "archived")
+        summary_items = [
+            {"title": "Total Documents", "value": str(total_documents), "detail": "Tracked records", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
+            {"title": "Pending", "value": str(pending_count), "detail": "Awaiting attention", "icon": ft.Icons.HOURGLASS_EMPTY_OUTLINED, "accent": ft.Colors.ORANGE_700},
+            {"title": "In Routing", "value": str(routing_count), "detail": "Currently moving", "icon": ft.Icons.SYNC_ALT_OUTLINED, "accent": ft.Colors.BLUE_700},
+            {"title": "Completed", "value": str(completed_count), "detail": "Finalized items", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.GREEN_700},
+            {"title": "Archived", "value": str(archived_count), "detail": "Stored for reference", "icon": ft.Icons.ARCHIVE_OUTLINED, "accent": ft.Colors.BLUE_GREY_700},
+        ]
+        cards = []
+        for item in summary_items:
+            cards.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row([ft.Icon(item["icon"], color=item["accent"], size=22), ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Text(item["value"], size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                            ft.Text(item["detail"], size=12, color=ft.Colors.BLUE_GREY_600),
+                        ],
+                        spacing=6,
+                    ),
+                    padding=16,
+                    bgcolor=ft.Colors.WHITE,
+                    border_radius=18,
+                    width=190,
+                )
+            )
+        return cards
+
+    def get_visible_documents():
+        return documents_data
+
+    def normalize_document(doc):
+        return {
+            "id": doc.get("id"),
+            "tracking_number": doc.get("tracking_number") or doc.get("tracking_no") or "-",
+            "title": doc.get("title") or "-",
+            "description": doc.get("description") or "",
+            "document_type": doc.get("document_type") or doc.get("type") or "-",
+            "category": doc.get("category") or "-",
+            "originating_office": doc.get("originating_office") or "-",
+            "current_office": doc.get("current_office") or "-",
+            "assigned_to": doc.get("assigned_to") or "-",
+            "status": doc.get("status") or "Pending",
+            "priority": doc.get("priority") or "Medium",
+            "date_received": doc.get("created_at") or doc.get("date_received") or "-",
+            "last_updated": doc.get("updated_at") or doc.get("last_updated") or doc.get("created_at") or "-",
+            "created_by": doc.get("created_by") or "-",
+            "author": doc.get("author") or "-",
+            "session": doc.get("session") or "-",
+            "date_registered": doc.get("date_registered") or doc.get("created_at") or "-",
+            "attachment_name": doc.get("attachment_name") or "-",
+            "remarks": doc.get("remarks") or "",
+            "attachments": doc.get("attachments") or [],
+            "routing_history": doc.get("routing_history") or [],
+            "archived": bool(doc.get("archived", False)),
+        }
+
+    def create_document_record(payload):
+        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
+        try:
+            # If a file has been selected in the form, send multipart/form-data
+            if documents_form_attachment_file is not None:
+                files = {
+                    "file": (
+                        documents_form_attachment_file_name,
+                        io.BytesIO(documents_form_attachment_file),
+                        mimetypes.guess_type(documents_form_attachment_file_name)[0] or "application/octet-stream",
+                    )
+                }
+                # include form fields as data
+                data = {k: (v if v is not None else "") for k, v in payload.items()}
+                response = requests.post(f"{BACKEND_URL}/documents", data=data, files=files, headers=get_admin_headers(), verify=False, timeout=30)
+            else:
+                # No file: send JSON metadata-only create
+                response = requests.post(f"{BACKEND_URL}/documents", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
+            if response.status_code not in {200, 201}:
+                raise Exception(response.text)
+            # reset attachment state
+            documents_form_attachment_display.value = "No file selected"
+            # clear in-memory file
+            documents_form_attachment_file = None
+            documents_form_attachment_file_name = ""
+            documents_form_title_auto_generated = False
+            load_documents_table()
+            show_document_notice("Document created successfully.")
+        except Exception as exc:
+            show_document_notice(f"Create failed: {exc}")
+
+    def update_document_record(document_id, payload):
+        try:
+            response = requests.put(f"{BACKEND_URL}/documents/{document_id}", json=payload, verify=False, timeout=10)
+            if response.status_code != 200:
+                raise Exception(response.text)
+            load_documents_table()
+            show_document_notice("Document updated successfully.")
+        except Exception as exc:
+            show_document_notice(f"Update failed: {exc}")
+
+    def delete_document_record(document_id):
+        try:
+            response = requests.delete(f"{BACKEND_URL}/documents/{document_id}", verify=False, timeout=10)
+            if response.status_code != 200:
+                raise Exception(response.text)
+            load_documents_table()
+            show_document_notice("Document archived successfully.")
+        except Exception as exc:
+            show_document_notice(f"Delete failed: {exc}")
+
     def load_documents_table():
+        try:
+            params = {}
+            if documents_search_field.value:
+                params["search"] = documents_search_field.value.strip()
+            if documents_status_filter.value and documents_status_filter.value != "All":
+                params["status"] = documents_status_filter.value
+            if documents_type_filter.value and documents_type_filter.value != "All":
+                params["document_type"] = documents_type_filter.value
+            if documents_category_filter.value and documents_category_filter.value != "All":
+                params["category"] = documents_category_filter.value
+            if documents_assigned_filter.value and documents_assigned_filter.value != "All":
+                params["current_office"] = documents_assigned_filter.value
+            if documents_year_filter.value:
+                params["start_date"] = documents_year_filter.value
+            if documents_filter_end_date.value:
+                params["end_date"] = documents_filter_end_date.value
+            response = requests.get(f"{BACKEND_URL}/documents", params=params, verify=False, timeout=10)
+            if response.status_code != 200:
+                raise Exception(response.text)
+            payload = response.json() if response.content else []
+            documents_data[:] = [normalize_document(doc) for doc in payload]
+        except Exception as exc:
+            documents_data[:] = []
+            documents_notice.value = f"Unable to load documents: {exc}"
+            page.update()
+            return
+
+        visible_documents = get_visible_documents()
+        if documents_sort_filter.value == "Oldest":
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=False)
+        elif documents_sort_filter.value == "Title":
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("title", "")).lower(), reverse=False)
+        else:
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=True)
         rows = []
-        for doc in DOCUMENTS_SAMPLE:
+        for doc in visible_documents:
+            status = doc.get("status", "Pending")
+            status_color, status_bg = get_document_status_style(status)
+            actions = [
+                ft.PopupMenuItem(content="View Details", on_click=lambda _, d=doc: show_document_details(d)),
+                ft.PopupMenuItem(content="Edit", on_click=lambda _, d=doc: open_document_form(d)),
+                ft.PopupMenuItem(content="Route Document", on_click=lambda _, d=doc: open_route_dialog(d)),
+                ft.PopupMenuItem(content="View Routing History", on_click=lambda _, d=doc: show_document_details(d)),
+                ft.PopupMenuItem(content="Generate QR", on_click=lambda _, d=doc: regenerate_qr_code(d.get("id"))),
+                ft.PopupMenuItem(content="Print QR", on_click=lambda _: show_document_notice("QR print preview enabled.")),
+                ft.PopupMenuItem(content="Download", on_click=lambda _: show_document_notice("Download action preview enabled.")),
+                ft.PopupMenuItem(content="Archive", on_click=lambda _, d=doc: delete_document_record(d.get("id"))),
+            ]
             rows.append(
                 ft.DataRow(
                     cells=[
-                        ft.DataCell(ft.Text(doc["id"])),
-                        ft.DataCell(ft.Text(doc["title"])),
-                        ft.DataCell(ft.Text(doc["type"])),
-                        ft.DataCell(ft.Text(doc["status"])),
-                        ft.DataCell(ft.Text(doc["assigned_committee"])),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13), width=100)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("title", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=220)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("originating_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=150)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("current_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=140)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("assigned_to", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=110)),
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.Text(status, size=12, color=status_color),
+                                bgcolor=status_bg,
+                                padding=6,
+                                border_radius=12,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("priority", "-"), size=13), width=80)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("date_received", "-"), size=13), width=100)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("last_updated", "-"), size=13), width=100)),
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
+                                width=90,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ),
                     ],
                 )
             )
         documents_table.rows = rows
-        documents_notice.value = "Document design preview only. Backend integration is disabled."
+        documents_notice.value = f"Showing {len(visible_documents)} document(s)." if visible_documents else "No documents match the current filters."
+        page.update()
+
+    def reset_document_filters():
+        documents_search_field.value = ""
+        documents_status_filter.value = "All"
+        documents_type_filter.value = "All"
+        documents_category_filter.value = "All"
+        documents_assigned_filter.value = "All"
+        documents_sort_filter.value = "Newest"
+        documents_year_filter.value = ""
+        documents_filter_end_date.value = ""
+        load_documents_table()
         page.update()
 
     def open_documents_view(_=None):
@@ -761,12 +1442,35 @@ def main(page: ft.Page):
 
     def documents_view():
         try:
+            print("documents_view: building document controls")
+            documents_controls = {
+                "summary_cards": build_document_summary_cards(),
+                "search_field": documents_search_field,
+                "status_filter": documents_status_filter,
+                "category_filter": documents_category_filter,
+                "type_filter": documents_type_filter,
+                "year_filter": documents_year_filter,
+                "assigned_filter": documents_assigned_filter,
+                "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_document_form()),
+                "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: open_documents_view()),
+                "export_button": ft.Button("Export", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=lambda _: show_document_notice("Export list preview enabled.")),
+                "print_button": ft.Button("Print QR", icon=ft.Icons.PRINT_OUTLINED, on_click=lambda _: show_document_notice("Print QR preview enabled.")),
+                # Import Documents removed; attachment is part of Register Document workflow
+                "import_button": None,
+                "filter_button": ft.OutlinedButton("Apply", icon=ft.Icons.FILTER_LIST, on_click=lambda _: load_documents_table()),
+                "reset_filter_button": ft.OutlinedButton("Reset", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
+                "sort_filter": documents_sort_filter,
+                "start_date_filter": documents_filter_start_date,
+                "end_date_filter": documents_filter_end_date,
+                "empty_state_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_document_form()),
+            }
             return build_documents_view(
                 documents_table,
                 documents_notice,
                 open_documents_view,
                 surface_card,
                 section_header,
+                documents_controls,
             )
         except Exception as e:
             import traceback

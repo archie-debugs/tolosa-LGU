@@ -13,6 +13,7 @@ from .routes.user_roles import router as user_roles_router
 from .routes.status import router as status_router
 from .routes.audit import router as audit_router
 from .routes.registration import router as registration_router
+from .routes.documents import router as documents_router
 
 app = FastAPI(title="LGU Tolosa SB Legislative Tracking Backend")
 
@@ -37,6 +38,7 @@ app.include_router(auth_router)
 app.include_router(user_roles_router)
 app.include_router(registration_router)
 app.include_router(audit_router)
+app.include_router(documents_router)
 
 
 @app.get("/health")

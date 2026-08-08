@@ -3,6 +3,33 @@ from datetime import datetime, timezone
 from .database import Base
 
 
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tracking_number = Column(String, unique=True, index=True, nullable=False)
+    title = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    document_type = Column(String, nullable=True, index=True)
+    category = Column(String, nullable=True, index=True)
+    originating_office = Column(String, nullable=True, index=True)
+    current_office = Column(String, nullable=True, index=True)
+    assigned_to = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="Pending", index=True)
+    priority = Column(String, nullable=False, default="Medium", index=True)
+    remarks = Column(Text, nullable=True)
+    author = Column(String, nullable=True, index=True)
+    session = Column(String, nullable=True, index=True)
+    date_registered = Column(String, nullable=True, index=True)
+    attachment_name = Column(String, nullable=True)
+    qr_code_value = Column(String, nullable=True, index=True)
+    routing_history = Column(Text, nullable=True, default='[]')
+    created_by = Column(String, nullable=True, index=True)
+    archived = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
+
 class User(Base):
     __tablename__ = "users"
 
