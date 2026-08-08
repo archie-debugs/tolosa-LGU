@@ -8,8 +8,9 @@ def render_shell(
     logout_user,
     nav_items,
     content_view,
+    initial_selected_index: int = 0,
 ):
-    selected_index = 0
+    selected_index = initial_selected_index
 
     # =========================================================
     # SIDEBAR
@@ -342,6 +343,6 @@ def render_shell(
     # LOAD FIRST VIEW
     # =========================================================
 
-    switch_view(0)
+    switch_view(initial_selected_index)
 
     return page

@@ -3,7 +3,7 @@ import io
 import csv
 import re
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -11,9 +11,13 @@ from .. import models, schemas
 from ..database import get_db
 from ..core import UPLOAD_DIR, record_audit_log
 import hashlib
-from sqlalchemy.exc import IntegrityError
+import mimetypes
 import os
+import qrcode
 import secrets
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 from fastapi.responses import HTMLResponse
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -119,6 +123,92 @@ def _serialize_document(doc: models.Document):
     return payload
 
 
+def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
+    if not qr_value:
+        return None
+    qr_text = str(qr_value).strip()
+    if not qr_text:
+        return None
+    normalized_tracking = _normalize_tracking_query(qr_text)
+    query = db.query(models.Document)
+    if normalized_tracking is not None:
+        canonical_tracking = f"DOC-{int(normalized_tracking)}"
+        query = query.filter(
+            or_(
+                models.Document.qr_code_value == qr_text,
+                models.Document.tracking_number == canonical_tracking,
+                models.Document.tracking_number == qr_text.upper(),
+            )
+        )
+    else:
+        query = query.filter(
+            or_(
+                models.Document.qr_code_value == qr_text,
+                models.Document.tracking_number == qr_text.upper(),
+            )
+        )
+    return query.first()
+
+
+def _append_routing_history_event(doc: models.Document, event: dict):
+    history = []
+    if doc.routing_history:
+        try:
+            history = json.loads(doc.routing_history)
+        except Exception:
+            history = []
+    history.append(event)
+    doc.routing_history = json.dumps(history)
+
+
+def _render_qr_label_pdf(documents: list[models.Document]):
+    buffer = io.BytesIO()
+    page_width, page_height = letter
+    margin = 20
+    columns = 2
+    rows = 5
+    label_width = (page_width - margin * 2) / columns
+    label_height = (page_height - margin * 2) / rows
+    pdf = canvas.Canvas(buffer, pagesize=letter)
+
+    for index, doc in enumerate(documents):
+        if index > 0 and index % (columns * rows) == 0:
+            pdf.showPage()
+        col = index % columns
+        row = (index // columns) % rows
+        x = margin + col * label_width
+        y = page_height - margin - row * label_height
+        value = doc.qr_code_value or doc.tracking_number or f"DOC-{doc.id}"
+        qr_img = qrcode.make(str(value))
+        qr_buffer = io.BytesIO()
+        qr_img.save(qr_buffer, format="PNG")
+        qr_buffer.seek(0)
+        image = ImageReader(qr_buffer)
+        img_size = min(label_width - 20, label_height - 40)
+        pdf.drawImage(image, x + 10, y - img_size - 10, width=img_size, height=img_size, mask='auto')
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawString(x + 10, y - img_size - 18, f"{doc.tracking_number}")
+        pdf.setFont("Helvetica", 9)
+        pdf.drawString(x + 10, y - img_size - 32, f"{doc.title[:40]}")
+        pdf.drawString(x + 10, y - img_size - 44, f"{doc.current_office or 'No location'}")
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer
+
+
+def _get_history_event_timestamp(item: dict):
+    if item is None:
+        return ""
+    if item.get("created_at"):
+        return str(item.get("created_at"))
+    if item.get("date") and item.get("time"):
+        return f"{item.get('date')} {item.get('time')}"
+    if item.get("date"):
+        return item.get("date")
+    return ""
+
+
 def _get_or_create_by_name(db: Session, Model, name: str):
     if not name:
         return None
@@ -160,59 +250,64 @@ def list_documents(
     year: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    archived: bool | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-        query = db.query(models.Document).filter(models.Document.archived.is_(False))
-        if search:
-            normalized_tracking = _normalize_tracking_query(search)
-            if normalized_tracking is not None and re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([1-9][0-9]*|0)", str(search).strip()):
-                canonical_tracking = f"DOC-{int(normalized_tracking)}"
-                query = query.filter(
-                    or_(
-                        models.Document.tracking_number == canonical_tracking,
-                        models.Document.tracking_number == str(search).strip().upper(),
-                    )
+    query = db.query(models.Document)
+    if archived is not None:
+        query = query.filter(models.Document.archived.is_(archived))
+    else:
+        query = query.filter(models.Document.archived.is_(False))
+    if search:
+        normalized_tracking = _normalize_tracking_query(search)
+        if normalized_tracking is not None and re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([1-9][0-9]*|0)", str(search).strip()):
+            canonical_tracking = f"DOC-{int(normalized_tracking)}"
+            query = query.filter(
+                or_(
+                    models.Document.tracking_number == canonical_tracking,
+                    models.Document.tracking_number == str(search).strip().upper(),
                 )
-            else:
-                like = f"%{search.lower()}%"
-                query = query.filter(
-                    or_(
-                        models.Document.tracking_number.ilike(like),
-                        models.Document.title.ilike(like),
-                        models.Document.description.ilike(like),
-                        models.Document.document_type.ilike(like),
-                        models.Document.category.ilike(like),
-                        models.Document.originating_office.ilike(like),
-                        models.Document.current_office.ilike(like),
-                        models.Document.assigned_to.ilike(like),
-                        models.Document.status.ilike(like),
-                        models.Document.remarks.ilike(like),
-                        models.Document.author.ilike(like),
-                        models.Document.session.ilike(like),
-                        models.Document.created_by.ilike(like),
-                    )
+            )
+        else:
+            like = f"%{search.lower()}%"
+            query = query.filter(
+                or_(
+                    models.Document.tracking_number.ilike(like),
+                    models.Document.title.ilike(like),
+                    models.Document.description.ilike(like),
+                    models.Document.document_type.ilike(like),
+                    models.Document.category.ilike(like),
+                    models.Document.originating_office.ilike(like),
+                    models.Document.current_office.ilike(like),
+                    models.Document.assigned_to.ilike(like),
+                    models.Document.status.ilike(like),
+                    models.Document.remarks.ilike(like),
+                    models.Document.author.ilike(like),
+                    models.Document.session.ilike(like),
+                    models.Document.created_by.ilike(like),
                 )
-        if status:
-            query = query.filter(models.Document.status == status)
-        if document_type:
-            query = query.filter(models.Document.document_type == document_type)
-        if category:
-            query = query.filter(models.Document.category == category)
-        if current_office:
-            query = query.filter(models.Document.current_office == current_office)
-        if year:
-            year_text = str(year).strip()
-            if year_text.isdigit() and len(year_text) == 4:
-                start_year = datetime(int(year_text), 1, 1, tzinfo=timezone.utc)
-                end_year = datetime(int(year_text) + 1, 1, 1, tzinfo=timezone.utc)
-                query = query.filter(models.Document.created_at >= start_year, models.Document.created_at < end_year)
-        if start_date:
-            query = query.filter(models.Document.created_at >= start_date)
-        if end_date:
-            query = query.filter(models.Document.created_at <= end_date)
+            )
+    if status:
+        query = query.filter(models.Document.status == status)
+    if document_type:
+        query = query.filter(models.Document.document_type == document_type)
+    if category:
+        query = query.filter(models.Document.category == category)
+    if current_office:
+        query = query.filter(models.Document.current_office == current_office)
+    if year:
+        year_text = str(year).strip()
+        if year_text.isdigit() and len(year_text) == 4:
+            start_year = datetime(int(year_text), 1, 1, tzinfo=timezone.utc)
+            end_year = datetime(int(year_text) + 1, 1, 1, tzinfo=timezone.utc)
+            query = query.filter(models.Document.created_at >= start_year, models.Document.created_at < end_year)
+    if start_date:
+        query = query.filter(models.Document.created_at >= start_date)
+    if end_date:
+        query = query.filter(models.Document.created_at <= end_date)
 
-        docs = query.order_by(models.Document.created_at.desc()).all()
-        return [_serialize_document(doc) for doc in docs]
+    docs = query.order_by(models.Document.created_at.desc()).all()
+    return [_serialize_document(doc) for doc in docs]
 
 
 
@@ -449,6 +544,136 @@ def regenerate_qr(document_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(doc)
     return _serialize_document(doc)
+
+
+@router.post("/scan", response_model=schemas.DocumentResponse)
+def scan_document(payload: dict = Body(...), db: Session = Depends(get_db)):
+    qr_value = (payload.get("qr_value") or "").strip()
+    if not qr_value:
+        raise HTTPException(status_code=400, detail="QR value is required")
+
+    doc = _find_document_by_qr_or_tracking(db, qr_value)
+    scanner = (payload.get("scanner") or "Unknown").strip() or "Unknown"
+    current_location = (payload.get("current_location") or "").strip()
+    destination = (payload.get("destination") or "").strip()
+    action = (payload.get("action") or "Scan").strip() or "Scan"
+    status_value = (payload.get("status") or "").strip() or doc.status or "In Routing"
+    remarks = (payload.get("remarks") or "").strip() or action
+
+    if not doc:
+        record_audit_log(
+            db,
+            actor=scanner,
+            action="QR_SCAN_UNRECOGNIZED",
+            target_type="Document",
+            target_id=qr_value,
+            details=json.dumps({"scanner": scanner, "current_location": current_location, "destination": destination, "action": action, "status": status_value, "remarks": remarks}),
+        )
+        raise HTTPException(status_code=404, detail="Document not found for provided QR/tracking value")
+
+    from_office = doc.current_office or doc.originating_office or "Unknown"
+    to_office = destination or current_location or from_office
+
+    event = {
+        "date": payload.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "time": payload.get("time") or datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        "from": from_office,
+        "to": to_office,
+        "user": scanner,
+        "remarks": remarks,
+        "status": status_value,
+        "route": action,
+    }
+    _append_routing_history_event(doc, event)
+
+    doc.current_office = to_office
+    doc.assigned_to = scanner or doc.assigned_to
+    doc.status = status_value
+    db.add(doc)
+
+    try:
+        history_row = models.DocumentHistory(
+            document_id=doc.id,
+            action=action,
+            actor=scanner,
+            from_office=from_office,
+            to_office=to_office,
+            notes=remarks,
+        )
+        db.add(history_row)
+    except Exception:
+        pass
+
+    db.commit()
+    record_audit_log(
+        db,
+        actor=scanner,
+        action="QR_SCAN_SUCCESS",
+        target_type="Document",
+        target_id=doc.tracking_number,
+        details=json.dumps({"from": from_office, "to": to_office, "status": status_value, "action": action}),
+    )
+    db.refresh(doc)
+    return _serialize_document(doc)
+
+
+@router.get("/qr/labels")
+def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depends(get_db)):
+    query = db.query(models.Document).filter(models.Document.archived.is_(False))
+    if ids:
+        id_list = [int(item.strip()) for item in str(ids).split(",") if item.strip().isdigit()]
+        if id_list:
+            query = query.filter(models.Document.id.in_(id_list))
+    documents = query.order_by(models.Document.id.asc()).all()
+    if not documents:
+        raise HTTPException(status_code=404, detail="No documents found for QR label generation")
+    pdf_buffer = _render_qr_label_pdf(documents)
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=qr_labels.pdf"},
+    )
+
+
+@router.get("/qr/monitor")
+def monitor_qr(db: Session = Depends(get_db)):
+    total_documents = db.query(models.Document).filter(models.Document.archived.is_(False)).count()
+    successful_scans = db.query(models.AuditLog).filter(models.AuditLog.action == "QR_SCAN_SUCCESS").count()
+    unrecognized_scans = db.query(models.AuditLog).filter(models.AuditLog.action == "QR_SCAN_UNRECOGNIZED").count()
+    latest_scan_log = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.action.in_(["QR_SCAN_SUCCESS", "QR_SCAN_UNRECOGNIZED"]))
+        .order_by(models.AuditLog.created_at.desc())
+        .first()
+    )
+    latest_scan = {
+        "actor": latest_scan_log.actor,
+        "action": latest_scan_log.action,
+        "target_id": latest_scan_log.target_id,
+        "details": latest_scan_log.details,
+        "created_at": latest_scan_log.created_at.isoformat() if latest_scan_log and latest_scan_log.created_at else None,
+    } if latest_scan_log else None
+
+    documents = db.query(models.Document).filter(models.Document.archived.is_(False)).order_by(models.Document.updated_at.desc()).limit(100).all()
+    documents_summary = [
+        {
+            "id": doc.id,
+            "tracking_number": doc.tracking_number,
+            "qr_code_value": doc.qr_code_value,
+            "status": doc.status,
+            "current_office": doc.current_office,
+            "last_updated": doc.updated_at.isoformat() if doc.updated_at else None,
+        }
+        for doc in documents
+    ]
+
+    return {
+        "total_documents": total_documents,
+        "successful_scans": successful_scans,
+        "unrecognized_scans": unrecognized_scans,
+        "latest_scan": latest_scan,
+        "documents": documents_summary,
+    }
 
 
 @router.delete("/{document_id:int}")

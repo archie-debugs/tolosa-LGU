@@ -35,9 +35,13 @@ def build_documents_view(
 
     register_button = documents_controls.get("register_button")
     refresh_button = documents_controls.get("refresh_button")
+    qr_monitor_button = documents_controls.get("qr_monitor_button")
+    qr_labels_button = documents_controls.get("qr_labels_button")
     export_button = documents_controls.get("export_button")
     print_button = documents_controls.get("print_button")
     import_button = documents_controls.get("import_button")
+
+    scan_field = documents_controls.get("scan_field")
 
     filter_button = documents_controls.get("filter_button")
     reset_filter_button = documents_controls.get("reset_filter_button")
@@ -67,6 +71,8 @@ def build_documents_view(
     action_controls = [
         register_button,
         refresh_button,
+        qr_monitor_button,
+        qr_labels_button,
         export_button,
         print_button,
         import_button,
@@ -104,6 +110,10 @@ def build_documents_view(
             spacing=0,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
+    else:
+        search_row = None
+
+    scan_row = None
 
     # =========================================================
     # FILTERS
@@ -152,6 +162,9 @@ def build_documents_view(
 
     if search_row is not None:
         top_controls.append(search_row)
+
+    if scan_row is not None:
+        top_controls.append(scan_row)
 
     if filters_row is not None:
         top_controls.append(filters_row)

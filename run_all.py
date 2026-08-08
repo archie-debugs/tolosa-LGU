@@ -9,6 +9,8 @@ Options:
 
 The script starts child processes and will terminate them on Ctrl+C.
 """
+import os
+import socket
 import subprocess
 import sys
 import time
@@ -31,6 +33,16 @@ def start_process(name, script_path):
     p = subprocess.Popen(cmd, cwd=str(REPO_ROOT))
     children.append((name, p))
     print(f"{name} started (pid {p.pid})")
+
+
+def check_port_available(host: str, port: int):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        try:
+            sock.bind((host, port))
+            return True
+        except OSError:
+            return False
 
 
 def stop_all():
@@ -57,13 +69,22 @@ def stop_all():
 def main():
     args = set(sys.argv[1:])
     try:
+        backend_port = int(os.getenv("PORT", "8001"))
+        backend_host = "0.0.0.0"
+        if not check_port_available(backend_host, backend_port):
+            print(f"Port {backend_port} is already in use. Backend cannot start.")
+            return
+
         # Start backend first
         start_process("backend", str(REPO_ROOT / "run_backend.py"))
         time.sleep(0.6)
 
-        if "--no-admin" not in args:
-            start_process("admin", FRONTENDS["admin"])
-        print("All processes started. Press Ctrl+C to stop.")
+        if children and children[0][1].poll() is None:
+            if "--no-admin" not in args:
+                start_process("admin", FRONTENDS["admin"])
+            print("All processes started. Press Ctrl+C to stop.")
+        else:
+            print("Backend failed to start. Admin frontend will not be launched.")
 
         # Wait until children exit or user interrupts
         while True:
