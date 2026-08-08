@@ -9,60 +9,114 @@ def build_documents_view(
     section_header,
     documents_controls=None,
 ):
+    """
+    Compact Documents workspace.
+
+    This UI intentionally does NOT create a large empty/gray
+    dashboard area above the document table.
+
+    Existing controls are preserved so the current frontend
+    integration can continue to use them.
+    """
+
     documents_controls = documents_controls or {}
-    summary_cards = documents_controls.get("summary_cards", [])
+
+    # =========================================================
+    # CONTROLS
+    # =========================================================
+
     search_field = documents_controls.get("search_field")
+
     status_filter = documents_controls.get("status_filter")
     category_filter = documents_controls.get("category_filter")
     type_filter = documents_controls.get("type_filter")
     year_filter = documents_controls.get("year_filter")
     assigned_filter = documents_controls.get("assigned_filter")
+
     register_button = documents_controls.get("register_button")
     refresh_button = documents_controls.get("refresh_button")
     export_button = documents_controls.get("export_button")
     print_button = documents_controls.get("print_button")
+    import_button = documents_controls.get("import_button")
+
     filter_button = documents_controls.get("filter_button")
     reset_filter_button = documents_controls.get("reset_filter_button")
+
     sort_filter = documents_controls.get("sort_filter")
+
     start_date_filter = documents_controls.get("start_date_filter")
     end_date_filter = documents_controls.get("end_date_filter")
-    empty_state_button = documents_controls.get("empty_state_button", register_button)
 
-    toolbar_controls = [
+    # =========================================================
+    # DOCUMENTS HEADER
+    # =========================================================
+
+    header = section_header(
+        "Documents",
+        "Manage legislative documents, routing progress, and record history.",
+        ft.Icons.DESCRIPTION_OUTLINED,
+        ft.Colors.BLUE_700,
+    )
+
+    # =========================================================
+    # ACTION BUTTONS
+    # =========================================================
+
+    action_controls = [
         register_button,
         refresh_button,
         export_button,
         print_button,
-        documents_controls.get("import_button"),
+        import_button,
         filter_button,
     ]
-    toolbar_controls = [control for control in toolbar_controls if control is not None]
 
-    # Header area: title, subtitle and toolbar/filters (kept compact)
-    header_content = [
-        section_header(
-            "Documents",
-            "Manage legislative documents, routing progress, and record history.",
-            ft.Icons.DESCRIPTION_OUTLINED,
-            ft.Colors.BLUE_700,
-        ),
-        ft.Divider(height=1),
+    action_controls = [
+        control
+        for control in action_controls
+        if control is not None
     ]
 
-    if summary_cards:
-        header_content.append(
-            ft.Row(summary_cards, wrap=True, spacing=10, run_spacing=10)
+    action_row = ft.Row(
+        controls=action_controls,
+        spacing=8,
+        run_spacing=8,
+        wrap=True,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    # =========================================================
+    # SEARCH
+    # =========================================================
+
+    search_row = None
+
+    if search_field is not None:
+        search_row = ft.Row(
+            controls=[
+                ft.Container(
+                    content=ft.Icon(
+                        ft.Icons.SEARCH,
+                        size=20,
+                        color=ft.Colors.BLUE_GREY_500,
+                    ),
+                    padding=ft.Padding.only(
+                        left=12,
+                        right=4,
+                    ),
+                ),
+                ft.Container(
+                    content=search_field,
+                    expand=True,
+                ),
+            ],
+            spacing=0,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-    toolbar_row = []
-    if toolbar_controls:
-        toolbar_row.extend(toolbar_controls)
-    if search_field is not None:
-        toolbar_row.append(search_field)
-    if toolbar_row:
-        header_content.append(
-            ft.Row(toolbar_row, wrap=True, spacing=8, run_spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-        )
+    # =========================================================
+    # FILTERS
+    # =========================================================
 
     filter_controls = [
         status_filter,
@@ -75,71 +129,228 @@ def build_documents_view(
         end_date_filter,
         reset_filter_button,
     ]
-    filter_controls = [control for control in filter_controls if control is not None]
+
+    filter_controls = [
+        control
+        for control in filter_controls
+        if control is not None
+    ]
+
+    filters_row = None
+
     if filter_controls:
-        header_content.append(
-            ft.Row(filter_controls, wrap=True, spacing=8, run_spacing=8)
+        filters_row = ft.Row(
+            controls=filter_controls,
+            spacing=8,
+            run_spacing=8,
+            wrap=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-    # Table container: will be placed inside the remaining page area and made scrollable via the inner column
-    table_container = ft.Container(
-        content=ft.Column(
-            [documents_table],
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
+    # =========================================================
+    # TOP DOCUMENT AREA
+    # =========================================================
+
+    top_controls = [
+        header,
+        ft.Divider(
+            height=1,
+            color=ft.Colors.BLUE_GREY_100,
         ),
-        bgcolor=ft.Colors.WHITE,
-        border_radius=12,
-        padding=8,
-        expand=True,
+        action_row,
+    ]
+
+    if search_row is not None:
+        top_controls.append(search_row)
+
+    if filters_row is not None:
+        top_controls.append(filters_row)
+
+    documents_header_card = surface_card(
+        ft.Column(
+            controls=top_controls,
+            spacing=12,
+        ),
+        padding=18,
+        expand=False,
     )
 
-    table_section = []
-    if getattr(documents_table, "rows", None) and len(documents_table.rows) > 0:
-        table_section.append(table_container)
-    else:
-        table_section.append(
-            ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=44, color=ft.Colors.BLUE_GREY_400),
-                        ft.Text("No documents found", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
-                        ft.Text("Register a new document to get started and keep your tracking workspace active.", size=13, color=ft.Colors.BLUE_GREY_600),
-                        empty_state_button if empty_state_button is not None else ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_document_dialog(None)),
-                    ],
-                    spacing=10,
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=28,
-                border_radius=20,
-                bgcolor=ft.Colors.BLUE_GREY_50,
-            )
+    # =========================================================
+    # TABLE TITLE
+    # =========================================================
+
+    table_title = ft.Row(
+        controls=[
+            ft.Row(
+                controls=[
+                    ft.Icon(
+                        ft.Icons.TABLE_ROWS_OUTLINED,
+                        size=20,
+                        color=ft.Colors.BLUE_700,
+                    ),
+                    ft.Text(
+                        "Document Records",
+                        size=16,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.BLUE_900,
+                    ),
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+        ],
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    # =========================================================
+    # TABLE CONTENT
+    # =========================================================
+
+    table_has_rows = bool(
+        getattr(
+            documents_table,
+            "rows",
+            None,
+        )
+        and len(
+            documents_table.rows
+        ) > 0
+    )
+
+    if table_has_rows:
+
+        # -----------------------------------------------------
+        # COMPACT TABLE CONTAINER
+        # -----------------------------------------------------
+
+        table_scroll = ft.Row(
+            controls=[documents_table],
+            width=1600,
+            scroll=ft.ScrollMode.AUTO,
+            spacing=0,
         )
 
-    # Build final layout: header (compact) + table area that consumes remaining vertical space and scrolls internally
-    header_only = ft.Column(header_content, spacing=12)
+        table_container = ft.Container(
+            content=table_scroll,
+            height=500,
+            bgcolor=ft.Colors.WHITE,
+            border=ft.Border.all(
+                1,
+                ft.Colors.BLUE_GREY_100,
+            ),
+            border_radius=10,
+            padding=6,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            expand=False,
+        )
 
-    # If there are no documents, show empty state inside the table area
-    if getattr(documents_table, "rows", None) and len(documents_table.rows) > 0:
-        table_area_content = table_container
     else:
-        table_area_content = table_section[0]
+
+        # -----------------------------------------------------
+        # EMPTY STATE
+        # -----------------------------------------------------
+
+        empty_button = documents_controls.get(
+            "empty_state_button",
+            register_button,
+        )
+
+        if empty_button is None:
+            empty_button = ft.Button(
+                "Register Document",
+                icon=ft.Icons.ADD,
+                on_click=lambda e: open_document_dialog(None),
+            )
+
+        empty_state = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Icon(
+                        ft.Icons.DESCRIPTION_OUTLINED,
+                        size=42,
+                        color=ft.Colors.BLUE_GREY_400,
+                    ),
+                    ft.Text(
+                        "No documents found",
+                        size=16,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.BLUE_GREY_800,
+                    ),
+                    ft.Text(
+                        "Register a document to begin tracking.",
+                        size=13,
+                        color=ft.Colors.BLUE_GREY_600,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    empty_button,
+                ],
+                spacing=10,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            height=220,
+            bgcolor=ft.Colors.WHITE,
+            border=ft.Border.all(
+                1,
+                ft.Colors.BLUE_GREY_100,
+            ),
+            border_radius=10,
+            alignment=ft.Alignment.CENTER,
+        )
+
+        table_container = empty_state
+
+    # =========================================================
+    # DOCUMENT TABLE CARD
+    # =========================================================
+
+    table_card = surface_card(
+        ft.Column(
+            controls=[
+                table_title,
+                table_container,
+            ],
+            spacing=10,
+        ),
+        padding=14,
+        expand=False,
+    )
+
+    # =========================================================
+    # NOTICE
+    # =========================================================
+
+    notice_container = None
+
+    if documents_notice is not None:
+        notice_container = ft.Container(
+            content=documents_notice,
+            padding=ft.Padding.only(
+                left=4,
+                right=4,
+                top=4,
+                bottom=0,
+            ),
+            expand=False,
+        )
+
+    # =========================================================
+    # FINAL VIEW
+    # =========================================================
+
+    final_controls = [
+        documents_header_card,
+        table_card,
+    ]
+
+    if notice_container is not None:
+        final_controls.append(
+            notice_container
+        )
 
     return ft.Column(
-        [
-            # Compact header card
-            surface_card(header_only, padding=12, expand=False),
-            ft.Container(
-                content=ft.Column(
-                    [table_area_content],
-                    expand=True,
-                    scroll=ft.ScrollMode.AUTO,
-                ),
-                padding=12,
-                expand=True,
-            ),
-            # Notice / status line
-            ft.Container(content=ft.Text(documents_notice.value, size=12, color=ft.Colors.BLUE_GREY_600), padding=ft.Padding.only(top=6, bottom=6)),
-        ],
-        expand=True,
+        controls=final_controls,
+        spacing=10,
+        expand=False,
+        tight=True,
     )

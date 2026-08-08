@@ -26,12 +26,11 @@ from frontend.frontend_admin.documents import build_documents_view
 from frontend.frontend_admin.users_roles import build_users_roles_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
 from frontend.frontend_admin.admin_shell import render_shell
-from frontend.frontend_admin.admindashboard import build_admin_dashboard_view
 
 def main(page: ft.Page):
     page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.bgcolor = ft.Colors.BLUE_GREY_100
+    page.bgcolor = ft.Colors.WHITE
     page.scroll = ft.ScrollMode.AUTO
     page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
     page.vertical_alignment = ft.MainAxisAlignment.START
@@ -154,13 +153,6 @@ def main(page: ft.Page):
     )
     page.overlay.append(user_details_dialog)
 
-    dashboard_action_dialog = ft.AlertDialog(
-        title=ft.Text("Frontend preview"),
-        content=ft.Text("This action is only a visual preview. No backend or database changes are performed."),
-        actions=[ft.TextButton("Close", on_click=lambda _: close_dashboard_action_dialog())],
-    )
-    page.overlay.append(dashboard_action_dialog)
-
     def refresh_user_display_ids(users):
         for idx, user in enumerate(users, start=1):
             user["display_id"] = idx
@@ -196,10 +188,6 @@ def main(page: ft.Page):
             spacing=14,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-
-    def close_dashboard_action_dialog():
-        dashboard_action_dialog.open = False
-        page.update()
 
     def close_user_details_dialog():
         user_details_dialog.open = False
@@ -285,10 +273,6 @@ def main(page: ft.Page):
 
     def show_not_implemented_action(action_name):
         users_notice.value = f"{action_name} is not yet implemented in the backend."
-        page.update()
-
-    def open_preview_notice(_=None):
-        dashboard_action_dialog.open = True
         page.update()
 
     def load_users_table():
@@ -592,9 +576,6 @@ def main(page: ft.Page):
         delete_committee_dialog.open = False
         page.update()
 
-    def workflow_summary_section():
-        return ft.Text("The admin dashboard includes user, committee, and audit tools.", size=13, color=ft.Colors.BLUE_GREY_600)
-
     def load_audit_logs_view():
         try:
             response = requests.get(f"{BACKEND_URL}/audit/logs", headers=get_admin_headers(), verify=False)
@@ -638,15 +619,6 @@ def main(page: ft.Page):
             tb = traceback.format_exc()
             print("audit_logs_view error:\n", tb)
             return ft.Column([ft.Text("Error building Audit Logs view"), ft.Text(str(e)), ft.Text(tb)])
-
-    def build_dashboard_view():
-        try:
-            return build_admin_dashboard_view(surface_card, section_header, open_preview_notice)
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            print("dashboard_view error:\n", tb)
-            return ft.Column([ft.Text("Error building Dashboard view"), ft.Text(str(e)), ft.Text(tb)])
 
     def committees_view():
         committee_rows = []
@@ -906,29 +878,66 @@ def main(page: ft.Page):
     )
     page.overlay.append(documents_details_dialog)
 
-    documents_table = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("Tracking No.", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Title", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Document Type", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Category", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Originating Office", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Current Office", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Assigned To", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Priority", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Date Received", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Last Updated", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
+    pending_delete_document = None
+    documents_delete_dialog = ft.AlertDialog(
+        title=ft.Text("Delete Document"),
+        content=ft.Text(""),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_documents_delete_dialog()),
+            ft.Button("Delete", icon=ft.Icons.DELETE_OUTLINE, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE, on_click=lambda _: run_delete_document_action()),
         ],
-        rows=[],
-        expand=True,
-        column_spacing=10,
-        horizontal_margin=0,
-        data_row_min_height=52,
-        data_text_style=ft.TextStyle(size=13),
-        heading_text_style=ft.TextStyle(size=12, weight=ft.FontWeight.BOLD),
     )
+    page.overlay.append(documents_delete_dialog)
+
+    documents_table = ft.DataTable(
+    columns=[
+        ft.DataColumn(
+            ft.Text("Actions", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Tracking No.", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Title", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Document Type", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Category", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Originating Office", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Current Office", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Assigned To", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Status", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Priority", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Date Received", weight=ft.FontWeight.BOLD)
+        ),
+        ft.DataColumn(
+            ft.Text("Last Updated", weight=ft.FontWeight.BOLD)
+        ),
+    ],
+    rows=[],
+    column_spacing=10,
+    horizontal_margin=0,
+    data_row_min_height=52,
+    data_text_style=ft.TextStyle(size=13),
+    heading_text_style=ft.TextStyle(
+        size=12,
+        weight=ft.FontWeight.BOLD,
+    ),
+)
 
     documents_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
 
@@ -947,8 +956,47 @@ def main(page: ft.Page):
         documents_details_dialog.open = False
         page.update()
 
+    def close_documents_delete_dialog():
+        nonlocal pending_delete_document
+        pending_delete_document = None
+        documents_delete_dialog.open = False
+        page.update()
+
+    def confirm_delete_document(doc):
+        nonlocal pending_delete_document
+        pending_delete_document = doc
+        documents_delete_dialog.title = ft.Text("Delete Document")
+        documents_delete_dialog.content = ft.Text(f"Delete document \"{doc.get('title', 'this document')}\"? This action archives the record.")
+        documents_delete_dialog.open = True
+        page.update()
+
+    def run_delete_document_action():
+        nonlocal pending_delete_document
+        document = pending_delete_document
+        close_documents_delete_dialog()
+        if document:
+            delete_document_record(document.get("id"))
+
     def generate_tracking_number():
-        return f"DOC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        try:
+            response = requests.get(f"{BACKEND_URL}/documents", verify=False, timeout=10)
+            if response.status_code == 200:
+                payload = response.json() if response.content else []
+                documents = payload if isinstance(payload, list) else payload.get("items", [])
+                used_numbers = set()
+                for doc in documents:
+                    tracking = str(doc.get("tracking_number", "") or "").strip()
+                    if tracking.startswith("DOC-"):
+                        suffix = tracking.replace("DOC-", "", 1)
+                        if suffix.isdigit():
+                            used_numbers.add(int(suffix))
+                candidate = 1
+                while candidate in used_numbers:
+                    candidate += 1
+                return f"DOC-{candidate}"
+        except Exception:
+            pass
+        return "DOC-1"
 
     def reset_document_form():
         nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
@@ -1262,6 +1310,18 @@ def main(page: ft.Page):
     def get_visible_documents():
         return documents_data
 
+    def format_frontend_date(value):
+        if not value:
+            return "-"
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            try:
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                return str(value)
+        return dt.strftime("%m/%d/%y")
+
     def normalize_document(doc):
         return {
             "id": doc.get("id"),
@@ -1378,6 +1438,28 @@ def main(page: ft.Page):
         for doc in visible_documents:
             status = doc.get("status", "Pending")
             status_color, status_bg = get_document_status_style(status)
+            document_title = str(doc.get("title", "-") or "-")
+            title_cell = ft.DataCell(
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.Text(
+                                document_title,
+                                size=13,
+                                no_wrap=True,
+                                overflow=ft.TextOverflow.CLIP,
+                            )
+                        ],
+                        spacing=0,
+                        scroll=ft.ScrollMode.AUTO,
+                        width=280,
+                    ),
+                    width=280,
+                    height=40,
+                    padding=ft.Padding.only(left=4, right=4),
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                )
+            )
             actions = [
                 ft.PopupMenuItem(content="View Details", on_click=lambda _, d=doc: show_document_details(d)),
                 ft.PopupMenuItem(content="Edit", on_click=lambda _, d=doc: open_document_form(d)),
@@ -1386,13 +1468,20 @@ def main(page: ft.Page):
                 ft.PopupMenuItem(content="Generate QR", on_click=lambda _, d=doc: regenerate_qr_code(d.get("id"))),
                 ft.PopupMenuItem(content="Print QR", on_click=lambda _: show_document_notice("QR print preview enabled.")),
                 ft.PopupMenuItem(content="Download", on_click=lambda _: show_document_notice("Download action preview enabled.")),
-                ft.PopupMenuItem(content="Archive", on_click=lambda _, d=doc: delete_document_record(d.get("id"))),
+                ft.PopupMenuItem(content="Delete Document", on_click=lambda _, d=doc: confirm_delete_document(d)),
             ]
             rows.append(
                 ft.DataRow(
                     cells=[
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
+                                width=90,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ),
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13), width=100)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("title", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=220)),
+                        title_cell,
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120)),
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100)),
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("originating_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=150)),
@@ -1408,15 +1497,8 @@ def main(page: ft.Page):
                             )
                         ),
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("priority", "-"), size=13), width=80)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("date_received", "-"), size=13), width=100)),
+                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("date_received", "-")), size=13), width=100)),
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("last_updated", "-"), size=13), width=100)),
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
-                                width=90,
-                                alignment=ft.Alignment.CENTER,
-                            )
-                        ),
                     ],
                 )
             )
@@ -1442,6 +1524,7 @@ def main(page: ft.Page):
 
     def documents_view():
         try:
+            load_documents_table()
             print("documents_view: building document controls")
             documents_controls = {
                 "summary_cards": build_document_summary_cards(),
@@ -1492,7 +1575,7 @@ def main(page: ft.Page):
                             ),
                             ft.Divider(height=1),
                             ft.Text(
-                                "This admin system provides dashboard monitoring, user management, and audit log visibility.",
+                                "This admin system provides operational monitoring, user management, and audit log visibility.",
                                 size=13,
                                 color=ft.Colors.BLUE_GREY_600,
                             ),
@@ -1543,7 +1626,7 @@ def main(page: ft.Page):
                     current_user = payload.get("username")
                     current_user_role = role
                     if role == "Admin":
-                        render_shell(page, current_user, logout_user, nav_items, build_dashboard_view())
+                        render_shell(page, current_user, logout_user, nav_items, content_view=None)
                     elif role in {"Secretary / Vice Mayor", "Secretary"}:
                         render_shell(page, current_user, logout_user, nav_items, documents_view())
                     else:
@@ -1717,7 +1800,6 @@ def main(page: ft.Page):
         page.update()
 
     nav_items = [
-        (ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: build_dashboard_view()),
         (ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()),
         (ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
         (ft.Icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),

@@ -15,6 +15,22 @@ from fastapi.responses import HTMLResponse
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
+def _next_tracking_number(db: Session) -> str:
+    rows = db.query(models.Document.tracking_number).filter(models.Document.tracking_number.like("DOC-%")).all()
+    used_numbers = set()
+    for (tracking_number,) in rows:
+        if not tracking_number or not tracking_number.startswith("DOC-"):
+            continue
+        suffix = tracking_number.replace("DOC-", "", 1)
+        if suffix.isdigit():
+            used_numbers.add(int(suffix))
+
+    candidate = 1
+    while candidate in used_numbers:
+        candidate += 1
+    return f"DOC-{candidate}"
+
+
 def _serialize_document(doc: models.Document):
     payload = {
         "id": doc.id,
@@ -89,7 +105,7 @@ def list_documents(
 
 
 
-@router.get("/{document_id:\\d+}", response_model=schemas.DocumentResponse)
+@router.get("/{document_id:int}", response_model=schemas.DocumentResponse)
 def get_document(document_id: int, db: Session = Depends(get_db)):
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
@@ -150,8 +166,7 @@ def create_document(
 
     # ensure tracking number is present (DB requires non-null)
     if not data.get("tracking_number"):
-        # generate a stable, non-null tracking number before insert to satisfy DB constraint
-        data["tracking_number"] = f"DOC-{int(datetime.utcnow().timestamp())}{secrets.token_hex(4)}"
+        data["tracking_number"] = _next_tracking_number(db)
     if not data.get("qr_code_value"):
         data["qr_code_value"] = data["tracking_number"]
 
@@ -183,7 +198,7 @@ def create_document(
     return _serialize_document(doc)
 
 
-@router.put("/{document_id:\\d+}", response_model=schemas.DocumentResponse)
+@router.put("/{document_id:int}", response_model=schemas.DocumentResponse)
 def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Session = Depends(get_db)):
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
@@ -202,7 +217,7 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
     return _serialize_document(doc)
 
 
-@router.post("/{document_id:\\d+}/route", response_model=schemas.DocumentResponse)
+@router.post("/{document_id:int}/route", response_model=schemas.DocumentResponse)
 def route_document(document_id: int, payload: dict, db: Session = Depends(get_db)):
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
@@ -242,7 +257,7 @@ def route_document(document_id: int, payload: dict, db: Session = Depends(get_db
     return _serialize_document(doc)
 
 
-@router.post("/{document_id:\\d+}/qr", response_model=schemas.DocumentResponse)
+@router.post("/{document_id:int}/qr", response_model=schemas.DocumentResponse)
 def regenerate_qr(document_id: int, db: Session = Depends(get_db)):
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
@@ -253,7 +268,7 @@ def regenerate_qr(document_id: int, db: Session = Depends(get_db)):
     return _serialize_document(doc)
 
 
-@router.delete("/{document_id:\\d+}")
+@router.delete("/{document_id:int}")
 def delete_document(document_id: int, db: Session = Depends(get_db)):
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
