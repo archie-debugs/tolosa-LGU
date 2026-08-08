@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
 from ..core import get_password_hash, verify_password, record_audit_log
+from ..auth_jwt import create_access_token
 
 router = APIRouter()
 
@@ -68,4 +69,7 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
         details="Successful login",
     )
 
-    return {"message": "Login successful", "username": user.username, "role": user.role or "Admin"}
+    # create JWT access token (subject=username)
+    token = create_access_token({"sub": user.username})
+
+    return {"message": "Login successful", "username": user.username, "role": user.role or "Admin", "access_token": token, "token_type": "bearer"}

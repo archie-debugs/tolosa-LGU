@@ -95,17 +95,6 @@ def build_documents_view(
         search_row = ft.Row(
             controls=[
                 ft.Container(
-                    content=ft.Icon(
-                        ft.Icons.SEARCH,
-                        size=20,
-                        color=ft.Colors.BLUE_GREY_500,
-                    ),
-                    padding=ft.Padding.only(
-                        left=12,
-                        right=4,
-                    ),
-                ),
-                ft.Container(
                     content=search_field,
                     expand=True,
                 ),
@@ -127,7 +116,6 @@ def build_documents_view(
         sort_filter,
         start_date_filter,
         end_date_filter,
-        reset_filter_button,
     ]
 
     filter_controls = [
@@ -206,99 +194,60 @@ def build_documents_view(
     # TABLE CONTENT
     # =========================================================
 
-    table_has_rows = bool(
-        getattr(
-            documents_table,
-            "rows",
-            None,
-        )
-        and len(
-            documents_table.rows
-        ) > 0
+    fixed_table_width = 1600
+    has_rows = bool(getattr(documents_table, "rows", None) and len(documents_table.rows) > 0)
+
+    table_scroll = ft.Row(
+        controls=[
+            ft.Container(
+                content=documents_table,
+                width=fixed_table_width,
+                alignment=ft.Alignment(-1, 0),
+            )
+        ],
+        width=fixed_table_width,
+        scroll=ft.ScrollMode.AUTO,
+        spacing=0,
+        alignment=ft.MainAxisAlignment.START,
     )
 
-    if table_has_rows:
+    empty_state = ft.Container(
+        content=ft.Text(
+            "No documents match your search.",
+            size=13,
+            color=ft.Colors.BLUE_GREY_600,
+            text_align=ft.TextAlign.CENTER,
+        ),
+        width=fixed_table_width,
+        height=40,
+        alignment=ft.Alignment.CENTER,
+        visible=not has_rows,
+        padding=ft.Padding(left=0, top=8, right=0, bottom=8),
+    )
 
-        # -----------------------------------------------------
-        # COMPACT TABLE CONTAINER
-        # -----------------------------------------------------
+    side = ft.BorderSide(1, ft.Colors.BLUE_GREY_100)
 
-        table_scroll = ft.Row(
-            controls=[documents_table],
-            width=1600,
-            scroll=ft.ScrollMode.AUTO,
+    table_container = ft.Container(
+        content=ft.Column(
+            controls=[
+                table_scroll,
+                empty_state,
+            ],
             spacing=0,
-        )
-
-        table_container = ft.Container(
-            content=table_scroll,
-            height=500,
-            bgcolor=ft.Colors.WHITE,
-            border=ft.Border.all(
-                1,
-                ft.Colors.BLUE_GREY_100,
-            ),
-            border_radius=10,
-            padding=6,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-            expand=False,
-        )
-
-    else:
-
-        # -----------------------------------------------------
-        # EMPTY STATE
-        # -----------------------------------------------------
-
-        empty_button = documents_controls.get(
-            "empty_state_button",
-            register_button,
-        )
-
-        if empty_button is None:
-            empty_button = ft.Button(
-                "Register Document",
-                icon=ft.Icons.ADD,
-                on_click=lambda e: open_document_dialog(None),
-            )
-
-        empty_state = ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.Icon(
-                        ft.Icons.DESCRIPTION_OUTLINED,
-                        size=42,
-                        color=ft.Colors.BLUE_GREY_400,
-                    ),
-                    ft.Text(
-                        "No documents found",
-                        size=16,
-                        weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.BLUE_GREY_800,
-                    ),
-                    ft.Text(
-                        "Register a document to begin tracking.",
-                        size=13,
-                        color=ft.Colors.BLUE_GREY_600,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
-                    empty_button,
-                ],
-                spacing=10,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
-            height=220,
-            bgcolor=ft.Colors.WHITE,
-            border=ft.Border.all(
-                1,
-                ft.Colors.BLUE_GREY_100,
-            ),
-            border_radius=10,
-            alignment=ft.Alignment.CENTER,
-        )
-
-        table_container = empty_state
+            width=fixed_table_width,
+            alignment=ft.MainAxisAlignment.START,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        ),
+        width=fixed_table_width,
+        height=500,
+        bgcolor=ft.Colors.WHITE,
+        border=ft.Border(top=side, right=side, bottom=side, left=side),
+        border_radius=10,
+        padding=6,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        expand=False,
+        alignment=ft.Alignment(-1, 0),
+    )
 
     # =========================================================
     # DOCUMENT TABLE CARD
@@ -311,6 +260,9 @@ def build_documents_view(
                 table_container,
             ],
             spacing=10,
+            width=fixed_table_width,
+            horizontal_alignment=ft.CrossAxisAlignment.START,
+            alignment=ft.MainAxisAlignment.START,
         ),
         padding=14,
         expand=False,
@@ -325,7 +277,7 @@ def build_documents_view(
     if documents_notice is not None:
         notice_container = ft.Container(
             content=documents_notice,
-            padding=ft.Padding.only(
+            padding=ft.Padding(
                 left=4,
                 right=4,
                 top=4,
@@ -340,13 +292,14 @@ def build_documents_view(
 
     final_controls = [
         documents_header_card,
-        table_card,
     ]
 
     if notice_container is not None:
         final_controls.append(
             notice_container
         )
+
+    final_controls.append(table_card)
 
     return ft.Column(
         controls=final_controls,

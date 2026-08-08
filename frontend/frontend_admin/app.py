@@ -1,12 +1,103 @@
 import flet as ft
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
+if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
+    ft.Icons = ft.icons
+
+# Compatibility shim: provide a `ft.Button(...)` factory that maps to the
+# installed Flet button classes and supports legacy kwargs like `bgcolor`
+# and `color` by wrapping the real button in a Container when needed.
+if not hasattr(ft, "Button"):
+    BaseButton = getattr(ft, "FilledButton", None) or getattr(ft, "ElevatedButton", None)
+
+    def _compat_button(*args, **kwargs):
+        bgcolor = kwargs.pop("bgcolor", None)
+        color = kwargs.pop("color", None)
+        # Keep icon and on_click etc. in kwargs for the underlying button
+        icon = kwargs.get("icon", None)
+
+        if BaseButton is None:
+            raise RuntimeError("No suitable Button implementation found in flet package")
+
+        # Construct underlying button with remaining kwargs
+        try:
+            btn = BaseButton(*args, **kwargs)
+        except TypeError:
+            # Some older/newer variants may not accept certain kwargs; try passing only common ones
+            common = {}
+            if len(args) > 0:
+                common['label'] = args[0]
+            if icon is not None:
+                common['icon'] = icon
+            if 'on_click' in kwargs:
+                common['on_click'] = kwargs['on_click']
+            btn = BaseButton(**common)
+
+        # Apply foreground color if the control supports it
+        try:
+            if color is not None and hasattr(btn, 'color'):
+                btn.color = color
+        except Exception:
+            pass
+
+        # If a background color was requested, wrap the button in a Container
+        if bgcolor is not None:
+            return ft.Container(content=btn, bgcolor=bgcolor, padding=0)
+
+        return btn
+
+    ft.Button = _compat_button
+
+# Alignment compatibility: map uppercase `ft.Alignment.CENTER` etc to
+# `ft.alignment.center` where the installed Flet exposes lowercase names.
+if hasattr(ft, 'Alignment') and hasattr(ft, 'alignment'):
+    aln = ft.alignment
+    mapping = {
+        'CENTER': getattr(aln, 'center', None),
+        'CENTER_LEFT': getattr(aln, 'center_left', None),
+        'CENTER_RIGHT': getattr(aln, 'center_right', None),
+        'TOP_CENTER': getattr(aln, 'top_center', None),
+        'TOP_LEFT': getattr(aln, 'top_left', None),
+        'TOP_RIGHT': getattr(aln, 'top_right', None),
+        'BOTTOM_CENTER': getattr(aln, 'bottom_center', None),
+        'BOTTOM_LEFT': getattr(aln, 'bottom_left', None),
+        'BOTTOM_RIGHT': getattr(aln, 'bottom_right', None),
+    }
+    for k, v in mapping.items():
+        if v is not None and not hasattr(ft.Alignment, k):
+            setattr(ft.Alignment, k, v)
+    
+    # Padding compatibility shim: some flet versions require positional args
+    # for Padding(left, top, right, bottom). Provide a callable/class that
+    # accepts keyword arguments (`left=`, `top=`, `right=`, `bottom=`) and
+    # preserves `symmetric`/`only` if available.
+    if hasattr(ft, 'Padding'):
+        import inspect
+
+        OriginalPadding = ft.Padding
+        try:
+            sig = inspect.signature(OriginalPadding)
+            # If signature doesn't contain 'left' parameter, wrap it
+            if 'left' not in sig.parameters:
+                def _padding(left=0, top=0, right=0, bottom=0):
+                    return OriginalPadding(left, top, right, bottom)
+
+                # attach symmetric/only if present on original
+                if hasattr(OriginalPadding, 'symmetric'):
+                    _padding.symmetric = staticmethod(lambda vertical=0, horizontal=0: OriginalPadding(horizontal, vertical, horizontal, vertical))
+                if hasattr(OriginalPadding, 'only'):
+                    _padding.only = staticmethod(lambda **kwargs: OriginalPadding(kwargs.get('left', 0), kwargs.get('top', 0), kwargs.get('right', 0), kwargs.get('bottom', 0)))
+
+                ft.Padding = _padding
+        except Exception:
+            pass
 import requests
 import io
 import mimetypes
 import os
 import sys
 import json
+import re
 import secrets
 from pathlib import Path
 from datetime import datetime
@@ -14,6 +105,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
+AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -38,6 +130,7 @@ def main(page: ft.Page):
 
     current_user = None
     current_user_role = None
+    runtime_token = None
 
     def get_admin_headers():
         hdrs = {}
@@ -45,7 +138,52 @@ def main(page: ft.Page):
             hdrs["X-Admin-Username"] = current_user
         if current_user_role:
             hdrs["X-Admin-Role"] = current_user_role
+        # prefer runtime token if present, else env token
+        token_to_use = runtime_token or AUTH_TOKEN
+        if token_to_use:
+            hdrs["Authorization"] = f"Bearer {token_to_use}"
         return hdrs
+
+    # --- Login dialog and flow ---
+    login_username = ft.TextField(label="Username", width=280)
+    login_password = ft.TextField(label="Password", width=280, password=True, can_reveal_password=True)
+
+    login_dialog = ft.AlertDialog(
+        title=ft.Text("Admin Login"),
+        content=ft.Column([login_username, login_password], spacing=8),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_login_dialog()),
+            ft.Button("Login", on_click=lambda _: do_login()),
+        ],
+    )
+    page.overlay.append(login_dialog)
+
+    def close_login_dialog():
+        login_dialog.open = False
+        page.update()
+
+    def do_login():
+        nonlocal current_user, current_user_role, runtime_token
+        try:
+            resp = requests.post(
+                f"{BACKEND_URL}/auth/login",
+                data={"username": login_username.value or "", "password": login_password.value or ""},
+                timeout=10,
+                verify=False,
+            )
+            if resp.status_code == 200:
+                body = resp.json()
+                runtime_token = body.get("access_token")
+                current_user = body.get("username") or current_user
+                current_user_role = body.get("role") or current_user_role
+                page.snack_bar = ft.SnackBar(ft.Text("Login successful"), open=True)
+            else:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Login failed: {resp.text}"), open=True)
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Login error: {exc}"), open=True)
+        finally:
+            close_login_dialog()
+            page.update()
 
     def format_created_date(value):
         if not value:
@@ -336,20 +474,20 @@ def main(page: ft.Page):
                 display_id = acct.get("display_id") or acct.get("id") or "-"
                 if acct["source"] == "registration":
                     actions = [
-                        ft.PopupMenuItem(content="View Details", on_click=lambda _, a=acct: show_registration_details(a)),
-                        ft.PopupMenuItem(content="Approve Registration", on_click=lambda _, a=acct: approve_registration(a)),
-                        ft.PopupMenuItem(content="Reject Registration", on_click=lambda _, a=acct: reject_registration(a)),
+                        ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, a=acct: show_registration_details(a)),
+                        ft.PopupMenuItem(content=ft.Text("Approve Registration"), on_click=lambda _, a=acct: approve_registration(a)),
+                        ft.PopupMenuItem(content=ft.Text("Reject Registration"), on_click=lambda _, a=acct: reject_registration(a)),
                     ]
                 else:
                     actions = [
-                        ft.PopupMenuItem(content="View User", on_click=lambda _, a=acct: show_user_details(a.get("raw", {}))),
-                        ft.PopupMenuItem(content="Set Admin", on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Admin")),
-                        ft.PopupMenuItem(content="Set Secretary / Vice Mayor", on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Secretary / Vice Mayor")),
-                        ft.PopupMenuItem(content="Set Staff", on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Staff")),
-                        ft.PopupMenuItem(content="Activate Account", on_click=lambda _, a=acct: show_not_implemented_action("Activate Account")),
-                        ft.PopupMenuItem(content="Deactivate Account", on_click=lambda _, a=acct: show_not_implemented_action("Deactivate Account")),
-                        ft.PopupMenuItem(content="Reset Password", on_click=lambda _, a=acct: show_not_implemented_action("Reset Password")),
-                        ft.PopupMenuItem(content="Delete User", on_click=lambda _, a=acct: confirm_delete_user(a.get("raw", {}))),
+                        ft.PopupMenuItem(content=ft.Text("View User"), on_click=lambda _, a=acct: show_user_details(a.get("raw", {}))),
+                        ft.PopupMenuItem(content=ft.Text("Set Admin"), on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Admin")),
+                        ft.PopupMenuItem(content=ft.Text("Set Secretary / Vice Mayor"), on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Secretary / Vice Mayor")),
+                        ft.PopupMenuItem(content=ft.Text("Set Staff"), on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Staff")),
+                        ft.PopupMenuItem(content=ft.Text("Activate Account"), on_click=lambda _, a=acct: show_not_implemented_action("Activate Account")),
+                        ft.PopupMenuItem(content=ft.Text("Deactivate Account"), on_click=lambda _, a=acct: show_not_implemented_action("Deactivate Account")),
+                        ft.PopupMenuItem(content=ft.Text("Reset Password"), on_click=lambda _, a=acct: show_not_implemented_action("Reset Password")),
+                        ft.PopupMenuItem(content=ft.Text("Delete User"), on_click=lambda _, a=acct: confirm_delete_user(a.get("raw", {}))),
                     ]
 
                 rows.append(
@@ -697,9 +835,10 @@ def main(page: ft.Page):
 
     documents_search_field = ft.TextField(
         label="Search documents",
-        hint_text="Tracking No., title, office",
+        hint_text="Search by Tracking ID, title, type, status, or location...",
+        prefix_icon=ft.Icon(ft.Icons.SEARCH, size=18, color=ft.Colors.BLUE_GREY_600),
         expand=True,
-        on_change=lambda _: load_documents_table(),
+        on_change=lambda _: apply_document_search_to_current_view(),
     )
     documents_filter_status = ft.Dropdown(
         label="Status",
@@ -889,57 +1028,141 @@ def main(page: ft.Page):
     )
     page.overlay.append(documents_delete_dialog)
 
+    def make_document_header(label, width):
+        return ft.Container(
+            content=ft.Text(label, weight=ft.FontWeight.BOLD, size=12),
+            width=width,
+            alignment=ft.Alignment.CENTER_LEFT,
+            padding=ft.Padding(0, 0, 0, 0),
+        )
+
     documents_table = ft.DataTable(
-    columns=[
-        ft.DataColumn(
-            ft.Text("Actions", weight=ft.FontWeight.BOLD)
+        columns=[
+            ft.DataColumn(label=make_document_header("Actions", 90)),
+            ft.DataColumn(label=make_document_header("Tracking No.", 120)),
+            ft.DataColumn(label=make_document_header("Title", 280)),
+            ft.DataColumn(label=make_document_header("Document Type", 120)),
+            ft.DataColumn(label=make_document_header("Category", 100)),
+            ft.DataColumn(label=make_document_header("Originating Office", 150)),
+            ft.DataColumn(label=make_document_header("Current Office", 140)),
+            ft.DataColumn(label=make_document_header("Assigned To", 110)),
+            ft.DataColumn(label=make_document_header("Status", 120)),
+            ft.DataColumn(label=make_document_header("Priority", 80)),
+            ft.DataColumn(label=make_document_header("Date Received", 100)),
+            ft.DataColumn(label=make_document_header("Last Updated", 100)),
+        ],
+        rows=[],
+        width=1600,
+        column_spacing=10,
+        horizontal_margin=0,
+        data_row_min_height=52,
+        data_text_style=ft.TextStyle(size=13),
+        heading_text_style=ft.TextStyle(
+            size=12,
+            weight=ft.FontWeight.BOLD,
         ),
-        ft.DataColumn(
-            ft.Text("Tracking No.", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Title", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Document Type", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Category", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Originating Office", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Current Office", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Assigned To", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Status", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Priority", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Date Received", weight=ft.FontWeight.BOLD)
-        ),
-        ft.DataColumn(
-            ft.Text("Last Updated", weight=ft.FontWeight.BOLD)
-        ),
-    ],
-    rows=[],
-    column_spacing=10,
-    horizontal_margin=0,
-    data_row_min_height=52,
-    data_text_style=ft.TextStyle(size=13),
-    heading_text_style=ft.TextStyle(
-        size=12,
-        weight=ft.FontWeight.BOLD,
-    ),
-)
+        horizontal_lines=ft.BorderSide(width=1, color=ft.Colors.BLUE_GREY_100),
+        border_radius=10,
+    )
 
     documents_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
+
+    def normalize_search_text(value):
+        if value is None:
+            return ""
+        return " ".join(str(value).strip().split()).lower()
+
+    def normalize_tracking_identifier(value):
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+
+        if text.isdigit():
+            return int(text.lstrip("0") or "0")
+
+        digits = []
+        for chunk in re.findall(r"\d+", text):
+            digits.append(chunk)
+
+        if not digits:
+            return None
+
+        last_digits = digits[-1]
+        return int(last_digits.lstrip("0") or "0")
+
+    def looks_like_tracking_search(value):
+        text = normalize_search_text(value)
+        return bool(text) and any(ch.isdigit() for ch in text)
+
+    def get_document_search_mode(search_text):
+        text = normalize_search_text(search_text)
+        if not text:
+            return "Smart search"
+        if looks_like_tracking_search(text):
+            return "Tracking ID • Exact match"
+        return "Smart search"
+
+    def document_matches_search_term(doc, term):
+        query = normalize_search_text(term)
+        if not query:
+            return True
+
+        if looks_like_tracking_search(query):
+            doc_tracking = normalize_tracking_identifier(doc.get("tracking_number") or doc.get("id"))
+            search_tracking = normalize_tracking_identifier(query)
+            if doc_tracking is None or search_tracking is None:
+                return False
+            return doc_tracking == search_tracking
+
+        fields = [
+            doc.get("title"),
+            doc.get("document_type"),
+            doc.get("status"),
+            doc.get("current_office"),
+            doc.get("assigned_to"),
+            doc.get("originating_office"),
+            doc.get("category"),
+            doc.get("description"),
+            doc.get("remarks"),
+            doc.get("author"),
+            doc.get("session"),
+            doc.get("tracking_number"),
+            doc.get("created_by"),
+        ]
+
+        for field_value in fields:
+            if field_value is None:
+                continue
+            normalized_field = normalize_search_text(field_value)
+            if normalized_field and query in normalized_field:
+                return True
+        return False
+
+    def apply_document_search(documents):
+        query = normalize_search_text(documents_search_field.value)
+        if not query:
+            return list(documents)
+
+        terms = [token for token in query.split() if token]
+        if not terms:
+            return list(documents)
+
+        filtered = []
+        for doc in documents:
+            if all(document_matches_search_term(doc, term) for term in terms):
+                filtered.append(doc)
+        return filtered
+
+    def update_document_result_indicator(display_documents):
+        search_text = normalize_search_text(documents_search_field.value)
+        mode_text = get_document_search_mode(search_text)
+        if not display_documents:
+            documents_notice.value = f"{mode_text} • No matching documents"
+            return
+        count_label = "document" if len(display_documents) == 1 else "documents"
+        documents_notice.value = f"{mode_text} • Showing {len(display_documents)} {count_label}"
 
     def show_document_notice(message):
         page.snack_bar = ft.SnackBar(ft.Text(message), open=True)
@@ -1399,11 +1622,94 @@ def main(page: ft.Page):
         except Exception as exc:
             show_document_notice(f"Delete failed: {exc}")
 
+    def apply_document_search_to_current_view():
+        visible_documents = get_visible_documents()
+        if documents_sort_filter.value == "Oldest":
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=False)
+        elif documents_sort_filter.value == "Title":
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("title", "")).lower(), reverse=False)
+        else:
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=True)
+
+        filtered_documents = apply_document_search(visible_documents)
+        rows = []
+        for doc in filtered_documents:
+            status = doc.get("status", "Pending")
+            status_color, status_bg = get_document_status_style(status)
+            document_title = str(doc.get("title", "-") or "-")
+            title_cell = ft.DataCell(
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.Text(
+                                document_title,
+                                size=13,
+                                no_wrap=True,
+                                overflow=ft.TextOverflow.CLIP,
+                            )
+                        ],
+                        spacing=0,
+                        scroll=ft.ScrollMode.AUTO,
+                        width=280,
+                    ),
+                    width=280,
+                    height=40,
+                    padding=ft.Padding(left=4, top=0, right=4, bottom=0),
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    alignment=ft.Alignment.CENTER_LEFT,
+                )
+            )
+            actions = [
+                ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
+                ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, d=doc: open_document_form(d)),
+                ft.PopupMenuItem(content=ft.Text("Route Document"), on_click=lambda _, d=doc: open_route_dialog(d)),
+                ft.PopupMenuItem(content=ft.Text("View Routing History"), on_click=lambda _, d=doc: show_document_details(d)),
+                ft.PopupMenuItem(content=ft.Text("Generate QR"), on_click=lambda _, d=doc: regenerate_qr_code(d.get("id"))),
+                ft.PopupMenuItem(content=ft.Text("Print QR"), on_click=lambda _: show_document_notice("QR print preview enabled.")),
+                ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _: show_document_notice("Download action preview enabled.")),
+                ft.PopupMenuItem(content=ft.Text("Delete Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
+            ]
+            rows.append(
+                ft.DataRow(
+                    cells=[
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
+                                width=90,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
+                        title_cell,
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("originating_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=150, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("current_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=140, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("assigned_to", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=110, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.Text(status, size=12, color=status_color),
+                                bgcolor=status_bg,
+                                padding=6,
+                                border_radius=12,
+                                alignment=ft.Alignment.CENTER,
+                                width=120,
+                            )
+                        ),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("priority", "-"), size=13), width=80, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("date_received", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("last_updated", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
+                    ],
+                )
+            )
+
+        documents_table.rows = rows
+        update_document_result_indicator(filtered_documents)
+        page.update()
+
     def load_documents_table():
         try:
             params = {}
-            if documents_search_field.value:
-                params["search"] = documents_search_field.value.strip()
             if documents_status_filter.value and documents_status_filter.value != "All":
                 params["status"] = documents_status_filter.value
             if documents_type_filter.value and documents_type_filter.value != "All":
@@ -1427,84 +1733,7 @@ def main(page: ft.Page):
             page.update()
             return
 
-        visible_documents = get_visible_documents()
-        if documents_sort_filter.value == "Oldest":
-            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=False)
-        elif documents_sort_filter.value == "Title":
-            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("title", "")).lower(), reverse=False)
-        else:
-            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=True)
-        rows = []
-        for doc in visible_documents:
-            status = doc.get("status", "Pending")
-            status_color, status_bg = get_document_status_style(status)
-            document_title = str(doc.get("title", "-") or "-")
-            title_cell = ft.DataCell(
-                ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            ft.Text(
-                                document_title,
-                                size=13,
-                                no_wrap=True,
-                                overflow=ft.TextOverflow.CLIP,
-                            )
-                        ],
-                        spacing=0,
-                        scroll=ft.ScrollMode.AUTO,
-                        width=280,
-                    ),
-                    width=280,
-                    height=40,
-                    padding=ft.Padding.only(left=4, right=4),
-                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                )
-            )
-            actions = [
-                ft.PopupMenuItem(content="View Details", on_click=lambda _, d=doc: show_document_details(d)),
-                ft.PopupMenuItem(content="Edit", on_click=lambda _, d=doc: open_document_form(d)),
-                ft.PopupMenuItem(content="Route Document", on_click=lambda _, d=doc: open_route_dialog(d)),
-                ft.PopupMenuItem(content="View Routing History", on_click=lambda _, d=doc: show_document_details(d)),
-                ft.PopupMenuItem(content="Generate QR", on_click=lambda _, d=doc: regenerate_qr_code(d.get("id"))),
-                ft.PopupMenuItem(content="Print QR", on_click=lambda _: show_document_notice("QR print preview enabled.")),
-                ft.PopupMenuItem(content="Download", on_click=lambda _: show_document_notice("Download action preview enabled.")),
-                ft.PopupMenuItem(content="Delete Document", on_click=lambda _, d=doc: confirm_delete_document(d)),
-            ]
-            rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
-                                width=90,
-                                alignment=ft.Alignment.CENTER,
-                            )
-                        ),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13), width=100)),
-                        title_cell,
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("originating_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=150)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("current_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=140)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("assigned_to", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=110)),
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.Text(status, size=12, color=status_color),
-                                bgcolor=status_bg,
-                                padding=6,
-                                border_radius=12,
-                                alignment=ft.Alignment.CENTER,
-                            )
-                        ),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("priority", "-"), size=13), width=80)),
-                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("date_received", "-")), size=13), width=100)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("last_updated", "-"), size=13), width=100)),
-                    ],
-                )
-            )
-        documents_table.rows = rows
-        documents_notice.value = f"Showing {len(visible_documents)} document(s)." if visible_documents else "No documents match the current filters."
-        page.update()
+        apply_document_search_to_current_view()
 
     def reset_document_filters():
         documents_search_field.value = ""
@@ -1535,13 +1764,13 @@ def main(page: ft.Page):
                 "year_filter": documents_year_filter,
                 "assigned_filter": documents_assigned_filter,
                 "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_document_form()),
-                "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: open_documents_view()),
-                "export_button": ft.Button("Export", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=lambda _: show_document_notice("Export list preview enabled.")),
-                "print_button": ft.Button("Print QR", icon=ft.Icons.PRINT_OUTLINED, on_click=lambda _: show_document_notice("Print QR preview enabled.")),
+                "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
+                "export_button": None,
+                "print_button": None,
                 # Import Documents removed; attachment is part of Register Document workflow
                 "import_button": None,
                 "filter_button": ft.OutlinedButton("Apply", icon=ft.Icons.FILTER_LIST, on_click=lambda _: load_documents_table()),
-                "reset_filter_button": ft.OutlinedButton("Reset", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
+                "reset_filter_button": None,
                 "sort_filter": documents_sort_filter,
                 "start_date_filter": documents_filter_start_date,
                 "end_date_filter": documents_filter_end_date,
@@ -1811,4 +2040,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.run(main, view=ft.AppView.WEB_BROWSER)
+    ft.app(target=main, view=ft.AppView.WEB_BROWSER)

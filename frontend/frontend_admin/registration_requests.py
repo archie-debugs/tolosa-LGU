@@ -25,7 +25,7 @@ def _format_badge(status: str):
     }.get(status, (ft.Colors.BLUE_GREY_50, ft.Colors.BLUE_GREY_700, status))
     return ft.Container(
         content=ft.Text(style[2], size=12, weight=ft.FontWeight.BOLD, color=style[1]),
-        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        padding=ft.Padding(left=10, top=6, right=10, bottom=6),
         bgcolor=style[0],
         border_radius=12,
     )
@@ -171,11 +171,12 @@ def build_registration_requests_view(page, surface_card, section_header, refresh
         count = len(filter_requests()) if name == active_status_tab else summary_counts.get(name, len(requests_data))
         label = f"{name} ({count})" if name != "All" else f"All ({len(requests_data)})"
         selected = name == active_status_tab
+        side = ft.BorderSide(1, ft.Colors.BLUE_GREY_100)
         return ft.Container(
             content=ft.Text(label, size=12, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_900 if selected else ft.Colors.BLUE_GREY_800),
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+            padding=ft.Padding(left=16, top=10, right=16, bottom=10),
             bgcolor=ft.Colors.BLUE_50 if selected else ft.Colors.WHITE,
-            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+            border=ft.Border(top=side, right=side, bottom=side, left=side),
             border_radius=16,
             on_click=lambda e, tab=name: select_status_tab(tab),
         )
@@ -199,6 +200,7 @@ def build_registration_requests_view(page, surface_card, section_header, refresh
         load_requests()
 
     def build_requests_body(filtered):
+        side = ft.BorderSide(1, ft.Colors.BLUE_GREY_100)
         if not filtered:
             return ft.Column(
                 [
@@ -212,7 +214,7 @@ def build_registration_requests_view(page, surface_card, section_header, refresh
                             spacing=12,
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
-                        padding=ft.Padding.all(30),
+                        padding=ft.Padding(left=30, top=30, right=30, bottom=30),
                         bgcolor=ft.Colors.BLUE_GREY_50,
                         border_radius=18,
                         alignment=ft.Alignment.CENTER,
@@ -269,7 +271,7 @@ def build_registration_requests_view(page, surface_card, section_header, refresh
                             for item in filtered
                         ],
                         heading_row_height=40,
-                        border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+                        border=ft.Border(top=side, right=side, bottom=side, left=side),
                     ),
                     padding=12,
                     bgcolor=ft.Colors.BLUE_GREY_50,

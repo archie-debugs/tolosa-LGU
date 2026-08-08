@@ -62,6 +62,8 @@ def render_shell(
             print("Error building view:")
             print(tb)
 
+            side = ft.BorderSide(1, ft.Colors.RED_100)
+
             next_view = ft.Container(
                 content=ft.Column(
                     [
@@ -90,10 +92,7 @@ def render_shell(
                 ),
                 padding=16,
                 bgcolor=ft.Colors.WHITE,
-                border=ft.Border.all(
-                    1,
-                    ft.Colors.RED_100,
-                ),
+                border=ft.Border(top=side, right=side, bottom=side, left=side),
                 border_radius=8,
             )
 
@@ -107,6 +106,8 @@ def render_shell(
 
             print("Error assigning/updating view:")
             print(tb2)
+
+            side2 = ft.BorderSide(1, ft.Colors.RED_100)
 
             content_holder.content = ft.Container(
                 content=ft.Column(
@@ -136,10 +137,7 @@ def render_shell(
                 ),
                 padding=16,
                 bgcolor=ft.Colors.WHITE,
-                border=ft.Border.all(
-                    1,
-                    ft.Colors.RED_100,
-                ),
+                border=ft.Border(top=side2, right=side2, bottom=side2, left=side2),
                 border_radius=8,
             )
 
@@ -187,8 +185,10 @@ def render_shell(
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=6,
                 ),
-                padding=ft.Padding.only(
+                padding=ft.Padding(
+                    left=0,
                     top=6,
+                    right=0,
                     bottom=8,
                 ),
                 alignment=ft.Alignment.TOP_CENTER,
@@ -228,16 +228,9 @@ def render_shell(
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    padding=ft.Padding.symmetric(
-                        vertical=10,
-                        horizontal=12,
-                    ),
+                    padding=ft.Padding(left=12, top=10, right=12, bottom=10),
                     width=200,
-                    bgcolor=(
-                        ft.Colors.BLUE_50
-                        if is_selected
-                        else None
-                    ),
+                    bgcolor=(ft.Colors.BLUE_50 if is_selected else None),
                     border_radius=10,
                     on_click=lambda e, i=idx: switch_view(i),
                 )
@@ -264,10 +257,7 @@ def render_shell(
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=ft.Padding.symmetric(
-                    vertical=10,
-                    horizontal=12,
-                ),
+                padding=ft.Padding(left=12, top=10, right=12, bottom=10),
                 width=200,
                 border_radius=10,
                 on_click=lambda e: logout_user(),
@@ -303,9 +293,11 @@ def render_shell(
 
                 ft.Container(
                     width=220,
-                    padding=ft.Padding.only(
+                    padding=ft.Padding(
+                        left=0,
                         top=8,
                         right=6,
+                        bottom=0,
                     ),
                     content=nav_container,
                     bgcolor=None,
@@ -320,7 +312,7 @@ def render_shell(
 
                 ft.Container(
                     expand=True,
-                    padding=ft.Padding.only(
+                    padding=ft.Padding(
                         top=8,
                         left=8,
                         right=8,

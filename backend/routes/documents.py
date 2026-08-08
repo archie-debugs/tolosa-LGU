@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..core import UPLOAD_DIR, record_audit_log
+import hashlib
+from sqlalchemy.exc import IntegrityError
 import os
 import secrets
 from fastapi.responses import HTMLResponse
@@ -52,6 +54,11 @@ def _serialize_document(doc: models.Document):
         "qr_code_value": doc.qr_code_value,
         "routing_history": [],
         "created_by": doc.created_by,
+        "created_by_id": getattr(doc, "created_by_id", None),
+        "document_type_id": getattr(doc, "document_type_id", None),
+        "category_id": getattr(doc, "category_id", None),
+        "originating_office_id": getattr(doc, "originating_office_id", None),
+        "current_office_id": getattr(doc, "current_office_id", None),
         "archived": bool(doc.archived),
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
@@ -61,7 +68,72 @@ def _serialize_document(doc: models.Document):
             payload["routing_history"] = json.loads(doc.routing_history)
         except Exception:
             payload["routing_history"] = []
+    # include normalized history rows
+    try:
+        hist_rows = db_session = None
+        from ..database import SessionLocal
+        db_session = SessionLocal()
+        rows = (
+            db_session.query(models.DocumentHistory)
+            .filter(models.DocumentHistory.document_id == doc.id)
+            .order_by(models.DocumentHistory.created_at.asc())
+            .all()
+        )
+        payload["history_rows"] = [
+            {
+                "id": r.id,
+                "action": r.action,
+                "actor": r.actor,
+                "from_office": r.from_office,
+                "to_office": r.to_office,
+                "notes": r.notes,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ]
+    except Exception:
+        payload["history_rows"] = []
+    finally:
+        try:
+            if db_session:
+                db_session.close()
+        except Exception:
+            pass
+    # include attachments metadata
+    try:
+        db_session = SessionLocal()
+        atts = db_session.query(models.Attachment).filter(models.Attachment.document_id == doc.id).all()
+        payload["attachments"] = [
+            {"id": a.id, "original_filename": a.original_filename, "stored_path": a.stored_path, "mime_type": a.mime_type, "size": a.size, "checksum": a.checksum} for a in atts
+        ]
+    except Exception:
+        payload["attachments"] = []
+    finally:
+        try:
+            if db_session:
+                db_session.close()
+        except Exception:
+            pass
     return payload
+
+
+def _get_or_create_by_name(db: Session, Model, name: str):
+    if not name:
+        return None
+    name = name.strip()
+    existing = db.query(Model).filter(Model.name == name).first()
+    if existing:
+        return existing.id
+    try:
+        obj = Model(name=name)
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
+        return obj.id
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(Model).filter(Model.name == name).first()
+        return existing.id if existing else None
 
 
 @router.get("", response_model=list[schemas.DocumentResponse])
@@ -174,19 +246,56 @@ def create_document(
     if file is not None:
         try:
             os.makedirs(UPLOAD_DIR, exist_ok=True)
+            content = file.file.read()
+            checksum = hashlib.sha256(content).hexdigest()
             safe_name = f"{int(datetime.utcnow().timestamp())}_{secrets.token_hex(8)}_{os.path.basename(file.filename)}"
             dest_path = os.path.join(UPLOAD_DIR, safe_name)
             with open(dest_path, "wb") as fh:
-                fh.write(file.file.read())
+                fh.write(content)
             data["attachment_name"] = safe_name
+            # persist attachment metadata after doc is created
+            attachment_meta = {"original_filename": file.filename, "stored_path": dest_path, "mime_type": file.content_type or mimetypes.guess_type(file.filename)[0], "size": len(content), "checksum": checksum}
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {exc}")
 
     # (removed debug artifact write)
+    # create the document row (legacy text fields kept for compatibility)
     doc = models.Document(**{k: v for k, v in data.items() if v is not None})
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    # populate normalized FK columns if provided
+    if document_type:
+        doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
+    if category:
+        doc.category_id = _get_or_create_by_name(db, models.Category, category)
+    if originating_office:
+        doc.originating_office_id = _get_or_create_by_name(db, models.Office, originating_office)
+    if current_office:
+        doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
+    if assigned_to:
+        # do not auto-create users here; leave created_by/assigned_to strings until manual mapping is done
+        pass
+    db.commit()
+    db.refresh(doc)
+
+    # store attachment metadata row if upload occurred
+    try:
+        if file is not None and 'attachment_meta' in locals():
+            att = models.Attachment(
+                document_id=doc.id,
+                original_filename=attachment_meta['original_filename'],
+                stored_path=attachment_meta['stored_path'],
+                mime_type=attachment_meta.get('mime_type'),
+                size=attachment_meta.get('size'),
+                checksum=attachment_meta.get('checksum'),
+            )
+            db.add(att)
+            db.commit()
+            db.refresh(att)
+    except Exception:
+        db.rollback()
 
     # finalize routing history and ensure qr/tracking values persisted
     if not doc.qr_code_value:
@@ -209,8 +318,27 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
         if existing:
             raise HTTPException(status_code=409, detail="Tracking number already exists")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    # apply simple fields
+    for field, value in data.items():
+        if field in ("document_type", "category", "originating_office", "current_office"):
+            # handled below to populate normalized FK columns
+            continue
         setattr(doc, field, value)
+
+    # handle normalized lookups
+    if data.get("document_type") is not None:
+        doc.document_type = data.get("document_type")
+        doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, data.get("document_type"))
+    if data.get("category") is not None:
+        doc.category = data.get("category")
+        doc.category_id = _get_or_create_by_name(db, models.Category, data.get("category"))
+    if data.get("originating_office") is not None:
+        doc.originating_office = data.get("originating_office")
+        doc.originating_office_id = _get_or_create_by_name(db, models.Office, data.get("originating_office"))
+    if data.get("current_office") is not None:
+        doc.current_office = data.get("current_office")
+        doc.current_office_id = _get_or_create_by_name(db, models.Office, data.get("current_office"))
 
     db.commit()
     db.refresh(doc)
@@ -252,6 +380,21 @@ def route_document(document_id: int, payload: dict, db: Session = Depends(get_db
     doc.assigned_to = assigned_user or doc.assigned_to
     doc.status = payload.get("status") or "In Routing"
     doc.routing_history = json.dumps(history)
+    # also persist a normalized history row for querying
+    try:
+        history_row = models.DocumentHistory(
+            document_id=doc.id,
+            action=route_label or "Routing",
+            actor=assigned_user or doc.assigned_to or None,
+            from_office=from_office,
+            to_office=destination_office or None,
+            notes=remarks or None,
+        )
+        db.add(history_row)
+    except Exception:
+        # best-effort: don't fail the route if history row cannot be created
+        pass
+
     db.commit()
     db.refresh(doc)
     return _serialize_document(doc)

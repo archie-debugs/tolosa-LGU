@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import secrets
 import os
 from . import models
+from fastapi import Header
+from .auth_jwt import decode_access_token
 from .database import get_db
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -122,7 +124,23 @@ def get_current_admin_user(
     db: Session = Depends(get_db),
     admin_username: str | None = Header(default=None, alias="X-Admin-Username"),
     admin_role: str | None = Header(default=None, alias="X-Admin-Role"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
+    # If Authorization Bearer token provided, prefer it
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        try:
+            payload = decode_access_token(token)
+            username = payload.get("sub")
+            if username:
+                user = db.query(models.User).filter(models.User.username == username).first()
+                if user and user.role == "Admin" and getattr(user, "is_active", True):
+                    return user
+        except Exception:
+            # fall back to header-based checks if token invalid
+            pass
+
+    # legacy header-based admin check
     if not admin_username or not admin_role or admin_role.strip().lower() != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 

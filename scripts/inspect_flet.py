@@ -1,0 +1,10 @@
+import flet
+print('flet version:', getattr(flet, '__version__', 'unknown'))
+print('has run:', hasattr(flet, 'run'))
+print('has app:', hasattr(flet, 'app'))
+print('has Button:', hasattr(flet, 'Button'))
+print('has TextButton:', hasattr(flet, 'TextButton'))
+print('has OutlinedButton:', hasattr(flet, 'OutlinedButton'))
+print('has Icons:', hasattr(flet, 'Icons'))
+print('Button-like attrs:', [name for name in dir(flet) if 'Button' in name][:50])
+print('module file:', flet.__file__)

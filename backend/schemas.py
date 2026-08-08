@@ -67,6 +67,13 @@ class DocumentResponse(BaseModel):
     qr_code_value: Optional[str] = None
     routing_history: Optional[list[dict]] = None
     created_by: Optional[str] = None
+    created_by_id: Optional[int] = None
+    document_type_id: Optional[int] = None
+    category_id: Optional[int] = None
+    originating_office_id: Optional[int] = None
+    current_office_id: Optional[int] = None
+    history_rows: Optional[list[dict]] = None
+    attachments: Optional[list[dict]] = None
     archived: bool
     created_at: datetime
     updated_at: Optional[datetime] = None

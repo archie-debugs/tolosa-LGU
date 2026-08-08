@@ -1,9 +1,15 @@
 import os
 import json
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
-# Ensure we use an in-memory SQLite DB for tests so we don't touch sb_tolosa.db
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# Ensure we use a file-backed SQLite DB for tests to avoid in-memory threading issues
+os.environ["DATABASE_URL"] = "sqlite:///./test_db.sqlite"
+# Remove any existing test DB file to ensure tests start with a clean database
+try:
+    if os.path.exists("test_db.sqlite"):
+        os.remove("test_db.sqlite")
+except Exception:
+    pass
 
 import sys
 from pathlib import Path
@@ -17,6 +23,17 @@ from backend import models
 
 # Create tables in the in-memory DB
 models.Base.metadata.create_all(bind=engine)
+
+# Create a test admin user so header-based admin auth succeeds
+from backend.database import SessionLocal
+db = SessionLocal()
+try:
+    admin_user = models.User(username="testadmin", hashed_password="testpass", role="Admin", is_active=True)
+    db.add(admin_user)
+    db.commit()
+    db.refresh(admin_user)
+finally:
+    db.close()
 
 client = TestClient(app)
 
@@ -61,7 +78,8 @@ print("TEST 3 duplicate pending status:", resp3b.status_code)
 assert resp3b.status_code == 409
 
 # TEST 4: Admin retrieves registration list
-list_resp = client.get("/registration/requests")
+admin_headers = {"X-Admin-Username": "testadmin", "X-Admin-Role": "Admin"}
+list_resp = client.get("/registration/requests", headers=admin_headers)
 print("TEST 4 list status:", list_resp.status_code, list_resp.json())
 assert list_resp.status_code == 200
 items = list_resp.json().get("items", [])
@@ -69,7 +87,7 @@ assert len(items) >= 2
 
 # TEST 5: Admin retrieves registration detail
 first_id = items[0]["id"]
-detail_resp = client.get(f"/registration/requests/{first_id}")
+detail_resp = client.get(f"/registration/requests/{first_id}", headers=admin_headers)
 print("TEST 5 detail status:", detail_resp.status_code, detail_resp.json())
 assert detail_resp.status_code == 200
 
@@ -80,13 +98,13 @@ resp4 = client.post("/registration/requests", json=payload3)
 req_id = None
 if resp4.status_code == 201:
     # find it
-    items = client.get("/registration/requests").json().get("items", [])
+    items = client.get("/registration/requests", headers=admin_headers).json().get("items", [])
     for it in items:
         if it["username"] == "approvetest":
             req_id = it["id"]
             break
 assert req_id is not None
-approve_resp = client.put(f"/registration/requests/{req_id}/approve", json={"final_role": "Staff"})
+approve_resp = client.put(f"/registration/requests/{req_id}/approve", json={"final_role": "Staff"}, headers=admin_headers)
 print("TEST 6 approve status:", approve_resp.status_code, approve_resp.json())
 assert approve_resp.status_code == 200
 
@@ -99,24 +117,24 @@ assert login_resp.status_code == 200
 payload4 = {**payload, "username": "rejecttest", "email": "reject@example.com"}
 resp5 = client.post("/registration/requests", json=payload4)
 assert resp5.status_code == 201
-items = client.get("/registration/requests").json().get("items", [])
+items = client.get("/registration/requests", headers=admin_headers).json().get("items", [])
 req_id2 = None
 for it in items:
     if it["username"] == "rejecttest":
         req_id2 = it["id"]
         break
 assert req_id2 is not None
-reject_resp = client.put(f"/registration/requests/{req_id2}/reject", json={"reason": "Invalid ID"})
+reject_resp = client.put(f"/registration/requests/{req_id2}/reject", json={"reason": "Invalid ID"}, headers=admin_headers)
 print("TEST 7 reject status:", reject_resp.status_code, reject_resp.json())
 assert reject_resp.status_code == 200
 
 # TEST 8/9: Invalid transitions
 # Try approve already approved
-bad = client.put(f"/registration/requests/{req_id}/approve", json={"final_role": "Staff"})
+bad = client.put(f"/registration/requests/{req_id}/approve", json={"final_role": "Staff"}, headers=admin_headers)
 print("TEST 8 approve again status:", bad.status_code, bad.json())
 assert bad.status_code == 400
 # Try approve rejected
-bad2 = client.put(f"/registration/requests/{req_id2}/approve", json={"final_role": "Staff"})
+bad2 = client.put(f"/registration/requests/{req_id2}/approve", json={"final_role": "Staff"}, headers=admin_headers)
 print("TEST 9 approve rejected status:", bad2.status_code, bad2.json())
 assert bad2.status_code == 400
 
