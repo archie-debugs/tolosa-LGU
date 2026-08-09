@@ -1,4 +1,6 @@
 import flet as ft
+from datetime import date
+
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
 if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
@@ -117,8 +119,8 @@ load_dotenv()
 
 from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.documents import build_documents_view
-from frontend.frontend_admin.users_roles import build_users_roles_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
+from frontend.frontend_admin.users_roles import build_users_roles_table, build_users_roles_view
 from frontend.frontend_admin.admin_shell import render_shell
 
 def main(page: ft.Page):
@@ -196,41 +198,6 @@ def main(page: ft.Page):
         except Exception:
             return value
 
-    users_table = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("ID", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Full Name", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Created Date", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD)),
-        ],
-        rows=[],
-        expand=True,
-        column_spacing=12,
-        horizontal_margin=0,
-        data_row_min_height=44,
-        data_text_style=ft.TextStyle(size=13),
-        heading_text_style=ft.TextStyle(size=12, weight=ft.FontWeight.BOLD),
-    )
-
-    user_username_input = ft.TextField(label="Username", width=280)
-    user_password_input = ft.TextField(label="Password", width=280, password=True, can_reveal_password=True)
-    user_role_input = ft.Dropdown(
-        label="Role",
-        width=220,
-        options=[
-            ft.dropdown.Option("Admin"),
-            ft.dropdown.Option("Secretary / Vice Mayor"),
-            ft.dropdown.Option("Staff"),
-        ],
-        value="Admin",
-    )
-
-    users_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
-    pending_delete_user = None
-
     committee_editor_column = ft.Column(spacing=10)
     committee_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
     pending_delete_committee = None
@@ -286,17 +253,6 @@ def main(page: ft.Page):
     delete_dialog = ft.AlertDialog(title=ft.Text("Confirm Action"), content=ft.Text(""), actions=[])
     page.overlay.append(delete_dialog)
 
-    user_details_dialog = ft.AlertDialog(
-        title=ft.Text("User Details"),
-        content=ft.Container(content=ft.Text(""), padding=8),
-        actions=[ft.TextButton("Close", on_click=lambda _: close_user_details_dialog())],
-    )
-    page.overlay.append(user_details_dialog)
-
-    def refresh_user_display_ids(users):
-        for idx, user in enumerate(users, start=1):
-            user["display_id"] = idx
-
     def surface_card(content, width=None, padding=24, expand=False):
         return ft.Container(
             content=content,
@@ -328,341 +284,6 @@ def main(page: ft.Page):
             spacing=14,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-
-    def close_user_details_dialog():
-        user_details_dialog.open = False
-        page.update()
-
-    def show_user_details(user):
-        user_details_dialog.title = ft.Text("User Details")
-        user_details_dialog.content = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text("Username", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(user.get("username", "-"), size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text("Role", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(user.get("role", "Admin"), size=14),
-                    ft.Text("Status", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(user.get("status", "Active"), size=14),
-                ],
-                spacing=8,
-            ),
-            padding=8,
-        )
-        user_details_dialog.open = True
-        page.update()
-
-    def show_registration_details(reg):
-        user_details_dialog.title = ft.Text("Registration Details")
-        user_details_dialog.content = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text("Username", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(reg.get("username", "-"), size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text("Full Name", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(reg.get("full_name") or reg.get("applicant_name", "-"), size=14),
-                    ft.Text("Requested Role", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(reg.get("requested_access") or reg.get("role", "-"), size=14),
-                    ft.Text("Status", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(reg.get("status", "Pending"), size=14),
-                    ft.Text("Created Date", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ft.Text(reg.get("created_at") or "—", size=14),
-                ],
-                spacing=8,
-            ),
-            padding=8,
-        )
-        user_details_dialog.open = True
-        page.update()
-
-    def approve_registration(reg):
-        try:
-            response = requests.put(
-                f"{BACKEND_URL}/registration/requests/{reg.get('id')}/approve",
-                headers=get_admin_headers(),
-                json={"final_role": reg.get("requested_access") or "Staff"},
-                verify=False,
-                timeout=10,
-            )
-            if response.status_code == 200:
-                page.snack_bar = ft.SnackBar(ft.Text("Registration approved."), open=True)
-                load_users_table()
-            else:
-                page.snack_bar = ft.SnackBar(ft.Text(f"Approve failed: {response.text}"), open=True)
-        except Exception as exc:
-            page.snack_bar = ft.SnackBar(ft.Text(f"Approve error: {exc}"), open=True)
-        page.update()
-
-    def reject_registration(reg):
-        try:
-            response = requests.put(
-                f"{BACKEND_URL}/registration/requests/{reg.get('id')}/reject",
-                headers=get_admin_headers(),
-                json={"reason": "Rejected by admin"},
-                verify=False,
-                timeout=10,
-            )
-            if response.status_code == 200:
-                page.snack_bar = ft.SnackBar(ft.Text("Registration rejected."), open=True)
-                load_users_table()
-            else:
-                page.snack_bar = ft.SnackBar(ft.Text(f"Reject failed: {response.text}"), open=True)
-        except Exception as exc:
-            page.snack_bar = ft.SnackBar(ft.Text(f"Reject error: {exc}"), open=True)
-        page.update()
-
-    def show_not_implemented_action(action_name):
-        users_notice.value = f"{action_name} is not yet implemented in the backend."
-        page.update()
-
-    def load_users_table():
-        try:
-            users_response = requests.get(
-                f"{BACKEND_URL}/auth/users",
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=10,
-            )
-            users = users_response.json().get("items", []) if users_response.status_code == 200 else []
-
-            regs_response = requests.get(
-                f"{BACKEND_URL}/registration/requests",
-                headers=get_admin_headers(),
-                params={"status": "Pending"},
-                verify=False,
-                timeout=10,
-            )
-            regs = regs_response.json().get("items", []) if regs_response.status_code == 200 else []
-
-            usernames = {u.get("username") for u in users if u.get("username")}
-            accounts = []
-
-            for user in users:
-                accounts.append(
-                    {
-                        "source": "user",
-                        "id": user.get("id"),
-                        "username": user.get("username"),
-                        "full_name": user.get("full_name") or user.get("username"),
-                        "role": user.get("role", "Admin"),
-                        "status": user.get("status", "Active"),
-                        "created_at": user.get("created_at") or "—",
-                        "raw": user,
-                    }
-                )
-
-            for reg in regs:
-                status = (reg.get("status") or "Pending").strip()
-                if status != "Pending":
-                    continue
-                if reg.get("username") in usernames:
-                    continue
-                accounts.append(
-                    {
-                        "source": "registration",
-                        "id": reg.get("id"),
-                        "username": reg.get("username") or reg.get("email") or "-",
-                        "full_name": reg.get("full_name") or reg.get("applicant_name") or f"{(reg.get('first_name') or '').strip()} {(reg.get('last_name') or '').strip()}".strip(),
-                        "role": reg.get("requested_access") or "-",
-                        "status": status,
-                        "created_at": reg.get("created_at") or "—",
-                        "raw": reg,
-                    }
-                )
-
-            refresh_user_display_ids(accounts)
-            rows = []
-            for acct in accounts:
-                display_id = acct.get("display_id") or acct.get("id") or "-"
-                if acct["source"] == "registration":
-                    actions = [
-                        ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, a=acct: show_registration_details(a)),
-                        ft.PopupMenuItem(content=ft.Text("Approve Registration"), on_click=lambda _, a=acct: approve_registration(a)),
-                        ft.PopupMenuItem(content=ft.Text("Reject Registration"), on_click=lambda _, a=acct: reject_registration(a)),
-                    ]
-                else:
-                    actions = [
-                        ft.PopupMenuItem(content=ft.Text("View User"), on_click=lambda _, a=acct: show_user_details(a.get("raw", {}))),
-                        ft.PopupMenuItem(content=ft.Text("Set Admin"), on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Admin")),
-                        ft.PopupMenuItem(content=ft.Text("Set Secretary / Vice Mayor"), on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Secretary / Vice Mayor")),
-                        ft.PopupMenuItem(content=ft.Text("Set Staff"), on_click=lambda _, a=acct: update_user_role(a.get("raw", {}), "Staff")),
-                        ft.PopupMenuItem(content=ft.Text("Activate Account"), on_click=lambda _, a=acct: show_not_implemented_action("Activate Account")),
-                        ft.PopupMenuItem(content=ft.Text("Deactivate Account"), on_click=lambda _, a=acct: show_not_implemented_action("Deactivate Account")),
-                        ft.PopupMenuItem(content=ft.Text("Reset Password"), on_click=lambda _, a=acct: show_not_implemented_action("Reset Password")),
-                        ft.PopupMenuItem(content=ft.Text("Delete User"), on_click=lambda _, a=acct: confirm_delete_user(a.get("raw", {}))),
-                    ]
-
-                rows.append(
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.Text(str(display_id), size=13),
-                                    width=60,
-                                    alignment=ft.Alignment.CENTER,
-                                )
-                            ),
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.Text(
-                                        acct.get("username", "-"),
-                                        size=13,
-                                        overflow=ft.TextOverflow.ELLIPSIS,
-                                        no_wrap=True,
-                                    ),
-                                )
-                            ),
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.Text(
-                                        acct.get("full_name") or acct.get("username", "-"),
-                                        size=13,
-                                        overflow=ft.TextOverflow.ELLIPSIS,
-                                        no_wrap=True,
-                                    ),
-                                )
-                            ),
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.Text(
-                                        acct.get("role", "-"),
-                                        size=13,
-                                    ),
-                                    width=120,
-                                    alignment=ft.Alignment.CENTER,
-                                )
-                            ),
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.Text(
-                                        acct.get("status", "Pending"),
-                                        size=13,
-                                    ),
-                                    width=110,
-                                    alignment=ft.Alignment.CENTER,
-                                )
-                            ),
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.Text(format_created_date(acct.get("created_at")), size=13),
-                                    width=100,
-                                    alignment=ft.Alignment.CENTER,
-                                )
-                            ),
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.PopupMenuButton(
-                                        icon=ft.Icons.MORE_VERT,
-                                        tooltip="User actions",
-                                        items=actions,
-                                    ),
-                                    width=140,
-                                    alignment=ft.Alignment.CENTER,
-                                )
-                            ),
-                        ],
-                    )
-                )
-            users_table.rows = rows
-            users_notice.value = "" if rows else "No users found in the current database."
-        except Exception as exc:
-            users_table.rows = []
-            users_notice.value = f"Load error: {exc}"
-        page.update()
-
-    def create_user_record(_=None):
-        if not user_username_input.value or not user_password_input.value:
-            users_notice.value = "Username and password are required."
-            page.update()
-            return
-
-        try:
-            response = requests.post(
-                f"{BACKEND_URL}/auth/register",
-                params={
-                    "username": user_username_input.value.strip(),
-                    "password": user_password_input.value,
-                    "role": user_role_input.value or "Admin",
-                },
-                verify=False,
-                timeout=10,
-            )
-            if response.status_code == 200:
-                user_username_input.value = ""
-                user_password_input.value = ""
-                users_notice.value = "User created successfully."
-                load_users_table()
-            else:
-                users_notice.value = f"Create failed: {response.text}"
-        except Exception as exc:
-            users_notice.value = f"Create error: {exc}"
-        page.update()
-
-    def update_user_role(user, role):
-        try:
-            response = requests.put(
-                f"{BACKEND_URL}/auth/users/{requests.utils.quote(user['username'])}/role",
-                headers=get_admin_headers(),
-                params={"role": role},
-                verify=False,
-                timeout=10,
-            )
-            if response.status_code == 200:
-                load_users_table()
-                users_notice.value = response.json().get("message", "Role updated.")
-            else:
-                users_notice.value = f"Role update failed: {response.text}"
-        except Exception as exc:
-            users_notice.value = f"Role update error: {exc}"
-        page.update()
-
-    def delete_user_record(user):
-        try:
-            response = requests.delete(
-                f"{BACKEND_URL}/auth/users/{requests.utils.quote(user['username'])}",
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=10,
-            )
-            if response.status_code == 200:
-                users_notice.value = response.json().get("message", "User deleted.")
-                load_users_table()
-            else:
-                users_notice.value = f"Delete failed: {response.text}"
-        except Exception as exc:
-            users_notice.value = f"Delete error: {exc}"
-        page.update()
-
-    def confirm_delete_user(user):
-        nonlocal pending_delete_user
-        pending_delete_user = user
-        delete_dialog.title = ft.Text("Delete User")
-        delete_dialog.content = ft.Text(f"Delete user \"{user.get('username', 'this user')}\"? This cannot be undone.")
-        delete_dialog.actions = [
-            ft.TextButton("Cancel", on_click=lambda _: close_delete_dialog()),
-            ft.Button(
-                "Delete",
-                icon=ft.Icons.DELETE_OUTLINE,
-                bgcolor=ft.Colors.RED_700,
-                color=ft.Colors.WHITE,
-                on_click=lambda _: run_delete_user_action(),
-            ),
-        ]
-        delete_dialog.open = True
-        page.update()
-
-    def close_delete_dialog():
-        nonlocal pending_delete_user
-        delete_dialog.open = False
-        pending_delete_user = None
-        page.update()
-
-    def run_delete_user_action():
-        nonlocal pending_delete_user
-        user = pending_delete_user
-        close_delete_dialog()
-        if user:
-            delete_user_record(user)
 
     def open_committee_dialog(index: int | None):
         nonlocal committee_edit_index
@@ -797,25 +418,6 @@ def main(page: ft.Page):
             tb = traceback.format_exc()
             print("committees_view error:\n", tb)
             return ft.Column([ft.Text("Error building Committees view"), ft.Text(str(e)), ft.Text(tb)])
-
-    def users_roles_view():
-        try:
-            load_users_table()
-            return build_users_roles_view(
-                user_username_input,
-                user_password_input,
-                user_role_input,
-                users_notice,
-                users_table,
-                create_user_record,
-                surface_card,
-                section_header,
-            )
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            print("users_roles_view error:\n", tb)
-            return ft.Column([ft.Text("Error building Users & Roles view"), ft.Text(str(e)), ft.Text(tb)])
 
     documents_data = []
     archived_documents_data = []
@@ -1122,7 +724,7 @@ def main(page: ft.Page):
 
     def load_qr_monitor_data():
         try:
-            response = requests.get(f"{BACKEND_URL}/documents/qr/monitor", verify=False, timeout=10)
+            response = requests.get(f"{BACKEND_URL}/documents/qr/monitor", headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             payload = response.json() if response.content else {}
@@ -1162,7 +764,7 @@ def main(page: ft.Page):
             "status": scan_status_dropdown.value or "In Routing",
         }
         try:
-            response = requests.post(f"{BACKEND_URL}/documents/scan", json=payload, verify=False, timeout=10)
+            response = requests.post(f"{BACKEND_URL}/documents/scan", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             load_documents_table()
@@ -1488,7 +1090,7 @@ def main(page: ft.Page):
 
     def generate_tracking_number():
         try:
-            response = requests.get(f"{BACKEND_URL}/documents", verify=False, timeout=10)
+            response = requests.get(f"{BACKEND_URL}/documents", headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code == 200:
                 payload = response.json() if response.content else []
                 documents = payload if isinstance(payload, list) else payload.get("items", [])
@@ -1621,7 +1223,7 @@ def main(page: ft.Page):
                 "time": datetime.now().strftime("%H:%M"),
             }
             try:
-                response = requests.post(f"{BACKEND_URL}/documents/{document.get('id')}/route", json=payload, verify=False, timeout=10)
+                response = requests.post(f"{BACKEND_URL}/documents/{document.get('id')}/route", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
                 if response.status_code != 200:
                     raise Exception(response.text)
                 load_documents_table()
@@ -1635,7 +1237,7 @@ def main(page: ft.Page):
 
     def show_document_details(doc):
         try:
-            response = requests.get(f"{BACKEND_URL}/documents/{doc.get('id')}", verify=False, timeout=10)
+            response = requests.get(f"{BACKEND_URL}/documents/{doc.get('id')}", headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code == 200:
                 doc = normalize_document(response.json())
             else:
@@ -1659,7 +1261,7 @@ def main(page: ft.Page):
 
         def generate_document_qr(document):
             try:
-                response = requests.post(f"{BACKEND_URL}/documents/{document.get('id')}/qr", verify=False, timeout=10)
+                response = requests.post(f"{BACKEND_URL}/documents/{document.get('id')}/qr", headers=get_admin_headers(), verify=False, timeout=10)
                 if response.status_code != 200:
                     raise Exception(response.text)
                 updated = normalize_document(response.json())
@@ -1926,7 +1528,7 @@ def main(page: ft.Page):
 
     def update_document_record(document_id, payload):
         try:
-            response = requests.put(f"{BACKEND_URL}/documents/{document_id}", json=payload, verify=False, timeout=10)
+            response = requests.put(f"{BACKEND_URL}/documents/{document_id}", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             load_documents_table()
@@ -1936,7 +1538,7 @@ def main(page: ft.Page):
 
     def delete_document_record(document_id):
         try:
-            response = requests.delete(f"{BACKEND_URL}/documents/{document_id}", verify=False, timeout=10)
+            response = requests.delete(f"{BACKEND_URL}/documents/{document_id}", headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             load_documents_table()
@@ -2143,7 +1745,7 @@ def main(page: ft.Page):
                 params["start_date"] = archived_documents_filter_start_date.value
             if archived_documents_filter_end_date.value:
                 params["end_date"] = archived_documents_filter_end_date.value
-            response = requests.get(f"{BACKEND_URL}/documents", params=params, verify=False, timeout=10)
+            response = requests.get(f"{BACKEND_URL}/documents", params=params, headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             payload = response.json() if response.content else []
@@ -2276,7 +1878,7 @@ def main(page: ft.Page):
                 params["start_date"] = documents_filter_start_date.value
             if documents_filter_end_date.value:
                 params["end_date"] = documents_filter_end_date.value
-            response = requests.get(f"{BACKEND_URL}/documents", params=params, verify=False, timeout=10)
+            response = requests.get(f"{BACKEND_URL}/documents", params=params, headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             payload = response.json() if response.content else []
@@ -2310,7 +1912,7 @@ def main(page: ft.Page):
                 params["start_date"] = documents_filter_start_date.value
             if documents_filter_end_date.value:
                 params["end_date"] = documents_filter_end_date.value
-            response = requests.get(f"{BACKEND_URL}/documents", params=params, verify=False, timeout=10)
+            response = requests.get(f"{BACKEND_URL}/documents", params=params, headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             payload = response.json() if response.content else []
@@ -2415,14 +2017,544 @@ def main(page: ft.Page):
             expand=True,
         )
 
+    def build_user_list_data():
+        base = [
+            {
+                "full_name": "Archie Delos Reyes",
+                "username": "devadmin",
+                "email": "devadmin@tolosa.gov.ph",
+                "role": "Super Administrator",
+                "status": "Active",
+                "permissions": ["*"],
+                "last_login": "Today, 09:14 AM",
+                "created": "2026-01-10",
+            },
+            {
+                "full_name": "Maria Santos",
+                "username": "employee1",
+                "email": "maria.santos@tolosa.gov.ph",
+                "role": "Employee",
+                "status": "Active",
+                "permissions": [
+                    "View Documents",
+                    "Register Documents",
+                    "Edit Documents",
+                    "Download Documents",
+                    "Print Documents",
+                    "Route Documents",
+                ],
+                "last_login": "Yesterday, 04:35 PM",
+                "created": "2026-02-04",
+            },
+            {
+                "full_name": "Liza Martinez",
+                "username": "sbmember1",
+                "email": "liza.martinez@tolosa.gov.ph",
+                "role": "SB Member",
+                "status": "Active",
+                "permissions": [
+                    "View Documents",
+                    "Search Documents",
+                    "Filter Documents",
+                    "View Document Details",
+                    "View Document Routing History",
+                    "Download Documents",
+                    "Print Documents",
+                ],
+                "last_login": "Aug 08, 2026",
+                "created": "2026-03-21",
+            },
+            {
+                "full_name": "Rafael Dela Cruz",
+                "username": "employee2",
+                "email": "rafael.delacruz@tolosa.gov.ph",
+                "role": "Employee",
+                "status": "Inactive",
+                "permissions": [
+                    "View Documents",
+                    "Search Documents",
+                    "Filter Documents",
+                    "Download Documents",
+                ],
+                "last_login": "—",
+                "created": "2026-04-01",
+            },
+        ]
+        return base
+
+    user_management_data = build_user_list_data()
+
+    user_table_holder = ft.Container(width="100%")
+    user_no_users_notice = ft.Container(width="100%", visible=False)
+
+    def update_users_role_view(_=None):
+        visible_users = filter_user_data()
+        user_table_holder.content = build_users_roles_table(
+            visible_users,
+            lambda item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
+            lambda item=None: open_edit_user_dialog(item or visible_users[0] if visible_users else {}),
+            lambda item=None: open_reset_password_dialog(item or visible_users[0] if visible_users else {}),
+            lambda item=None: toggle_user_status(item or visible_users[0] if visible_users else {}),
+        )
+        user_no_users_notice.visible = len(visible_users) == 0
+        page.update()
+
+    user_search_field = ft.TextField(
+        label="Search users...",
+        width=260,
+        prefix_icon=ft.Icon(ft.Icons.SEARCH, size=18),
+        on_change=update_users_role_view,
+    )
+    user_role_filter = ft.Dropdown(
+        label="Role",
+        width=180,
+        options=[
+            ft.dropdown.Option("All"),
+            ft.dropdown.Option("Employee"),
+            ft.dropdown.Option("SB Member"),
+            ft.dropdown.Option("Super Administrator"),
+        ],
+        value="All",
+        on_change=update_users_role_view,
+    )
+    user_status_filter = ft.Dropdown(
+        label="Account Status",
+        width=180,
+        options=[
+            ft.dropdown.Option("All"),
+            ft.dropdown.Option("Active"),
+            ft.dropdown.Option("Inactive"),
+        ],
+        value="All",
+        on_change=update_users_role_view,
+    )
+    user_permission_filter = ft.Dropdown(
+        label="Permission",
+        width=260,
+        options=[
+            ft.dropdown.Option("All"),
+            ft.dropdown.Option("View Documents"),
+            ft.dropdown.Option("Search Documents"),
+            ft.dropdown.Option("Filter Documents"),
+            ft.dropdown.Option("View Document Details"),
+            ft.dropdown.Option("View Document Routing History"),
+            ft.dropdown.Option("Download Documents"),
+            ft.dropdown.Option("Print Documents"),
+            ft.dropdown.Option("Register Documents"),
+            ft.dropdown.Option("Edit Documents"),
+            ft.dropdown.Option("Delete Documents"),
+            ft.dropdown.Option("Archive Documents"),
+            ft.dropdown.Option("Restore Documents"),
+            ft.dropdown.Option("Generate QR Codes"),
+            ft.dropdown.Option("Print QR Codes"),
+            ft.dropdown.Option("View QR Tracking"),
+            ft.dropdown.Option("Route Documents"),
+            ft.dropdown.Option("Create Users"),
+            ft.dropdown.Option("Edit Users"),
+            ft.dropdown.Option("Reset Passwords"),
+            ft.dropdown.Option("Activate Users"),
+            ft.dropdown.Option("Deactivate Users"),
+            ft.dropdown.Option("Delete Users"),
+            ft.dropdown.Option("Assign Roles"),
+            ft.dropdown.Option("Manage Permissions"),
+            ft.dropdown.Option("Add Committee"),
+            ft.dropdown.Option("Edit Committee"),
+            ft.dropdown.Option("Delete Committee"),
+            ft.dropdown.Option("View Audit Logs"),
+            ft.dropdown.Option("Export Audit Logs"),
+            ft.dropdown.Option("Modify System Settings"),
+        ],
+        value="All",
+        on_change=update_users_role_view,
+    )
+    user_office_filter = ft.Dropdown(
+        label="Department/Office",
+        width=180,
+        options=[
+            ft.dropdown.Option("All"),
+            ft.dropdown.Option("SB Secretariat"),
+            ft.dropdown.Option("Office of the Mayor"),
+            ft.dropdown.Option("Committee on Health"),
+        ],
+        value="All",
+        on_change=update_users_role_view,
+    )
+
+    def filter_user_data():
+        query = (user_search_field.value or "").strip().lower()
+        terms = [term for term in query.split() if term]
+        role_value = user_role_filter.value or "All"
+        status_value = user_status_filter.value or "All"
+        office_value = user_office_filter.value or "All"
+        visible = []
+
+        def matches_term(item, term):
+            if not term:
+                return True
+            fields = [
+                (item.get("full_name") or "").lower(),
+                (item.get("username") or "").lower(),
+                (item.get("email") or "").lower(),
+                (item.get("role") or "").lower(),
+                (item.get("status") or "").lower(),
+                (item.get("department") or "").lower(),
+            ]
+            fields.extend((p or "").lower() for p in (item.get("permissions") or []))
+            if "@" in term:
+                return any(term in field for field in fields)
+            return any(term in field for field in fields)
+
+        for item in user_management_data:
+            if terms and not all(matches_term(item, term) for term in terms):
+                continue
+            if role_value != "All" and item.get("role") != role_value:
+                continue
+            if status_value != "All" and item.get("status") != status_value:
+                continue
+            if office_value != "All" and item.get("department") != office_value:
+                continue
+            permission_value = user_permission_filter.value or "All"
+            if permission_value != "All":
+                permissions = [p.lower() for p in (item.get("permissions") or [])]
+                if permission_value.lower() not in permissions:
+                    continue
+            visible.append(item)
+        return visible
+
+    def users_roles_view():
+        visible_users = filter_user_data()
+
+        create_button = ft.Button(
+            "+ Create User",
+            on_click=lambda _: open_create_user_dialog(),
+            bgcolor=ft.Colors.BLUE_800,
+            color=ft.Colors.WHITE,
+        )
+        refresh_button = ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: page.update())
+        view = build_users_roles_view(
+            visible_users,
+            user_search_field,
+            user_role_filter,
+            user_status_filter,
+            user_office_filter,
+            user_permission_filter,
+            create_button,
+            refresh_button,
+            lambda _: open_create_user_dialog(),
+            lambda _, item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
+            lambda _, item=None: open_edit_user_dialog(item or visible_users[0] if visible_users else {}),
+            lambda _, item=None: open_reset_password_dialog(item or visible_users[0] if visible_users else {}),
+            lambda _, item=None: toggle_user_status(item or visible_users[0] if visible_users else {}),
+            page,
+            surface_card,
+            section_header,
+            user_table_holder,
+            user_no_users_notice,
+        )
+        update_users_role_view()
+        return view
+
+    def open_create_user_dialog():
+        full_name = ft.TextField(label="Full Name")
+        username = ft.TextField(label="Username")
+        email = ft.TextField(label="Email")
+        password = ft.TextField(label="Temporary Password", password=True, can_reveal_password=True)
+        confirm_password = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True)
+        role_choice = ft.Dropdown(
+            label="Role",
+            options=[
+                ft.dropdown.Option("Employee"),
+                ft.dropdown.Option("SB Member"),
+            ],
+            value="Employee",
+        )
+
+        permission_area = ft.Column([], spacing=8)
+
+        def render_permission_section():
+            permission_area.controls.clear()
+            if role_choice.value == "Employee":
+                permission_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=13, color=ft.Colors.BLUE_GREY_800))
+                for section_name, perms in {
+                    "Dashboard": ["View Dashboard"],
+                    "Documents": ["Register Documents", "Edit Documents", "Delete Documents", "Archive Documents", "Restore Documents", "View Documents", "Import Documents", "Export Documents", "Download Documents", "Print Documents"],
+                    "QR Code": ["Generate QR Codes", "Print QR Codes", "View QR Tracking"],
+                    "Document Routing": ["Route Documents"],
+                    "Users & Roles": ["Create Users", "Edit Users", "Reset Passwords", "Activate Users", "Deactivate Users", "Delete Users", "Assign Roles", "Manage Permissions"],
+                    "Committees": ["Add Committee", "Edit Committee", "Delete Committee"],
+                    "Audit Logs": ["View Audit Logs", "Export Audit Logs"],
+                    "Settings": ["Modify System Settings"],
+                }.items():
+                    permission_area.controls.append(ft.Text(section_name, weight=ft.FontWeight.W_600, size=12, color=ft.Colors.BLUE_GREY_700))
+                    permission_area.controls.append(ft.Row([ft.Checkbox(label=perm, value=False, scale=0.9) for perm in perms], spacing=8, run_spacing=6, wrap=True))
+            else:
+                permission_area.controls.append(ft.Text("SB Member Access", weight=ft.FontWeight.BOLD, size=13, color=ft.Colors.BLUE_GREY_800))
+                permission_area.controls.append(ft.Column([
+                    ft.Checkbox(label="View Documents", value=True, disabled=True),
+                    ft.Checkbox(label="Search Documents", value=True, disabled=True),
+                    ft.Checkbox(label="Filter Documents", value=True, disabled=True),
+                    ft.Checkbox(label="View Document Details", value=True, disabled=True),
+                    ft.Checkbox(label="View Document Routing History", value=True, disabled=True),
+                    ft.Checkbox(label="Download Documents", value=True, disabled=True),
+                    ft.Checkbox(label="Print Documents", value=True, disabled=True),
+                ], spacing=6))
+                permission_area.controls.append(ft.Text("SB Members do not have QR Tracking, registration, routing, editing, or user-management access.", size=11, color=ft.Colors.BLUE_GREY_600))
+            page.update()
+
+        role_choice.on_change = lambda _: render_permission_section()
+        render_permission_section()
+
+        def collect_selected_permissions(control):
+            permissions = []
+            if isinstance(control, ft.Checkbox):
+                if control.value:
+                    permissions.append(control.label)
+            elif hasattr(control, "controls"):
+                for child in control.controls:
+                    permissions.extend(collect_selected_permissions(child))
+            return permissions
+
+        def create_account(_):
+            if not full_name.value or not username.value or not email.value:
+                error_message.value = "Full name, username, and email are required."
+                page.update()
+                return
+
+            if password.value != confirm_password.value:
+                error_message.value = "Passwords do not match."
+                page.update()
+                return
+
+            permissions = []
+            for control in permission_area.controls:
+                permissions.extend(collect_selected_permissions(control))
+
+            new_user = {
+                "full_name": full_name.value,
+                "username": username.value,
+                "email": email.value,
+                "role": role_choice.value,
+                "status": "Active",
+                "permissions": permissions,
+                "last_login": "—",
+                "created": date.today().strftime("%Y-%m-%d"),
+            }
+            user_management_data.append(new_user)
+            close_dialog(dialog)
+            update_users_role_view()
+
+        error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Create User Account"),
+            content=ft.Container(
+                content=ft.Column([
+                    full_name,
+                    username,
+                    email,
+                    password,
+                    confirm_password,
+                    role_choice,
+                    permission_area,
+                    error_message,
+                ], width=560, scroll=ft.ScrollMode.AUTO, spacing=10),
+                width=580,
+                height=640,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                ft.Button("Create Account", on_click=create_account, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
+            ],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def open_view_user_dialog(user):
+        role = user.get("role", "Employee")
+        access_summary = ft.Column([])
+        if role == "Super Administrator":
+            access_summary.controls.append(ft.Text("Full System Access", weight=ft.FontWeight.BOLD, size=14))
+            access_summary.controls.append(ft.Text("All permissions are permanently enabled.", color=ft.Colors.BLUE_GREY_700))
+        elif role == "SB Member":
+            access_summary.controls.append(ft.Text("Read-Only Access", weight=ft.FontWeight.BOLD, size=14))
+            for item in ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "View Document Routing History", "Download Documents", "Print Documents"]:
+                access_summary.controls.append(ft.Checkbox(label=item, value=True, disabled=True, scale=0.9))
+        else:
+            access_summary.controls.append(ft.Text("Assigned Permissions", weight=ft.FontWeight.BOLD, size=14))
+            for perm in user.get("permissions") or ["View Documents"]:
+                access_summary.controls.append(ft.Checkbox(label=perm, value=True, disabled=True, scale=0.9))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("User Details"),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Text("User Information", weight=ft.FontWeight.BOLD, size=16),
+                    ft.Text(f"Full Name: {user.get('full_name', '-')}") ,
+                    ft.Text(f"Username: {user.get('username', '-')}") ,
+                    ft.Text(f"Email: {user.get('email', '-')}") ,
+                    ft.Text(f"Role: {user.get('role', '-')}") ,
+                    ft.Text(f"Account Status: {user.get('status', 'Active')}") ,
+                    ft.Text(f"Created Date: {user.get('created', '-')}") ,
+                    ft.Text(f"Last Login: {user.get('last_login', '-')}") ,
+                    ft.Divider(height=1),
+                    ft.Text("Access Summary", weight=ft.FontWeight.BOLD, size=16),
+                    access_summary,
+                ], width=520, spacing=8),
+                width=560,
+            ),
+            actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def open_edit_user_dialog(user):
+        if user.get("role") == "Super Administrator":
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Super Administrator"),
+                content=ft.Column([
+                    ft.Text("Full system access", weight=ft.FontWeight.BOLD),
+                    ft.Text("All permissions are permanently enabled."),
+                    ft.Checkbox(label="Full Access", value=True, disabled=True),
+                ], width=420, spacing=10),
+                actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
+            )
+            page.overlay.append(dialog)
+            dialog.open = True
+            page.update()
+            return
+
+        full_name = ft.TextField(label="Full Name", value=user.get("full_name", ""))
+        username = ft.TextField(label="Username", value=user.get("username", ""))
+        email = ft.TextField(label="Email", value=user.get("email", ""))
+        role_choice = ft.Dropdown(
+            label="Role",
+            value=user.get("role", "Employee"),
+            options=[ft.dropdown.Option("Employee"), ft.dropdown.Option("SB Member")],
+        )
+        status_choice = ft.Dropdown(
+            label="Account Status",
+            value=user.get("status", "Active"),
+            options=[ft.dropdown.Option("Active"), ft.dropdown.Option("Inactive")],
+        )
+        permissions_area = ft.Column([], spacing=8)
+
+        def render_edit_permissions():
+            permissions_area.controls.clear()
+            if role_choice.value == "SB Member":
+                permissions_area.controls.append(ft.Text("SB Member permissions are fixed and read-only.", size=12, color=ft.Colors.BLUE_GREY_700))
+                for item in ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "View Document Routing History", "Download Documents", "Print Documents"]:
+                    permissions_area.controls.append(ft.Checkbox(label=item, value=True, disabled=True, scale=0.9))
+            else:
+                permissions_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=13))
+                for section_name, perms in {
+                    "Dashboard": ["View Dashboard"],
+                    "Documents": ["Register Documents", "Edit Documents", "Delete Documents", "Archive Documents", "Restore Documents", "View Documents", "Import Documents", "Export Documents", "Download Documents", "Print Documents"],
+                    "QR Code": ["Generate QR Codes", "Print QR Codes", "View QR Tracking"],
+                    "Document Routing": ["Route Documents"],
+                    "Users & Roles": ["Create Users", "Edit Users", "Reset Passwords", "Activate Users", "Deactivate Users", "Delete Users", "Assign Roles", "Manage Permissions"],
+                    "Committees": ["Add Committee", "Edit Committee", "Delete Committee"],
+                    "Audit Logs": ["View Audit Logs", "Export Audit Logs"],
+                    "Settings": ["Modify System Settings"],
+                }.items():
+                    permissions_area.controls.append(ft.Text(section_name, weight=ft.FontWeight.W_600, size=12, color=ft.Colors.BLUE_GREY_700))
+                    permissions_area.controls.append(ft.Row([ft.Checkbox(label=perm, value=(perm in (user.get("permissions") or [])), scale=0.9) for perm in perms], spacing=8, run_spacing=6, wrap=True))
+            page.update()
+
+        role_choice.on_change = lambda _: render_edit_permissions()
+        render_edit_permissions()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Edit User"),
+            content=ft.Container(
+                content=ft.Column([
+                    full_name,
+                    username,
+                    email,
+                    role_choice,
+                    status_choice,
+                    permissions_area,
+                ], width=560, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=580,
+                max_height=640,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                ft.Button("Save Changes", on_click=lambda _: close_dialog(dialog), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
+            ],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def open_reset_password_dialog(user):
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Reset Password"),
+            content=ft.Column([
+                ft.Text("Are you sure you want to reset this user's password?"),
+                ft.Text(f"User: {user.get('full_name', 'Unknown User')} ({user.get('username', '')})", color=ft.Colors.BLUE_GREY_700),
+            ], tight=True, spacing=8),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                ft.Button("Reset Password", on_click=lambda _: close_dialog(dialog), bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
+            ],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def toggle_user_status(user):
+        if user.get("role") == "Super Administrator":
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Protected Account"),
+                content=ft.Text("The Super Administrator account cannot be deactivated from this interface."),
+                actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
+            )
+            page.overlay.append(dialog)
+            dialog.open = True
+            page.update()
+            return
+
+        action = "Deactivate" if (user.get("status", "Active") == "Active") else "Activate"
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"{action} Account"),
+            content=ft.Text(f"Are you sure you want to {action.lower()} this account?"),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                ft.Button(action, on_click=lambda _: close_dialog(dialog), bgcolor=ft.Colors.RED_700 if action == "Deactivate" else ft.Colors.GREEN_700, color=ft.Colors.WHITE),
+            ],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def close_dialog(dialog):
+        dialog.open = False
+        page.update()
+
+    def users_role_page():
+        return users_roles_view()
+
     def logout_user():
-        nonlocal current_user, current_user_role
+        nonlocal current_user, current_user_role, runtime_token
         current_user = None
         current_user_role = None
+        runtime_token = None
         show_login()
 
     def archived_documents_view():
         return build_archived_documents_view()
+
+    def users_page_view():
+        return users_roles_view()
 
     def show_login():
         page.clean()
@@ -2434,7 +2566,7 @@ def main(page: ft.Page):
         login_error = ft.Text("", size=12, color=ft.Colors.RED_700)
 
         def attempt_login(_):
-            nonlocal current_user, current_user_role
+            nonlocal current_user, current_user_role, runtime_token
             username = (username_field.value or "").strip()
             password = password_field.value or ""
             login_error.value = ""
@@ -2448,12 +2580,18 @@ def main(page: ft.Page):
                 res = requests.post(f"{BACKEND_URL}/auth/login", params={"username": username, "password": password}, verify=False, timeout=10)
                 if res.status_code == 200:
                     payload = res.json()
-                    role = (payload.get("role") or "Admin").strip()
+                    runtime_token = payload.get("access_token")
+                    role = (payload.get("role") or "Super Administrator").strip()
                     current_user = payload.get("username")
                     current_user_role = role
-                    if role == "Admin":
+                    if role == "Super Administrator":
+                        nav_items[:] = build_nav_items()
                         render_shell(page, current_user, logout_user, nav_items, content_view=None)
-                    elif role in {"Secretary / Vice Mayor", "Secretary"}:
+                    elif role == "Employee":
+                        nav_items[:] = build_nav_items()
+                        render_shell(page, current_user, logout_user, nav_items, documents_view())
+                    elif role == "SB Member":
+                        nav_items[:] = build_nav_items()
                         render_shell(page, current_user, logout_user, nav_items, documents_view())
                     else:
                         page.snack_bar = ft.SnackBar(ft.Text("Your account is not approved for access yet."), open=True)
@@ -2467,7 +2605,6 @@ def main(page: ft.Page):
                 page.update()
 
         login_btn = ft.Button("Log In", width=300, on_click=attempt_login, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE)
-        signup_link = ft.TextButton("Don't have an account? Sign Up", on_click=lambda _: show_signup())
 
         page.add(
             surface_card(
@@ -2486,7 +2623,6 @@ def main(page: ft.Page):
                     login_error,
                     ft.Container(height=6),
                     login_btn,
-                    signup_link,
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
                 width=420,
                 padding=36,
@@ -2494,145 +2630,22 @@ def main(page: ft.Page):
         )
         page.update()
 
-    def show_signup():
-        page.clean()
-        page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-        page.vertical_alignment = ft.MainAxisAlignment.CENTER
+    def build_nav_items():
+        items = [
+            (ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()),
+            (ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()),
+            (ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
+        ]
+        if current_user_role == "Super Administrator":
+            items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view()))
+            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
+            items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
+        elif current_user_role == "Employee":
+            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
+            items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
+        return items
 
-        reg_first_name = ft.TextField(label="First Name", width=300, icon=ft.Icons.PERSON)
-        reg_last_name = ft.TextField(label="Last Name", width=300, icon=ft.Icons.PERSON)
-        reg_email = ft.TextField(label="Email", width=300, icon=ft.Icons.EMAIL)
-        reg_username = ft.TextField(label="Desired Username", width=300, icon=ft.Icons.PERSON_ADD)
-        reg_password = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.Icons.LOCK_OUTLINE)
-        reg_confirm_password = ft.TextField(label="Confirm Password", width=300, password=True, can_reveal_password=True, icon=ft.Icons.LOCK)
-        reg_office = ft.TextField(label="Office", width=300, icon=ft.Icons.BUSINESS)
-        reg_position = ft.TextField(label="Position", width=300, icon=ft.Icons.WORK)
-        reg_notes = ft.TextField(label="Notes", width=300, multiline=True, min_lines=2, max_lines=4, icon=ft.Icons.NOTES)
-        signup_error = ft.Text("", size=12, color=ft.Colors.RED_700)
-
-        def attempt_signup(_):
-            first_name = (reg_first_name.value or "").strip()
-            last_name = (reg_last_name.value or "").strip()
-            email = (reg_email.value or "").strip()
-            username = (reg_username.value or "").strip()
-            password = reg_password.value or ""
-            confirm_password = reg_confirm_password.value or ""
-            signup_error.value = ""
-
-            if not first_name or not last_name or not email or not username or not password or not confirm_password:
-                signup_error.value = "Please fill out all required fields."
-                page.update()
-                return
-
-            if password != confirm_password:
-                signup_error.value = "Passwords do not match."
-                page.update()
-                return
-
-            if len(password) < 8:
-                signup_error.value = "Password must be at least 8 characters."
-                page.update()
-                return
-
-            if "@" not in email or "." not in email:
-                signup_error.value = "Please enter a valid email address."
-                page.update()
-                return
-
-            payload = {
-                "first_name": first_name,
-                "last_name": last_name,
-                "email": email,
-                "username": username,
-                "password": password,
-                "office": (reg_office.value or "").strip() or None,
-                "position": (reg_position.value or "").strip() or None,
-                "notes": (reg_notes.value or "").strip() or None,
-            }
-
-            try:
-                res = requests.post(f"{BACKEND_URL}/registration/requests", json=payload, verify=False, timeout=10)
-                if res.status_code == 201:
-                    page.clean()
-                    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-                    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-                    ref = res.json().get("registration_reference", "N/A")
-                    page.add(
-                        surface_card(
-                            ft.Column([
-                                ft.Container(
-                                    content=ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=52, color=ft.Colors.GREEN_700),
-                                    padding=14,
-                                    bgcolor=ft.Colors.GREEN_50,
-                                    border_radius=20,
-                                ),
-                                ft.Text("Registration Submitted Successfully", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_800),
-                                ft.Text("Reference Number:", size=13, color=ft.Colors.BLUE_GREY_600),
-                                ft.Text(f"({ref})", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                                ft.Text("Status:", size=13, color=ft.Colors.BLUE_GREY_600),
-                                ft.Text("Pending Administrator Approval", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                                ft.Text("Your registration request has been submitted successfully. Your account cannot log in until it has been reviewed and approved by the System Administrator.", size=13, color=ft.Colors.BLUE_GREY_600, text_align=ft.TextAlign.CENTER),
-                                ft.Row([
-                                    ft.Button("Return to Login", on_click=lambda _: show_login(), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
-                                    ft.OutlinedButton("Register Another Account", on_click=lambda _: show_signup()),
-                                ], spacing=12),
-                            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
-                            width=520,
-                            padding=36,
-                        )
-                    )
-                    page.update()
-                else:
-                    detail = res.json().get("detail", "Registration failed.") if res.headers.get("content-type", "").startswith("application/json") else "Registration failed."
-                    signup_error.value = detail
-                    page.update()
-            except Exception as ex:
-                signup_error.value = f"Connection failed: {ex}"
-                page.update()
-
-        register_btn = ft.Button("Register Account", width=300, on_click=attempt_signup, bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE)
-        back_to_login = ft.TextButton("Already have an account? Log In", on_click=lambda e: show_login())
-
-        page.add(
-            surface_card(
-                ft.Column([
-                    ft.Container(
-                        content=ft.Icon(ft.Icons.PERSON_ADD, size=52, color=ft.Colors.GREEN_700),
-                        padding=14,
-                        bgcolor=ft.Colors.GREEN_50,
-                        border_radius=20,
-                    ),
-                    ft.Text("Create Administrator Account", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_800),
-                    ft.Text("Sangguniang Bayan Registry", size=14, color=ft.Colors.BLUE_GREY_600),
-                    ft.Container(height=4),
-                    reg_first_name,
-                    reg_last_name,
-                    reg_email,
-                    reg_username,
-                    reg_password,
-                    reg_confirm_password,
-                    reg_office,
-                    reg_position,
-                    reg_notes,
-                    signup_error,
-                    ft.Container(height=6),
-                    register_btn,
-                    back_to_login,
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
-                width=520,
-                padding=36,
-            )
-        )
-        page.update()
-
-    nav_items = [
-        (ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()),
-        (ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()),
-        (ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
-        (ft.Icons.PEOPLE_OUTLINED, "Users & Roles", lambda: users_roles_view()),
-        (ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()),
-        (ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()),
-    ]
+    nav_items = build_nav_items()
 
     show_login()
 

@@ -1,93 +1,424 @@
 import flet as ft
 
 
-def build_users_roles_view(
-    user_username_input,
-    user_password_input,
-    user_role_input,
-    users_notice,
-    users_table,
-    create_user_record,
-    surface_card,
-    section_header,
-    registration_requests_content=None,
-):
-    content = [
-        surface_card(
+EMPLOYEE_PERMISSION_GROUPS = {
+    "Dashboard": [
+        "View Dashboard",
+    ],
+    "Documents": [
+        "Register Documents",
+        "Edit Documents",
+        "Delete Documents",
+        "Archive Documents",
+        "Restore Documents",
+        "View Documents",
+        "Import Documents",
+        "Export Documents",
+        "Download Documents",
+        "Print Documents",
+    ],
+    "QR Code": [
+        "Generate QR Codes",
+        "Print QR Codes",
+        "View QR Tracking",
+    ],
+    "Document Routing": [
+        "Route Documents",
+    ],
+    "Users & Roles": [
+        "Create Users",
+        "Edit Users",
+        "Reset Passwords",
+        "Activate Users",
+        "Deactivate Users",
+        "Delete Users",
+        "Assign Roles",
+        "Manage Permissions",
+    ],
+    "Committees": [
+        "Add Committee",
+        "Edit Committee",
+        "Delete Committee",
+    ],
+    "Audit Logs": [
+        "View Audit Logs",
+        "Export Audit Logs",
+    ],
+    "Settings": [
+        "Modify System Settings",
+    ],
+}
+
+SB_MEMBER_PERMISSIONS = [
+    "View Documents",
+    "Search Documents",
+    "Filter Documents",
+    "View Document Details",
+    "View Document Routing History",
+    "Download Documents",
+    "Print Documents",
+]
+
+
+def _status_badge(status):
+    text = (status or "Active").strip()
+    active = text.lower() == "active"
+    return ft.Container(
+        content=ft.Text(text, size=11, weight=ft.FontWeight.W_600),
+        padding=ft.Padding(left=10, top=5, right=10, bottom=5),
+        bgcolor=ft.Colors.GREEN_50 if active else ft.Colors.RED_50,
+        border_radius=12,
+        border=ft.border.all(1, ft.Colors.GREEN_100 if active else ft.Colors.RED_100),
+    )
+
+
+def _role_badge(role):
+    role_text = role or "Employee"
+    color = ft.Colors.BLUE_50
+    border = ft.Colors.BLUE_100
+    text_color = ft.Colors.BLUE_800
+    if role_text == "Super Administrator":
+        color = ft.Colors.AMBER_50
+        border = ft.Colors.AMBER_200
+        text_color = ft.Colors.AMBER_900
+    elif role_text == "SB Member":
+        color = ft.Colors.PURPLE_50
+        border = ft.Colors.PURPLE_100
+        text_color = ft.Colors.PURPLE_800
+    return ft.Container(
+        content=ft.Text(role_text, size=11, weight=ft.FontWeight.W_600, color=text_color),
+        padding=ft.Padding(left=10, top=5, right=10, bottom=5),
+        bgcolor=color,
+        border_radius=12,
+        border=ft.border.all(1, border),
+    )
+
+
+def _permission_summary(user):
+    role = user.get("role", "Employee")
+    if role == "Super Administrator":
+        return "Full Access"
+    if role == "SB Member":
+        return "Read Only"
+    perms = user.get("permissions") or []
+    return f"{len(perms)} permissions" if perms else "No permissions"
+
+
+def _build_permission_checkboxes(selected_permissions=None):
+    checked = set(selected_permissions or [])
+    items = []
+    for section_name, perms in EMPLOYEE_PERMISSION_GROUPS.items():
+        group = []
+        for perm in perms:
+            checkbox = ft.Checkbox(label=perm, value=(perm in checked), scale=0.9)
+            group.append(checkbox)
+        items.append(
             ft.Column(
                 [
-                    section_header(
-                        "Users & Roles",
-                        "Manage admin users, roles, and account access for the system.",
-                        ft.Icons.PEOPLE,
-                        ft.Colors.BLUE_700,
+                    ft.Text(section_name, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
+                    ft.Wrap(group, spacing=8, run_spacing=6),
+                ],
+                spacing=6,
+            )
+        )
+    return items
+
+
+def build_users_roles_table(
+    users_data,
+    open_view_user_dialog,
+    open_edit_user_dialog,
+    open_reset_password_dialog,
+    toggle_user_status,
+):
+    user_rows = []
+    for user in users_data:
+        full_name = user.get("full_name", "Unknown User")
+        username = user.get("username", "unknown")
+        role = user.get("role", "Employee")
+        status = user.get("status", "Active")
+        permissions = user.get("permissions") or []
+        last_login = user.get("last_login", "—")
+        created = user.get("created", "—")
+        is_active = status.lower() == "active"
+
+        action_buttons = ft.Row(
+            [
+                ft.TextButton("View", on_click=lambda _, item=user: open_view_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
+                ft.TextButton("Edit", on_click=lambda _, item=user: open_edit_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
+                ft.TextButton("Reset Password", on_click=lambda _, item=user: open_reset_password_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
+                ft.TextButton("Deactivate" if is_active else "Activate", on_click=lambda _, item=user: toggle_user_status(item), style=ft.ButtonStyle(color=ft.Colors.RED_700 if is_active else ft.Colors.GREEN_700)),
+            ],
+            spacing=4,
+        )
+
+        user_rows.append(
+            ft.DataRow(
+                cells=[
+                    ft.DataCell(
+                        ft.Column(
+                            [
+                                ft.Text(full_name, size=13, weight=ft.FontWeight.W_600),
+                                ft.Text(username, size=11, color=ft.Colors.BLUE_GREY_600),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        )
                     ),
-                    ft.Divider(height=1),
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    user_username_input,
-                                    user_password_input,
-                                    user_role_input,
-                                    ft.Button(
-                                        "Create User",
-                                        on_click=create_user_record,
-                                        bgcolor=ft.Colors.BLUE_800,
-                                        color=ft.Colors.WHITE,
-                                    ),
-                                    users_notice,
-                                ],
-                                spacing=12,
-                                width=360,
-                            ),
-                            ft.Container(
-                                content=ft.Column(
-                                    [
-                                        ft.Container(
-                                            content=users_table,
-                                            expand=True,
-                                        ),
-                                    ],
-                                    scroll=ft.ScrollMode.AUTO,
-                                    expand=True,
-                                ),
-                                expand=True,
-                                bgcolor=ft.Colors.BLUE_GREY_50,
-                                border_radius=18,
-                                padding=12,
-                                height=240,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        spacing=12,
+                    ft.DataCell(ft.Text(username, size=12)),
+                    ft.DataCell(_role_badge(role)),
+                    ft.DataCell(_status_badge(status)),
+                    ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
+                    ft.DataCell(ft.Text(last_login, size=12)),
+                    ft.DataCell(ft.Text(created, size=12)),
+                    ft.DataCell(action_buttons),
+                ]
+            )
+        )
+
+    table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("User", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Account Status", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Permissions", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Last Login", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Created", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
+        ],
+        rows=user_rows,
+        width=1600,
+        expand=False,
+        column_spacing=16,
+        heading_row_color=ft.Colors.BLUE_GREY_50,
+    )
+
+    return ft.Container(
+        content=ft.Row(
+            [
+                ft.Container(
+                    content=table,
+                    width=1600,
+                    padding=ft.Padding(left=6, top=8, right=6, bottom=8),
+                    bgcolor=ft.Colors.WHITE,
+                    border_radius=12,
+                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                )
+            ],
+            width="100%",
+            scroll=ft.ScrollMode.AUTO,
+            spacing=0,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        ),
+        width="100%",
+        height=420,
+        bgcolor=ft.Colors.WHITE,
+        border_radius=12,
+        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+    )
+
+
+def build_users_roles_view(
+    users_data,
+    search_field,
+    role_filter,
+    status_filter,
+    office_filter,
+    permission_filter,
+    create_button,
+    refresh_button,
+    open_create_user_dialog,
+    open_view_user_dialog,
+    open_edit_user_dialog,
+    open_reset_password_dialog,
+    toggle_user_status,
+    page,
+    surface_card,
+    section_header,
+    user_table_holder=None,
+    no_users_notice=None,
+):
+    user_rows = []
+    for user in users_data:
+        full_name = user.get("full_name", "Unknown User")
+        username = user.get("username", "unknown")
+        role = user.get("role", "Employee")
+        status = user.get("status", "Active")
+        permissions = user.get("permissions") or []
+        last_login = user.get("last_login", "—")
+        created = user.get("created", "—")
+        is_active = status.lower() == "active"
+
+        action_buttons = ft.Row(
+            [
+                ft.TextButton("View", on_click=lambda _, item=user: open_view_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
+                ft.TextButton("Edit", on_click=lambda _, item=user: open_edit_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
+                ft.TextButton("Reset Password", on_click=lambda _, item=user: open_reset_password_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
+                ft.TextButton("Deactivate" if is_active else "Activate", on_click=lambda _, item=user: toggle_user_status(item), style=ft.ButtonStyle(color=ft.Colors.RED_700 if is_active else ft.Colors.GREEN_700)),
+            ],
+            spacing=4,
+        )
+
+        user_rows.append(
+            ft.DataRow(
+                cells=[
+                    ft.DataCell(
+                        ft.Column(
+                            [
+                                ft.Text(full_name, size=13, weight=ft.FontWeight.W_600),
+                                ft.Text(username, size=11, color=ft.Colors.BLUE_GREY_600),
+                            ],
+                            spacing=2,
+                            tight=True,
+                        )
+                    ),
+                    ft.DataCell(ft.Text(username, size=12)),
+                    ft.DataCell(_role_badge(role)),
+                    ft.DataCell(_status_badge(status)),
+                    ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
+                    ft.DataCell(ft.Text(last_login, size=12)),
+                    ft.DataCell(ft.Text(created, size=12)),
+                    ft.DataCell(action_buttons),
+                ]
+            )
+        )
+
+    table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("User", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Account Status", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Permissions", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Last Login", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Created", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
+        ],
+        rows=user_rows,
+        width=1600,
+        expand=False,
+        column_spacing=16,
+        heading_row_color=ft.Colors.BLUE_GREY_50,
+    )
+
+    if user_table_holder is None:
+        table_container = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Container(
+                        content=table,
+                        width=1600,
+                        padding=ft.Padding(left=6, top=8, right=6, bottom=8),
+                        bgcolor=ft.Colors.WHITE,
+                        border_radius=12,
+                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                    )
+                ],
+                width="100%",
+                scroll=ft.ScrollMode.AUTO,
+                spacing=0,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            width="100%",
+            height=420,
+            bgcolor=ft.Colors.WHITE,
+            border_radius=12,
+            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+        )
+    else:
+        table_container = user_table_holder
+
+    if no_users_notice is None:
+        no_users = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("No users found.", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
+                    ft.Text("Try another search or change the filters.", size=12, color=ft.Colors.BLUE_GREY_500),
+                ],
+                spacing=6,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            padding=24,
+            visible=len(user_rows) == 0,
+            alignment=ft.Alignment.CENTER,
+            width="100%",
+            height=120,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=12,
+        )
+    else:
+        no_users = no_users_notice
+
+    toolbar = ft.Column(
+        [
+            ft.Row(
+                [
+                    search_field,
+                    create_button,
+                ],
+                spacing=20,
+                wrap=True,
+                run_spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Row(
+                [
+                    role_filter,
+                    status_filter,
+                    permission_filter,
+                ],
+                spacing=20,
+                wrap=True,
+                run_spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+        ],
+        spacing=10,
+    )
+
+    header = surface_card(
+        ft.Column(
+            [
+                section_header(
+                    "Users & Roles",
+                    "Manage system accounts, roles, permissions, and account status.",
+                    ft.Icons.PEOPLE_ALT_OUTLINED,
+                    ft.Colors.BLUE_700,
+                ),
+                ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                toolbar,
+            ],
+            spacing=16,
+        ),
+        padding=18,
+        expand=False,
+    )
+
+    table_section = ft.Column(
+        [
+            ft.Row(
+                [
+                    ft.Text("User Accounts", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                    ft.Container(
+                        content=ft.Text(f"{len(user_rows)} users", size=12, color=ft.Colors.BLUE_GREY_600),
+                        alignment=ft.Alignment.CENTER_RIGHT,
                     ),
                 ],
-                spacing=16,
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                width="100%",
             ),
-        )
-    ]
+            table_container,
+            no_users,
+        ],
+        spacing=10,
+    )
 
-    if registration_requests_content is not None:
-        content.append(ft.Container(height=24))
-        content.append(registration_requests_content)
-
-    # If the users table is empty, show a clear placeholder inside the users area
-    try:
-        rows = getattr(users_table, "rows", None) or []
-        if len(rows) == 0:
-            placeholder = ft.Container(
-                content=ft.Column([
-                    ft.Text("No users loaded", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
-                    ft.Text("The user list is empty — backend may be offline or no users exist.", size=12, color=ft.Colors.BLUE_GREY_400),
-                ], spacing=6),
-                padding=18,
-                bgcolor=ft.Colors.TRANSPARENT,
-            )
-            # insert placeholder into the users table container (Row is at index 2 of the Column)
-            # find the main Row and append placeholder below the table container (its right-side child is controls[1])
-            content[0].content.controls[2].controls[1].content.controls.append(placeholder)
-    except Exception:
-        pass
-
-    return ft.Column(content, spacing=16, expand=True)
+    return ft.Column(
+        [
+            header,
+            surface_card(table_section, padding=18, expand=False),
+        ],
+        spacing=12,
+    )

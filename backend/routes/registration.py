@@ -64,53 +64,9 @@ def _generate_registration_reference(db: Session) -> str:
     return f"{prefix}{seq:04d}"
 
 
-@router.post("/registration/requests", status_code=status.HTTP_201_CREATED)
+@router.post("/registration/requests", status_code=status.HTTP_403_FORBIDDEN)
 def create_registration(request: RegistrationCreate, db: Session = Depends(get_db)):
-    if not re.match(r"[^@]+@[^@]+\.[^@]+", request.email):
-        raise HTTPException(status_code=400, detail="Invalid email address")
-
-    existing_user = db.query(models.User).filter(models.User.username == request.username).first()
-    if existing_user:
-        raise HTTPException(status_code=409, detail="Username already exists")
-
-    dup = (
-        db.query(models.RegistrationRequest)
-        .filter(models.RegistrationRequest.status == "Pending")
-        .filter((models.RegistrationRequest.username == request.username) | (models.RegistrationRequest.email == str(request.email)))
-        .first()
-    )
-    if dup:
-        raise HTTPException(status_code=409, detail="A pending registration for this username or email already exists")
-
-    hashed = get_password_hash(request.password)
-    reg_ref = _generate_registration_reference(db)
-
-    reg = models.RegistrationRequest(
-        registration_reference=reg_ref,
-        first_name=request.first_name,
-        middle_name=request.middle_name,
-        last_name=request.last_name,
-        suffix=request.suffix,
-        contact_number=request.contact_number,
-        email=str(request.email),
-        username=request.username,
-        office=request.office,
-        position=request.position,
-        requested_access=request.requested_access,
-        id_type=request.id_type,
-        id_number=request.id_number,
-        id_file_path=request.id_file_path,
-        hashed_password=hashed,
-        status="Pending",
-        notes=request.notes,
-    )
-    db.add(reg)
-    db.commit()
-    db.refresh(reg)
-
-    record_audit_log(db, actor=reg.username, action="REGISTRATION_SUBMITTED", target_type="RegistrationRequest", target_id=reg.registration_reference, details="Public registration submitted")
-
-    return {"message": "Registration request submitted successfully", "registration_reference": reg.registration_reference, "status": reg.status}
+    raise HTTPException(status_code=403, detail="Public registration is disabled. Accounts can only be created by an administrator.")
 
 
 @router.get("/registration/requests")
@@ -188,10 +144,12 @@ def get_registration_request(request_id: int, db: Session = Depends(get_db), cur
 
 @router.put("/registration/requests/{request_id}/approve")
 def approve_registration_request(request_id: int, payload: ApproveRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin_user)):
-    allowed_roles = {"Admin", "SB Member", "Staff", "Secretary / Vice Mayor"}
+    allowed_roles = {"Super Administrator", "Employee", "SB Member"}
     final_role = payload.final_role.strip()
-    if final_role not in allowed_roles:
+    normalized_role = next((candidate for candidate in allowed_roles if candidate.lower() == final_role.lower()), None)
+    if normalized_role is None:
         raise HTTPException(status_code=400, detail="Invalid final role")
+    final_role = normalized_role
 
     reg = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.id == request_id).with_for_update().first()
     if not reg:

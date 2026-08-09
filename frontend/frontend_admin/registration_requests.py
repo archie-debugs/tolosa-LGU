@@ -5,8 +5,8 @@ import requests
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 
 STATUS_OPTIONS = ["All", "Pending", "Approved", "Rejected"]
-POSITION_OPTIONS = ["All", "Admin", "Secretary / Vice Mayor", "Staff"]
-ROLE_OPTIONS = ["Admin", "SB Member", "Staff"]
+POSITION_OPTIONS = ["All", "Super Administrator", "Employee", "SB Member"]
+ROLE_OPTIONS = ["Super Administrator", "Employee", "SB Member"]
 SORT_OPTIONS = ["Newest First", "Oldest First"]
 REJECTION_REASONS = [
     "Invalid Information",

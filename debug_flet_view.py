@@ -6,7 +6,6 @@ sys.path.insert(0, os.getcwd())
 
 import flet as ft
 from frontend.frontend_admin.registration_requests import build_registration_requests_view
-from frontend.frontend_admin.users_roles import build_users_roles_view
 
 class DummyPage:
     def __init__(self):
@@ -101,19 +100,6 @@ try:
     print("reg type", type(reg))
     problems = traverse(reg)
     print("reg problems", problems)
-    ur = build_users_roles_view(
-        user_username_input,
-        user_password_input,
-        user_role_input,
-        users_notice,
-        users_table,
-        lambda e: None,
-        surface_card,
-        section_header,
-        reg,
-    )
-    print("ur type", type(ur))
-    problems = traverse(ur)
-    print("ur problems", problems)
+    print("Users & Roles frontend module removed; skipping Users & Roles view build.")
 except Exception:
     traceback.print_exc()

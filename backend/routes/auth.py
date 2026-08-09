@@ -2,26 +2,52 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
-from ..core import get_password_hash, verify_password, record_audit_log
+from ..core import (
+    get_password_hash,
+    verify_password,
+    record_audit_log,
+    get_current_admin_user,
+    normalize_user_role,
+    normalize_permissions,
+    get_default_permissions_for_role,
+)
 from ..auth_jwt import create_access_token
 
 router = APIRouter()
 
 
 @router.post("/auth/register")
-def register_user(username: str, password: str, role: str = "Admin", db: Session = Depends(get_db)):
+def register_user(
+    username: str,
+    password: str,
+    role: str = "Super Administrator",
+    permissions: str | None = None,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
+
+    normalized_role = normalize_user_role(role)
+    if normalized_role not in {"Super Administrator", "Employee", "SB Member"}:
+        raise HTTPException(status_code=400, detail="Invalid role")
 
     existing_user = db.query(models.User).filter(models.User.username == username).first()
     if existing_user:
         raise HTTPException(status_code=409, detail="Username already exists")
 
+    permission_list = []
+    if permissions:
+        permission_list = list(normalize_permissions(permissions))
+    if not permission_list:
+        permission_list = get_default_permissions_for_role(normalized_role)
+
     try:
         new_user = models.User(
             username=username,
             hashed_password=get_password_hash(password),
-            role=(role or "Admin").strip() or "Admin",
+            role=normalized_role,
+            permissions=str(permission_list),
             status="Active",
             is_active=True,
         )
@@ -34,14 +60,14 @@ def register_user(username: str, password: str, role: str = "Admin", db: Session
 
     record_audit_log(
         db,
-        actor=new_user.username,
+        actor=current_admin.username,
         action="USER_REGISTERED",
         target_type="User",
         target_id=str(new_user.id),
-        details=f"Created admin account for {new_user.username}",
+        details=f"Super Administrator {current_admin.username} created account {new_user.username} for role {normalized_role}",
     )
 
-    return {"message": "User registered successfully", "username": new_user.username}
+    return {"message": "User registered successfully", "username": new_user.username, "role": new_user.role, "permissions": permission_list}
 
 
 @router.post("/auth/login")
@@ -51,6 +77,7 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
 
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
+        record_audit_log(db, actor=username or "unknown", action="FAILED_LOGIN", target_type="Auth", target_id=username or "unknown", details="Failed login attempt")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if getattr(user, "status", "Active") == "Pending":
@@ -72,4 +99,16 @@ def login_user(username: str, password: str, db: Session = Depends(get_db)):
     # create JWT access token (subject=username)
     token = create_access_token({"sub": user.username})
 
-    return {"message": "Login successful", "username": user.username, "role": user.role or "Admin", "access_token": token, "token_type": "bearer"}
+    role = normalize_user_role(user.role)
+    permissions = list(normalize_permissions(getattr(user, "permissions", None)))
+    if not permissions and role != "Super Administrator":
+        permissions = get_default_permissions_for_role(role)
+
+    return {
+        "message": "Login successful",
+        "username": user.username,
+        "role": role,
+        "permissions": permissions,
+        "access_token": token,
+        "token_type": "bearer",
+    }

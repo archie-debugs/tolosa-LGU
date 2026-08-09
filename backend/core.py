@@ -76,11 +76,15 @@ def ensure_user_role_column() -> None:
         if dialect == "sqlite":
             columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
             if "role" not in columns:
-                connection.exec_driver_sql("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'Admin'")
-            connection.exec_driver_sql("UPDATE users SET role = 'Admin' WHERE role IS NULL OR role = ''")
+                connection.exec_driver_sql("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'Super Administrator'")
+            connection.exec_driver_sql("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''")
+            connection.exec_driver_sql("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'")
+            connection.exec_driver_sql("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')")
         else:
-            _add_column_if_missing(connection, "users", "role", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR NOT NULL DEFAULT 'Admin'"))
-            connection.execute(text("UPDATE users SET role = 'Admin' WHERE role IS NULL OR role = ''"))
+            _add_column_if_missing(connection, "users", "role", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR NOT NULL DEFAULT 'Super Administrator'"))
+            connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
+            connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))
+            connection.execute(text("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')"))
 
 
 def ensure_schema_columns() -> None:
@@ -115,9 +119,128 @@ def ensure_schema_columns() -> None:
             _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
             _add_column_if_missing(connection, "documents", "routing_history", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS routing_history TEXT"))
 
-        connection.execute(text("UPDATE users SET role = 'Admin' WHERE role IS NULL OR role = ''"))
+        connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
+        connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))
+        connection.execute(text("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')"))
         connection.execute(text("UPDATE users SET status = 'Active' WHERE status IS NULL OR status = ''"))
         connection.execute(text("UPDATE users SET is_active = TRUE WHERE is_active IS NULL"))
+        _add_column_if_missing(connection, "users", "permissions", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT"))
+
+
+VALID_ROLES = {"Super Administrator", "Employee", "SB Member"}
+LEGACY_ROLE_MAP = {
+    "admin": "Super Administrator",
+    "super administrator": "Super Administrator",
+    "employee": "Employee",
+    "sb member": "SB Member",
+    "staff": "Employee",
+    "secretary / vice mayor": "Employee",
+    "secretary": "Employee",
+}
+DEFAULT_ROLE_PERMISSIONS = {
+    "Super Administrator": ["*"],
+    "Employee": [
+        "view_dashboard",
+        "register_documents",
+        "view_documents",
+        "search_documents",
+        "filter_documents",
+        "view_document_details",
+        "edit_documents",
+        "archive_documents",
+        "restore_documents",
+        "import_documents",
+        "export_documents",
+        "download_documents",
+        "print_documents",
+        "route_documents",
+        "view_routing_history",
+        "update_document_status",
+        "generate_qr_codes",
+        "print_qr_codes",
+        "view_qr_tracking",
+        "view_document_requests",
+        "approve_document_requests",
+        "reject_document_requests",
+        "fulfill_document_requests",
+        "view_audit_logs",
+        "export_audit_logs",
+    ],
+    "SB Member": [
+        "view_documents",
+        "search_documents",
+        "filter_documents",
+        "view_document_details",
+        "download_documents",
+        "print_documents",
+        "view_routing_history",
+        "request_documents",
+        "view_own_document_requests",
+        "cancel_own_pending_requests",
+    ],
+}
+
+
+def normalize_user_role(role: str | None) -> str:
+    if role is None:
+        return "Super Administrator"
+    normalized = str(role).strip()
+    if not normalized:
+        return "Super Administrator"
+    lowered = normalized.lower()
+    if lowered in LEGACY_ROLE_MAP:
+        return LEGACY_ROLE_MAP[lowered]
+    for valid_role in VALID_ROLES:
+        if valid_role.lower() == lowered:
+            return valid_role
+    return normalized
+
+
+def normalize_permission_name(permission: str | None) -> str:
+    if permission is None:
+        return ""
+    return str(permission).strip().lower().replace(" ", "_")
+
+
+def normalize_permissions(value) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return set()
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = [item.strip() for item in text.split(",") if item.strip()]
+        if isinstance(parsed, str):
+            parsed = [parsed]
+        if isinstance(parsed, list):
+            return {normalize_permission_name(item) for item in parsed}
+        return {normalize_permission_name(str(parsed))}
+    if isinstance(value, (list, tuple, set)):
+        return {normalize_permission_name(item) for item in value}
+    if isinstance(value, dict):
+        return {normalize_permission_name(item) for item in value.keys()}
+    return {normalize_permission_name(str(value))}
+
+
+def get_default_permissions_for_role(role: str | None) -> list[str]:
+    normalized = normalize_user_role(role)
+    return list(DEFAULT_ROLE_PERMISSIONS.get(normalized, []))
+
+
+def user_has_permission(user: models.User, permission: str) -> bool:
+    if user is None:
+        return False
+    role = normalize_user_role(getattr(user, "role", None))
+    if role == "Super Administrator":
+        return True
+    permissions = normalize_permissions(getattr(user, "permissions", None))
+    if "*" in permissions:
+        return True
+    normalized_permission = normalize_permission_name(permission)
+    return normalized_permission in permissions
 
 
 def get_current_admin_user(
@@ -126,7 +249,6 @@ def get_current_admin_user(
     admin_role: str | None = Header(default=None, alias="X-Admin-Role"),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    # If Authorization Bearer token provided, prefer it
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
         try:
@@ -134,20 +256,39 @@ def get_current_admin_user(
             username = payload.get("sub")
             if username:
                 user = db.query(models.User).filter(models.User.username == username).first()
-                if user and user.role == "Admin" and getattr(user, "is_active", True):
+                if user and normalize_user_role(user.role) == "Super Administrator" and getattr(user, "is_active", True):
                     return user
         except Exception:
-            # fall back to header-based checks if token invalid
             pass
 
-    # legacy header-based admin check
-    if not admin_username or not admin_role or admin_role.strip().lower() != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    if not admin_username or not admin_role:
+        raise HTTPException(status_code=403, detail="Super Administrator access required")
+
+    if normalize_user_role(admin_role) != "Super Administrator":
+        raise HTTPException(status_code=403, detail="Super Administrator access required")
 
     user = db.query(models.User).filter(models.User.username == admin_username).first()
-    if not user or user.role != "Admin" or not getattr(user, "is_active", True):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    if not user or normalize_user_role(user.role) != "Super Administrator" or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Super Administrator access required")
     return user
+
+
+def require_user_role(user: models.User, allowed_roles: set[str]):
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if normalize_user_role(getattr(user, "role", None)) == "Super Administrator":
+        return
+    if normalize_user_role(getattr(user, "role", None)) not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
+def require_permission(user: models.User, permission: str):
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if normalize_user_role(getattr(user, "role", None)) == "Super Administrator":
+        return
+    if not user_has_permission(user, permission):
+        raise HTTPException(status_code=403, detail="Permission denied")
 
 
 def get_current_documents_import_user(
@@ -158,13 +299,13 @@ def get_current_documents_import_user(
     if not import_username or not import_role:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    normalized_role = (import_role or "").strip()
-    allowed_roles = {"Admin", "Secretary / Vice Mayor", "SB Member"}
+    normalized_role = normalize_user_role(import_role)
+    allowed_roles = {"Super Administrator", "Employee", "SB Member"}
     user = db.query(models.User).filter(models.User.username == import_username).first()
     if not user or not getattr(user, "is_active", True):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    if user.role == "Admin" or normalized_role in allowed_roles:
+    if normalize_user_role(user.role) == "Super Administrator" or normalize_user_role(user.role) in allowed_roles:
         return user
 
     raise HTTPException(status_code=403, detail="Access denied")

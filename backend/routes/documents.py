@@ -5,11 +5,12 @@ import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_
+from sqlalchemy import or_, exc
 from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
-from ..core import UPLOAD_DIR, record_audit_log
+from ..core import UPLOAD_DIR, record_audit_log, require_permission, user_has_permission
+from ..auth_jwt import get_current_user
 import hashlib
 import mimetypes
 import os
@@ -222,7 +223,7 @@ def _get_or_create_by_name(db: Session, Model, name: str):
         db.commit()
         db.refresh(obj)
         return obj.id
-    except IntegrityError:
+    except exc.IntegrityError:
         db.rollback()
         existing = db.query(Model).filter(Model.name == name).first()
         return existing.id if existing else None
@@ -252,7 +253,9 @@ def list_documents(
     end_date: str | None = None,
     archived: bool | None = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
+    require_permission(current_user, "view_documents")
     query = db.query(models.Document)
     if archived is not None:
         query = query.filter(models.Document.archived.is_(archived))
@@ -313,7 +316,8 @@ def list_documents(
 
 
 @router.get("/{document_id:int}", response_model=schemas.DocumentResponse)
-def get_document(document_id: int, db: Session = Depends(get_db)):
+def get_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_document_details")
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -339,7 +343,9 @@ def create_document(
     qr_code_value: str | None = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
+    require_permission(current_user, "register_documents")
     # basic validation
     if not title or not title.strip():
         raise HTTPException(status_code=400, detail="Title is required")
@@ -443,7 +449,8 @@ def create_document(
 
 
 @router.put("/{document_id:int}", response_model=schemas.DocumentResponse)
-def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Session = Depends(get_db)):
+def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "edit_documents")
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -481,7 +488,8 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
 
 
 @router.post("/{document_id:int}/route", response_model=schemas.DocumentResponse)
-def route_document(document_id: int, payload: dict, db: Session = Depends(get_db)):
+def route_document(document_id: int, payload: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "route_documents")
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -536,7 +544,8 @@ def route_document(document_id: int, payload: dict, db: Session = Depends(get_db
 
 
 @router.post("/{document_id:int}/qr", response_model=schemas.DocumentResponse)
-def regenerate_qr(document_id: int, db: Session = Depends(get_db)):
+def regenerate_qr(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "generate_qr_codes")
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -547,7 +556,8 @@ def regenerate_qr(document_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/scan", response_model=schemas.DocumentResponse)
-def scan_document(payload: dict = Body(...), db: Session = Depends(get_db)):
+def scan_document(payload: dict = Body(...), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_qr_tracking")
     qr_value = (payload.get("qr_value") or "").strip()
     if not qr_value:
         raise HTTPException(status_code=400, detail="QR value is required")

@@ -3,7 +3,6 @@ from pathlib import Path
 proj = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(proj))
 import flet as ft
-from frontend.frontend_admin.app import build_users_roles_view
 from frontend.frontend_admin.registration_requests import build_registration_requests_view
 
 class DummyPage:
@@ -35,23 +34,7 @@ create_user_record = lambda e: None
 pending_registration_count_text = ft.Text('Pending Registrations (0)', size=12, weight=ft.FontWeight.BOLD)
 
 reg_content = build_registration_requests_view(page, surface_card, section_header, refresh_callback=lambda: None, headers_provider=get_admin_headers)
-view = build_users_roles_view(
-    user_username_input,
-    user_password_input,
-    user_role_input,
-    users_notice,
-    users_table,
-    create_user_record,
-    surface_card,
-    section_header,
-    reg_content,
-    pending_registration_count_text=pending_registration_count_text,
-)
-print('view built', type(view), 'controls', len(view.controls))
-print('button row controls', [type(c) for c in view.controls[0].controls])
-
-pending_button = view.controls[0].controls[1]
-print('pending button on_click', pending_button.on_click)
+print('Users & Roles frontend module removed; skipping Users & Roles view build.')
 
 event = type('E', (), {'page': page})()
 try:
