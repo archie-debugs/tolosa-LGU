@@ -4,7 +4,7 @@ import csv
 import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from sqlalchemy import or_, exc
 from sqlalchemy.orm import Session
 from .. import models, schemas
@@ -19,7 +19,6 @@ import secrets
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
-from fastapi.responses import HTMLResponse
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -106,12 +105,12 @@ def _serialize_document(doc: models.Document):
                 db_session.close()
         except Exception:
             pass
-    # include attachments metadata
+    # include attachments metadata (stored_path hidden for security)
     try:
         db_session = SessionLocal()
         atts = db_session.query(models.Attachment).filter(models.Attachment.document_id == doc.id).all()
         payload["attachments"] = [
-            {"id": a.id, "original_filename": a.original_filename, "stored_path": a.stored_path, "mime_type": a.mime_type, "size": a.size, "checksum": a.checksum} for a in atts
+            {"id": a.id, "original_filename": a.original_filename, "mime_type": a.mime_type, "size": a.size, "checksum": a.checksum} for a in atts
         ]
     except Exception:
         payload["attachments"] = []
@@ -628,7 +627,8 @@ def scan_document(payload: dict = Body(...), db: Session = Depends(get_db), curr
 
 
 @router.get("/qr/labels")
-def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depends(get_db)):
+def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "print_qr_codes")
     query = db.query(models.Document).filter(models.Document.archived.is_(False))
     if ids:
         id_list = [int(item.strip()) for item in str(ids).split(",") if item.strip().isdigit()]
@@ -646,7 +646,8 @@ def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depe
 
 
 @router.get("/qr/monitor")
-def monitor_qr(db: Session = Depends(get_db)):
+def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_qr_tracking")
     total_documents = db.query(models.Document).filter(models.Document.archived.is_(False)).count()
     successful_scans = db.query(models.AuditLog).filter(models.AuditLog.action == "QR_SCAN_SUCCESS").count()
     unrecognized_scans = db.query(models.AuditLog).filter(models.AuditLog.action == "QR_SCAN_UNRECOGNIZED").count()
@@ -687,7 +688,8 @@ def monitor_qr(db: Session = Depends(get_db)):
 
 
 @router.delete("/{document_id:int}")
-def delete_document(document_id: int, db: Session = Depends(get_db)):
+def delete_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "archive_documents")
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -697,13 +699,38 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
     return {"message": "Document archived successfully"}
 
 
+@router.get("/{document_id:int}/attachments/{attachment_id:int}")
+def download_attachment(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "download_documents")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    attachment = db.query(models.Attachment).filter(models.Attachment.id == attachment_id, models.Attachment.document_id == document_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    if not attachment.stored_path or not os.path.isabs(attachment.stored_path):
+        raise HTTPException(status_code=500, detail="Invalid attachment path")
+    if not os.path.exists(attachment.stored_path):
+        raise HTTPException(status_code=404, detail="Attachment file not found")
+
+    return FileResponse(
+        attachment.stored_path,
+        filename=attachment.original_filename,
+        media_type=attachment.mime_type or "application/octet-stream",
+    )
+
+
 @router.get("/template")
-def download_import_template():
+def download_import_template(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "import_documents")
     try:
-        try:
-            import openpyxl
-        except Exception:
-            raise HTTPException(status_code=500, detail="Server missing openpyxl for template generation")
+        import openpyxl
+    except Exception:
+        raise HTTPException(status_code=500, detail="Server missing openpyxl for template generation")
+
+    try:
         wb = openpyxl.Workbook()
         ws = wb.active
         headers = [
