@@ -3,6 +3,7 @@ import io
 import csv
 import re
 from datetime import datetime, timezone
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from sqlalchemy import or_, exc
@@ -250,6 +251,7 @@ def list_documents(
     year: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    priority: str | None = None,
     archived: bool | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -297,6 +299,8 @@ def list_documents(
         query = query.filter(models.Document.category == category)
     if current_office:
         query = query.filter(models.Document.current_office == current_office)
+    if priority:
+        query = query.filter(models.Document.priority == priority)
     if year:
         year_text = str(year).strip()
         if year_text.isdigit() and len(year_text) == 4:
@@ -320,130 +324,6 @@ def get_document(document_id: int, db: Session = Depends(get_db), current_user: 
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return _serialize_document(doc)
-
-
-@router.post("", response_model=schemas.DocumentResponse, status_code=status.HTTP_201_CREATED)
-def create_document(
-    tracking_number: str | None = Form(None),
-    title: str = Form(...),
-    description: str | None = Form(None),
-    document_type: str | None = Form(None),
-    category: str | None = Form(None),
-    originating_office: str | None = Form(None),
-    current_office: str | None = Form(None),
-    assigned_to: str | None = Form(None),
-    status_field: str | None = Form("Pending"),
-    priority: str | None = Form("Medium"),
-    remarks: str | None = Form(None),
-    author: str | None = Form(None),
-    session: str | None = Form(None),
-    date_registered: str | None = Form(None),
-    qr_code_value: str | None = Form(None),
-    file: UploadFile | None = File(None),
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    require_permission(current_user, "register_documents")
-    # basic validation
-    if not title or not title.strip():
-        raise HTTPException(status_code=400, detail="Title is required")
-
-    tracking = (tracking_number or "").strip()
-    if tracking:
-        existing = db.query(models.Document).filter(models.Document.tracking_number == tracking).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Tracking number already exists")
-
-    data = {
-        "tracking_number": tracking or None,
-        "title": title.strip(),
-        "description": (description or None),
-        "document_type": (document_type or None),
-        "category": (category or None),
-        "originating_office": (originating_office or None),
-        "current_office": (current_office or None),
-        "assigned_to": (assigned_to or None),
-        "status": (status_field or "Pending"),
-        "priority": (priority or "Medium"),
-        "remarks": (remarks or None),
-        "author": (author or None),
-        "session": (session or None),
-        "date_registered": (date_registered or None),
-        "attachment_name": None,
-        "qr_code_value": (qr_code_value or None),
-        "routing_history": "[]",
-        "created_by": None,
-    }
-
-    # ensure tracking number is present (DB requires non-null)
-    if not data.get("tracking_number"):
-        data["tracking_number"] = _next_tracking_number(db)
-    if not data.get("qr_code_value"):
-        data["qr_code_value"] = data["tracking_number"]
-
-    # handle file upload (store into UPLOAD_DIR)
-    if file is not None:
-        try:
-            os.makedirs(UPLOAD_DIR, exist_ok=True)
-            content = file.file.read()
-            checksum = hashlib.sha256(content).hexdigest()
-            safe_name = f"{int(datetime.utcnow().timestamp())}_{secrets.token_hex(8)}_{os.path.basename(file.filename)}"
-            dest_path = os.path.join(UPLOAD_DIR, safe_name)
-            with open(dest_path, "wb") as fh:
-                fh.write(content)
-            data["attachment_name"] = safe_name
-            # persist attachment metadata after doc is created
-            attachment_meta = {"original_filename": file.filename, "stored_path": dest_path, "mime_type": file.content_type or mimetypes.guess_type(file.filename)[0], "size": len(content), "checksum": checksum}
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {exc}")
-
-    # (removed debug artifact write)
-    # create the document row (legacy text fields kept for compatibility)
-    doc = models.Document(**{k: v for k, v in data.items() if v is not None})
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
-
-    # populate normalized FK columns if provided
-    if document_type:
-        doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
-    if category:
-        doc.category_id = _get_or_create_by_name(db, models.Category, category)
-    if originating_office:
-        doc.originating_office_id = _get_or_create_by_name(db, models.Office, originating_office)
-    if current_office:
-        doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
-    if assigned_to:
-        # do not auto-create users here; leave created_by/assigned_to strings until manual mapping is done
-        pass
-    db.commit()
-    db.refresh(doc)
-
-    # store attachment metadata row if upload occurred
-    try:
-        if file is not None and 'attachment_meta' in locals():
-            att = models.Attachment(
-                document_id=doc.id,
-                original_filename=attachment_meta['original_filename'],
-                stored_path=attachment_meta['stored_path'],
-                mime_type=attachment_meta.get('mime_type'),
-                size=attachment_meta.get('size'),
-                checksum=attachment_meta.get('checksum'),
-            )
-            db.add(att)
-            db.commit()
-            db.refresh(att)
-    except Exception:
-        db.rollback()
-
-    # finalize routing history and ensure qr/tracking values persisted
-    if not doc.qr_code_value:
-        doc.qr_code_value = doc.tracking_number or f"DOC-{doc.id}"
-    if not doc.routing_history:
-        doc.routing_history = "[]"
-    db.commit()
-    db.refresh(doc)
     return _serialize_document(doc)
 
 
@@ -480,6 +360,98 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
     if data.get("current_office") is not None:
         doc.current_office = data.get("current_office")
         doc.current_office_id = _get_or_create_by_name(db, models.Office, data.get("current_office"))
+
+    db.commit()
+    db.refresh(doc)
+    return _serialize_document(doc)
+
+
+@router.post("/register", response_model=schemas.DocumentResponse)
+def register_document(
+    title: str = Form(...),
+    description: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+    document_type: Optional[str] = Form(None),
+    current_office: Optional[str] = Form(None),
+    assigned_to: Optional[str] = Form(None),
+    author: Optional[str] = Form(None),
+    priority: Optional[str] = Form("Medium"),
+    tracking_number: Optional[str] = Form(None),
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "register_documents")
+
+    title = (title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    tracking_number = (tracking_number or "").strip()
+    if tracking_number:
+        existing = db.query(models.Document).filter(models.Document.tracking_number == tracking_number).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Tracking number already exists")
+    else:
+        tracking_number = _next_tracking_number(db)
+
+    category = (category or None)
+    document_type = (document_type or None)
+    current_office = (current_office or None)
+    assigned_to = (assigned_to or None)
+    author = (author or None)
+    priority = (priority or "Medium") or "Medium"
+
+    doc = models.Document(
+        tracking_number=tracking_number,
+        title=title,
+        description=(description or None),
+        category=category,
+        document_type=document_type,
+        current_office=current_office,
+        assigned_to=assigned_to,
+        author=author,
+        status="Pending",
+        priority=priority,
+        date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        qr_code_value=tracking_number,
+        created_by=getattr(current_user, "username", None),
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+
+    # handle optional file upload and persist attachment metadata
+    if file is not None:
+        try:
+            os.makedirs(UPLOAD_DIR, exist_ok=True)
+            content = file.file.read()
+            checksum = hashlib.sha256(content).hexdigest()
+            safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(file.filename)}"
+            dest_path = os.path.join(UPLOAD_DIR, safe_name)
+            with open(dest_path, "wb") as fh:
+                fh.write(content)
+            # set attachment name on document and create attachment row
+            doc.attachment_name = safe_name
+            att = models.Attachment(
+                document_id=doc.id,
+                original_filename=file.filename,
+                stored_path=dest_path,
+                mime_type=file.content_type or mimetypes.guess_type(file.filename)[0],
+                size=len(content),
+                checksum=checksum,
+            )
+            db.add(att)
+            db.commit()
+            db.refresh(att)
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {exc}")
+
+    if document_type:
+        doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
+    if current_office:
+        doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
 
     db.commit()
     db.refresh(doc)

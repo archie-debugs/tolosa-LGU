@@ -30,7 +30,7 @@ def build_documents_view(
     status_filter = documents_controls.get("status_filter")
     category_filter = documents_controls.get("category_filter")
     type_filter = documents_controls.get("type_filter")
-    year_filter = documents_controls.get("year_filter")
+    priority_filter = documents_controls.get("priority_filter")
     assigned_filter = documents_controls.get("assigned_filter")
 
     register_button = documents_controls.get("register_button")
@@ -123,7 +123,7 @@ def build_documents_view(
         status_filter,
         category_filter,
         type_filter,
-        year_filter,
+        priority_filter,
         assigned_filter,
         sort_filter,
         start_date_filter,

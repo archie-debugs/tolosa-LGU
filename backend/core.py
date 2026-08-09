@@ -141,12 +141,12 @@ DEFAULT_ROLE_PERMISSIONS = {
     "Super Administrator": ["*"],
     "Employee": [
         "view_dashboard",
-        "register_documents",
         "view_documents",
         "search_documents",
         "filter_documents",
         "view_document_details",
         "edit_documents",
+        "register_documents",
         "archive_documents",
         "restore_documents",
         "import_documents",

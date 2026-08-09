@@ -25,6 +25,15 @@ class DocumentCreate(BaseModel):
     archived: bool = False
 
 
+class DocumentRegistration(BaseModel):
+    title: str = Field(..., min_length=1)
+    description: Optional[str] = None
+    document_type: Optional[str] = None
+    current_office: Optional[str] = None
+    priority: Optional[str] = "Medium"
+    tracking_number: Optional[str] = None
+
+
 class DocumentUpdate(BaseModel):
     tracking_number: Optional[str] = None
     title: Optional[str] = None

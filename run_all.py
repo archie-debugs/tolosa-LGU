@@ -15,9 +15,13 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).parent
 PY = sys.executable
+
+# Load development environment settings before starting child processes
+load_dotenv(override=True)
 
 FRONTENDS = {
     "admin": str(REPO_ROOT / "frontend" / "frontend_admin" / "app.py"),

@@ -1,7 +1,9 @@
 import os
 import flet as ft
 import requests
+from dotenv import load_dotenv
 
+load_dotenv(override=True)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 
 STATUS_OPTIONS = ["All", "Pending", "Approved", "Rejected"]

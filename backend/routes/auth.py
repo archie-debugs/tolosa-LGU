@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
@@ -71,7 +71,11 @@ def register_user(
 
 
 @router.post("/auth/login")
-def login_user(username: str, password: str, db: Session = Depends(get_db)):
+def login_user(
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+):
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
 

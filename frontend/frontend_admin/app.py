@@ -108,14 +108,18 @@ from datetime import datetime
 from urllib.parse import quote
 from dotenv import load_dotenv
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
-AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-load_dotenv()
+load_dotenv(override=True)
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
+AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN")
+
+if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
+    if BACKEND_URL.startswith("https://"):
+        BACKEND_URL = BACKEND_URL.replace("https://", "http://", 1)
 
 from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.documents import build_documents_view
@@ -477,143 +481,22 @@ def main(page: ft.Page):
     )
     documents_filter_start_date = ft.TextField(label="Start Date", hint_text="YYYY-MM-DD", width=140)
     documents_filter_end_date = ft.TextField(label="End Date", hint_text="YYYY-MM-DD", width=140)
-    documents_year_filter = ft.TextField(label="Year", hint_text="YYYY", width=100)
+    documents_filter_priority = ft.Dropdown(
+        label="Priority",
+        width=120,
+        options=[
+            ft.dropdown.Option("All"),
+            ft.dropdown.Option("Low"),
+            ft.dropdown.Option("Medium"),
+            ft.dropdown.Option("High"),
+        ],
+        value="All",
+    )
     documents_status_filter = documents_filter_status
     documents_category_filter = documents_filter_category
     documents_type_filter = documents_filter_type
     documents_assigned_filter = documents_filter_office
 
-    documents_form_tracking = ft.TextField(label="Tracking Number", expand=True)
-    documents_form_tracking.disabled = True
-    documents_form_title = ft.TextField(label="Title", expand=True)
-    def on_title_change(e):
-        nonlocal documents_form_title_auto_generated
-        documents_form_title_auto_generated = False
-    documents_form_title.on_change = on_title_change
-    documents_form_description = ft.TextField(label="Description", multiline=True, min_lines=3, max_lines=6, expand=True)
-    documents_form_document_type = ft.TextField(label="Document Type", expand=True)
-    documents_form_category = ft.TextField(label="Category", expand=True)
-    documents_form_originating_office = ft.TextField(label="Originating Office", expand=True)
-    documents_form_current_office = ft.TextField(label="Current Office", expand=True)
-    documents_form_assigned_to = ft.TextField(label="Assigned To", expand=True)
-    documents_form_status = ft.Dropdown(
-        label="Status",
-        width=180,
-        options=[
-            ft.dropdown.Option("Pending"),
-            ft.dropdown.Option("In Routing"),
-            ft.dropdown.Option("Received"),
-            ft.dropdown.Option("Approved"),
-            ft.dropdown.Option("Returned"),
-            ft.dropdown.Option("Archived"),
-        ],
-        value="Pending",
-    )
-    documents_form_priority = ft.Dropdown(
-        label="Priority",
-        width=180,
-        options=[ft.dropdown.Option("Low"), ft.dropdown.Option("Medium"), ft.dropdown.Option("High")],
-        value="Medium",
-    )
-    documents_form_remarks = ft.TextField(label="Remarks", multiline=True, min_lines=2, max_lines=4, expand=True)
-    documents_form_created_by = ft.TextField(label="Created By", expand=True)
-    documents_form_author = ft.TextField(label="Author", expand=True)
-    documents_form_session = ft.TextField(label="Session", expand=True)
-    documents_form_date_registered = ft.TextField(label="Date Registered", expand=True, hint_text="YYYY-MM-DD")
-    documents_form_attachment_file = None
-    documents_form_attachment_file_name = ""
-    documents_form_attachment_name = ft.TextField(value="", visible=False)
-    documents_form_attachment_display = ft.Text("No file selected", size=13, color=ft.Colors.BLUE_GREY_700)
-    documents_form_title_auto_generated = False
-
-    documents_form_mode = "create"
-    documents_form_target_id = None
-
-    # Choose file coroutine using the FilePicker service (Flet 0.86.5)
-    async def choose_attachment_file():
-        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
-        try:
-            file_picker = ft.FilePicker()
-            files = await file_picker.pick_files(
-                dialog_title="Choose attachment",
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["pdf", "doc", "docx"],
-                allow_multiple=False,
-                with_data=True,
-            )
-            if not files:
-                # user cancelled
-                return
-            selected = files[0]
-            # Verify bytes available
-            if not selected.bytes:
-                show_document_notice("Unable to read the selected file. Please try again.")
-                return
-            documents_form_attachment_file = selected.bytes
-            documents_form_attachment_file_name = selected.name
-            documents_form_attachment_display.value = selected.name
-            # Auto-populate title if user hasn't typed one (or previous title was auto-generated)
-            if (not documents_form_title.value or documents_form_title.value.strip() == "") or documents_form_title_auto_generated:
-                base = os.path.splitext(selected.name)[0]
-                title = base.replace("_", " ")
-                title = " ".join(title.split())
-                documents_form_title.value = title
-                documents_form_title_auto_generated = True
-            page.update()
-        except Exception as exc:
-            show_document_notice(f"File selection failed: {exc}")
-
-    documents_form_dialog = ft.AlertDialog(
-        title=ft.Text("Register Document"),
-        content=ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text("Capture a new document record for routing and tracking.", size=13, color=ft.Colors.BLUE_GREY_600),
-                    ft.Row([documents_form_tracking, documents_form_status], spacing=12),
-                    documents_form_title,
-                    documents_form_description,
-                    ft.Row([documents_form_document_type, documents_form_category], spacing=12),
-                    ft.Row([documents_form_originating_office, documents_form_current_office], spacing=12),
-                    ft.Row([documents_form_author, documents_form_session], spacing=12),
-                    documents_form_date_registered,
-                    ft.Divider(height=1),
-                    ft.Text("Attachment", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    ft.Text("Selected File:", size=12, color=ft.Colors.BLUE_GREY_600),
-                                    documents_form_attachment_display,
-                                    ft.Text(
-                                        "Accepted formats: PDF (.pdf), Microsoft Word (.doc), Microsoft Word (.docx)",
-                                        size=12,
-                                        color=ft.Colors.BLUE_GREY_600,
-                                    ),
-                                ],
-                                expand=True,
-                                spacing=6,
-                            ),
-                            ft.Container(
-                                content=ft.Button("Choose File", icon=ft.Icons.ATTACH_FILE, on_click=lambda e: page.run_task(choose_attachment_file)),
-                                alignment=ft.Alignment.CENTER,
-                            ),
-                        ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Row([documents_form_assigned_to, documents_form_priority], spacing=12),
-                    documents_form_remarks,
-                    documents_form_created_by,
-                ],
-                spacing=10,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-            width=620,
-            padding=8,
-        ),
-        actions=[ft.TextButton("Cancel", on_click=lambda _: close_documents_form_dialog()), ft.Button("Save", on_click=lambda _: submit_document_form())],
-    )
-    page.overlay.append(documents_form_dialog)
 
     documents_details_dialog = ft.AlertDialog(
         title=ft.Text("Document Details"),
@@ -690,6 +573,130 @@ def main(page: ft.Page):
     )
     page.overlay.append(qr_monitor_dialog)
 
+    registration_title = ft.TextField(label="Title", width=420)
+    registration_description = ft.TextField(label="Description", multiline=True, min_lines=3, max_lines=5, width=420)
+    registration_category = ft.Dropdown(
+        label="Category",
+        width=420,
+        options=[
+            ft.dropdown.Option("Legislation"),
+            ft.dropdown.Option("Policy"),
+            ft.dropdown.Option("Report"),
+        ],
+        value="Legislation",
+    )
+    registration_document_type = ft.Dropdown(
+        label="Document Type",
+        width=420,
+        options=[
+            ft.dropdown.Option("Ordinance"),
+            ft.dropdown.Option("Resolution"),
+            ft.dropdown.Option("Committee Report"),
+        ],
+        value="Ordinance",
+    )
+    registration_current_office = ft.Dropdown(
+        label="Current Office",
+        width=420,
+        options=[
+            ft.dropdown.Option("SB Secretariat"),
+            ft.dropdown.Option("Office of the Mayor"),
+            ft.dropdown.Option("Committee on Health"),
+        ],
+        value="SB Secretariat",
+    )
+    registration_assigned_to = ft.TextField(label="Assigned To", width=420)
+    registration_author = ft.TextField(label="Author", width=420)
+    registration_priority = ft.Dropdown(
+        label="Priority",
+        width=210,
+        options=[
+            ft.dropdown.Option("Low"),
+            ft.dropdown.Option("Medium"),
+            ft.dropdown.Option("High"),
+        ],
+        value="Medium",
+    )
+    registration_attachment = None
+    registration_attachment_label = ft.Text("No file selected", size=12, color=ft.Colors.BLUE_GREY_600)
+    file_picker = ft.FilePicker(on_result=lambda e: None)
+    page.overlay.append(file_picker)
+
+    def _on_registration_file(e):
+        nonlocal registration_attachment
+        try:
+            if getattr(e, 'files', None):
+                f = e.files[0]
+                attachment_path = getattr(e, 'path', None) or getattr(f, 'path', None)
+                if attachment_path and not os.path.isabs(attachment_path) and not os.path.exists(attachment_path):
+                    attachment_path = os.path.abspath(attachment_path)
+                registration_attachment = {
+                    "path": attachment_path,
+                    "name": getattr(f, 'name', None),
+                }
+                filename = registration_attachment["name"] or ""
+                registration_attachment_label.value = filename or "No file selected"
+
+                if filename:
+                    title_candidate = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").strip()
+                    if title_candidate and not (registration_title.value or "").strip():
+                        registration_title.value = title_candidate.title()
+
+                    ext = os.path.splitext(filename)[1].lower().lstrip('.')
+                    if ext and not (registration_document_type.value or "").strip():
+                        type_map = {
+                            "pdf": "Resolution",
+                            "doc": "Committee Report",
+                            "docx": "Committee Report",
+                            "xls": "Resolution",
+                            "xlsx": "Resolution",
+                            "ppt": "Committee Report",
+                            "pptx": "Committee Report",
+                            "txt": "Ordinance",
+                            "csv": "Resolution",
+                            "jpg": "Resolution",
+                            "jpeg": "Resolution",
+                            "png": "Resolution",
+                            "gif": "Resolution",
+                        }
+                        registration_document_type.value = type_map.get(ext, "Ordinance")
+            else:
+                registration_attachment = None
+                registration_attachment_label.value = "No file selected"
+        except Exception:
+            registration_attachment = None
+            registration_attachment_label.value = "No file selected"
+        page.update()
+
+    # attach handler to file_picker
+    file_picker.on_result = _on_registration_file
+
+    register_document_dialog = ft.AlertDialog(
+        title=ft.Text("Register Document"),
+        content=ft.Column(
+            [
+                ft.Text("Create a new document using a minimal form.", size=13, color=ft.Colors.BLUE_GREY_600),
+                registration_title,
+                registration_description,
+                registration_category,
+                registration_document_type,
+                registration_current_office,
+                registration_assigned_to,
+                registration_author,
+                registration_priority,
+                ft.Row([ft.Button("Choose file", on_click=lambda _: file_picker.pick_files()), registration_attachment_label], spacing=12),
+            ],
+            spacing=12,
+            scroll=ft.ScrollMode.AUTO,
+            width=420,
+        ),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_register_document_dialog()),
+            ft.Button("Save", on_click=lambda _: submit_register_document()),
+        ],
+    )
+    page.overlay.append(register_document_dialog)
+
     def close_qr_scan_dialog():
         qr_scan_dialog.open = False
         page.update()
@@ -697,6 +704,87 @@ def main(page: ft.Page):
     def close_qr_monitor_dialog():
         qr_monitor_dialog.open = False
         page.update()
+
+    def close_register_document_dialog():
+        register_document_dialog.open = False
+        page.update()
+
+    def open_register_document_dialog(_=None):
+        nonlocal registration_attachment
+        registration_title.value = ""
+        registration_description.value = ""
+        registration_category.value = "Legislation"
+        registration_document_type.value = "Ordinance"
+        registration_current_office.value = "SB Secretariat"
+        registration_assigned_to.value = ""
+        registration_author.value = ""
+        registration_priority.value = "Medium"
+        registration_attachment = None
+        registration_attachment_label.value = "No file selected"
+        register_document_dialog.open = True
+        page.update()
+
+    def submit_register_document(_=None):
+        title = (registration_title.value or "").strip()
+        if not title:
+            show_document_notice("Title is required to register a document.")
+            return
+
+        payload = {
+            "title": title,
+            "description": (registration_description.value or "").strip() or None,
+            "category": (registration_category.value or "").strip() or None,
+            "document_type": (registration_document_type.value or "").strip() or None,
+            "current_office": (registration_current_office.value or "").strip() or None,
+            "assigned_to": (registration_assigned_to.value or "").strip() or None,
+            "author": (registration_author.value or "").strip() or None,
+            "priority": (registration_priority.value or "Medium").strip() or "Medium",
+        }
+
+        try:
+            # if a file was chosen, send multipart/form-data with file and form fields
+            if registration_attachment and registration_attachment.get("path"):
+                data = {k: v for k, v in payload.items() if v is not None}
+                attachment_path = registration_attachment["path"]
+                if not os.path.isabs(attachment_path):
+                    attachment_path = os.path.abspath(attachment_path)
+                with open(attachment_path, "rb") as fh:
+                    files = {
+                        "file": (
+                            registration_attachment.get("name") or os.path.basename(attachment_path),
+                            fh,
+                            mimetypes.guess_type(attachment_path)[0] or "application/octet-stream",
+                        )
+                    }
+                    response = requests.post(
+                        f"{BACKEND_URL}/documents/register",
+                        data=data,
+                        files=files,
+                        headers=get_admin_headers(),
+                        verify=False,
+                        timeout=60,
+                    )
+            else:
+                response = requests.post(
+                    f"{BACKEND_URL}/documents/register",
+                    data={k: v for k, v in payload.items() if v is not None},
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=15,
+                )
+            if response.status_code not in {200, 201}:
+                try:
+                    error_json = response.json()
+                    error_detail = error_json.get("detail", response.text)
+                except Exception:
+                    error_detail = response.text
+                raise Exception(f"{response.status_code} {error_detail}")
+            register_document_dialog.open = False
+            page.update()
+            load_documents_table()
+            show_document_notice("Document registered successfully.")
+        except Exception as exc:
+            show_document_notice(f"Document registration failed: {exc}")
 
     def format_qr_monitor_details(payload):
         summary = []
@@ -1058,10 +1146,6 @@ def main(page: ft.Page):
     # File selection for attachment inside Register Document form
     # Uses inline FilePicker coroutine (no overlay append, no separate page)
 
-    def close_documents_form_dialog():
-        documents_form_dialog.open = False
-        page.update()
-
     def close_documents_details_dialog():
         documents_details_dialog.open = False
         page.update()
@@ -1088,116 +1172,6 @@ def main(page: ft.Page):
             delete_document_record(document.get("id"))
             render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=1)
 
-    def generate_tracking_number():
-        try:
-            response = requests.get(f"{BACKEND_URL}/documents", headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code == 200:
-                payload = response.json() if response.content else []
-                documents = payload if isinstance(payload, list) else payload.get("items", [])
-                used_numbers = set()
-                for doc in documents:
-                    tracking = str(doc.get("tracking_number", "") or "").strip()
-                    if tracking.startswith("DOC-"):
-                        suffix = tracking.replace("DOC-", "", 1)
-                        if suffix.isdigit():
-                            used_numbers.add(int(suffix))
-                candidate = 1
-                while candidate in used_numbers:
-                    candidate += 1
-                return f"DOC-{candidate}"
-        except Exception:
-            pass
-        return "DOC-1"
-
-    def reset_document_form():
-        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
-        documents_form_tracking.value = ""
-        documents_form_title.value = ""
-        documents_form_description.value = ""
-        documents_form_document_type.value = ""
-        documents_form_category.value = ""
-        documents_form_originating_office.value = ""
-        documents_form_current_office.value = ""
-        documents_form_assigned_to.value = ""
-        documents_form_status.value = "Pending"
-        documents_form_priority.value = "Medium"
-        documents_form_remarks.value = ""
-        documents_form_created_by.value = ""
-        documents_form_author.value = ""
-        documents_form_session.value = ""
-        documents_form_date_registered.value = datetime.now().strftime("%Y-%m-%d")
-        documents_form_attachment_name.value = ""
-        documents_form_attachment_file = None
-        documents_form_attachment_file_name = ""
-        documents_form_attachment_display.value = "No file selected"
-        documents_form_title_auto_generated = False
-
-    def populate_document_form(doc):
-        documents_form_tracking.value = doc.get("tracking_number", "") or ""
-        documents_form_title.value = doc.get("title", "") or ""
-        documents_form_description.value = doc.get("description", "") or ""
-        documents_form_document_type.value = doc.get("document_type", "") or ""
-        documents_form_category.value = doc.get("category", "") or ""
-        documents_form_originating_office.value = doc.get("originating_office", "") or ""
-        documents_form_current_office.value = doc.get("current_office", "") or ""
-        documents_form_assigned_to.value = doc.get("assigned_to", "") or ""
-        documents_form_status.value = doc.get("status") or "Pending"
-        documents_form_priority.value = doc.get("priority") or "Medium"
-        documents_form_remarks.value = doc.get("remarks", "") or ""
-        documents_form_created_by.value = doc.get("created_by", "") or ""
-        documents_form_author.value = doc.get("author", "") or ""
-        documents_form_session.value = doc.get("session", "") or ""
-        documents_form_date_registered.value = doc.get("date_registered", "") or ""
-        documents_form_attachment_name.value = doc.get("attachment_name", "") or ""
-        # when editing an existing record we don't have file bytes in frontend
-        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
-        documents_form_attachment_file = None
-        documents_form_attachment_file_name = ""
-        documents_form_attachment_display.value = doc.get("attachment_name", "") or "No file selected"
-        documents_form_title_auto_generated = False
-
-    def open_document_form(doc=None):
-        nonlocal documents_form_mode, documents_form_target_id
-        documents_form_mode = "edit" if doc and doc.get("id") else "create"
-        documents_form_target_id = doc.get("id") if doc and doc.get("id") else None
-        documents_form_dialog.title = ft.Text("Edit Document" if documents_form_mode == "edit" else "Register Document")
-        if doc:
-            populate_document_form(doc)
-        else:
-            reset_document_form()
-            documents_form_tracking.value = generate_tracking_number()
-        documents_form_dialog.open = True
-        page.update()
-
-    def submit_document_form():
-        payload = {
-            "tracking_number": (documents_form_tracking.value or "").strip(),
-            "title": (documents_form_title.value or "").strip(),
-            "description": (documents_form_description.value or "").strip() or None,
-            "document_type": (documents_form_document_type.value or "").strip() or None,
-            "category": (documents_form_category.value or "").strip() or None,
-            "originating_office": (documents_form_originating_office.value or "").strip() or None,
-            "current_office": (documents_form_current_office.value or "").strip() or None,
-            "assigned_to": (documents_form_assigned_to.value or "").strip() or None,
-            "status": (documents_form_status.value or "Pending").strip() or "Pending",
-            "priority": (documents_form_priority.value or "Medium").strip() or "Medium",
-            "remarks": (documents_form_remarks.value or "").strip() or None,
-            "created_by": (documents_form_created_by.value or "").strip() or None,
-            "author": (documents_form_author.value or "").strip() or None,
-            "session": (documents_form_session.value or "").strip() or None,
-            "date_registered": (documents_form_date_registered.value or "").strip() or None,
-            "attachment_name": (documents_form_attachment_name.value or "").strip() or None,
-        }
-        if not payload["title"]:
-            show_document_notice("Title is required.")
-            return
-        if not payload["tracking_number"]:
-            payload["tracking_number"] = generate_tracking_number()
-        if documents_form_mode == "edit" and documents_form_target_id is not None:
-            update_document_record(documents_form_target_id, payload)
-        else:
-            create_document_record(payload)
-        close_documents_form_dialog()
 
     def open_route_dialog(doc):
         route_destination = ft.TextField(label="Destination Office", width=300)
@@ -1495,47 +1469,6 @@ def main(page: ft.Page):
             "archived": bool(doc.get("archived", False)),
         }
 
-    def create_document_record(payload):
-        nonlocal documents_form_attachment_file, documents_form_attachment_file_name, documents_form_title_auto_generated
-        try:
-            # If a file has been selected in the form, send multipart/form-data
-            if documents_form_attachment_file is not None:
-                files = {
-                    "file": (
-                        documents_form_attachment_file_name,
-                        io.BytesIO(documents_form_attachment_file),
-                        mimetypes.guess_type(documents_form_attachment_file_name)[0] or "application/octet-stream",
-                    )
-                }
-                # include form fields as data
-                data = {k: (v if v is not None else "") for k, v in payload.items()}
-                response = requests.post(f"{BACKEND_URL}/documents", data=data, files=files, headers=get_admin_headers(), verify=False, timeout=30)
-            else:
-                # No file: send JSON metadata-only create
-                response = requests.post(f"{BACKEND_URL}/documents", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code not in {200, 201}:
-                raise Exception(response.text)
-            # reset attachment state
-            documents_form_attachment_display.value = "No file selected"
-            # clear in-memory file
-            documents_form_attachment_file = None
-            documents_form_attachment_file_name = ""
-            documents_form_title_auto_generated = False
-            load_documents_table()
-            show_document_notice("Document created successfully.")
-        except Exception as exc:
-            show_document_notice(f"Create failed: {exc}")
-
-    def update_document_record(document_id, payload):
-        try:
-            response = requests.put(f"{BACKEND_URL}/documents/{document_id}", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.text)
-            load_documents_table()
-            show_document_notice("Document updated successfully.")
-        except Exception as exc:
-            show_document_notice(f"Update failed: {exc}")
-
     def delete_document_record(document_id):
         try:
             response = requests.delete(f"{BACKEND_URL}/documents/{document_id}", headers=get_admin_headers(), verify=False, timeout=10)
@@ -1586,10 +1519,8 @@ def main(page: ft.Page):
             )
             actions = [
                 ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
-                ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, d=doc: open_document_form(d)),
                 ft.PopupMenuItem(content=ft.Text("Route Document"), on_click=lambda _, d=doc: open_route_dialog(d)),
                 ft.PopupMenuItem(content=ft.Text("View Routing History"), on_click=lambda _, d=doc: show_document_details(d)),
-                # QR actions removed from row popup to streamline routing-history view
                 ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _: show_document_notice("Download action preview enabled.")),
                 ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
             ]
@@ -1663,7 +1594,6 @@ def main(page: ft.Page):
             if include_archive_action:
                 actions = [
                     ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
-                    ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, d=doc: open_document_form(d)),
                     ft.PopupMenuItem(content=ft.Text("Route Document"), on_click=lambda _, d=doc: open_route_dialog(d)),
                     ft.PopupMenuItem(content=ft.Text("View Routing History"), on_click=lambda _, d=doc: show_document_details(d)),
                     ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
@@ -1872,8 +1802,8 @@ def main(page: ft.Page):
                 params["category"] = documents_category_filter.value
             if documents_assigned_filter.value and documents_assigned_filter.value != "All":
                 params["current_office"] = documents_assigned_filter.value
-            if documents_year_filter.value:
-                params["year"] = documents_year_filter.value
+            if documents_filter_priority.value and documents_filter_priority.value != "All":
+                params["priority"] = documents_filter_priority.value
             if documents_filter_start_date.value:
                 params["start_date"] = documents_filter_start_date.value
             if documents_filter_end_date.value:
@@ -1906,8 +1836,8 @@ def main(page: ft.Page):
                 params["category"] = documents_category_filter.value
             if documents_assigned_filter.value and documents_assigned_filter.value != "All":
                 params["current_office"] = documents_assigned_filter.value
-            if documents_year_filter.value:
-                params["year"] = documents_year_filter.value
+            if documents_filter_priority.value and documents_filter_priority.value != "All":
+                params["priority"] = documents_filter_priority.value
             if documents_filter_start_date.value:
                 params["start_date"] = documents_filter_start_date.value
             if documents_filter_end_date.value:
@@ -1933,8 +1863,8 @@ def main(page: ft.Page):
         documents_type_filter.value = "All"
         documents_category_filter.value = "All"
         documents_assigned_filter.value = "All"
+        documents_filter_priority.value = "All"
         documents_sort_filter.value = "Newest"
-        documents_year_filter.value = ""
         documents_filter_start_date.value = ""
         documents_filter_end_date.value = ""
         load_documents_table()
@@ -1954,22 +1884,21 @@ def main(page: ft.Page):
                 "status_filter": documents_status_filter,
                 "category_filter": documents_category_filter,
                 "type_filter": documents_type_filter,
-                "year_filter": documents_year_filter,
+                "priority_filter": documents_filter_priority,
                 "assigned_filter": documents_assigned_filter,
-                "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_document_form()),
+                "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_register_document_dialog()),
                 "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
                 "qr_monitor_button": ft.OutlinedButton("QR Monitor", icon=ft.Icons.QR_CODE_2, on_click=lambda _: open_qr_monitor()),
                 "qr_labels_button": None,
                 "export_button": None,
                 "print_button": None,
-                # Import Documents removed; attachment is part of Register Document workflow
                 "import_button": None,
                 "filter_button": ft.OutlinedButton("Apply", icon=ft.Icons.FILTER_LIST, on_click=lambda _: load_documents_table()),
                 "reset_filter_button": None,
                 "sort_filter": documents_sort_filter,
                 "start_date_filter": documents_filter_start_date,
                 "end_date_filter": documents_filter_end_date,
-                "empty_state_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_document_form()),
+                "empty_state_button": None,
                 "empty_state": documents_empty_state,
             }
             return build_documents_view(
@@ -2577,7 +2506,7 @@ def main(page: ft.Page):
                 return
 
             try:
-                res = requests.post(f"{BACKEND_URL}/auth/login", params={"username": username, "password": password}, verify=False, timeout=10)
+                res = requests.post(f"{BACKEND_URL}/auth/login", data={"username": username, "password": password}, verify=False, timeout=10)
                 if res.status_code == 200:
                     payload = res.json()
                     runtime_token = payload.get("access_token")
