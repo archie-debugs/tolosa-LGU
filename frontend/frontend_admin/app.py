@@ -106,6 +106,9 @@ import secrets
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
+import time
+import secrets
+from flet_core.file_picker import FilePickerUploadFile
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -724,6 +727,205 @@ def main(page: ft.Page):
         register_document_dialog.open = True
         page.update()
 
+    # --- Multiple / Bulk Registration dialog and upload flow (browser-safe) ---
+    bulk_import_files = []  # list of dicts: {name, size, tmp_name, status, progress}
+    bulk_selected_list = ft.Column()
+    bulk_common_title = ft.TextField(label="Common Title (optional)", width=420)
+    bulk_common_description = ft.TextField(label="Common Description", multiline=True, min_lines=2, max_lines=4, width=420)
+    bulk_common_category = ft.Dropdown(label="Category", width=420, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")], value="Legislation")
+    bulk_common_document_type = ft.Dropdown(label="Document Type", width=420, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
+    bulk_common_current_office = ft.Dropdown(label="Current Office", width=420, options=[ft.dropdown.Option("SB Secretariat"), ft.dropdown.Option("Office of the Mayor"), ft.dropdown.Option("Committee on Health")], value="SB Secretariat")
+    bulk_common_assigned_to = ft.TextField(label="Assigned To", width=420)
+    bulk_common_author = ft.TextField(label="Author", width=420)
+    bulk_common_priority = ft.Dropdown(label="Priority", width=210, options=[ft.dropdown.Option("Low"), ft.dropdown.Option("Medium"), ft.dropdown.Option("High")], value="Medium")
+
+    bulk_file_picker = ft.FilePicker(on_result=lambda e: None, on_upload=lambda e: None)
+    page.overlay.append(bulk_file_picker)
+
+    def _render_bulk_selected_list():
+        bulk_selected_list.controls = []
+        for item in bulk_import_files:
+            prog = ft.ProgressBar(value=item.get("progress", 0.0), width=120) if item.get("progress") is not None else None
+            status_text = item.get("status", "")
+            row = ft.Row([
+                ft.Container(content=ft.Text(item.get("name", "-"), size=12, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS), width=150, alignment=ft.Alignment.CENTER_LEFT),
+                ft.Container(content=ft.Text(f"{(item.get('size') or 0)//1024} KB", size=12), width=50, alignment=ft.Alignment.CENTER_LEFT),
+                ft.Container(content=ft.Text(status_text, size=12, color=ft.Colors.GREEN_700 if status_text == "Ready" else ft.Colors.BLUE_GREY_700), width=110, alignment=ft.Alignment.CENTER_LEFT),
+                ft.Container(content=prog or ft.Container(width=120), width=120, alignment=ft.Alignment.CENTER_LEFT),
+                ft.Container(content=ft.IconButton(ft.icons.DELETE, on_click=lambda e, nm=item.get("tmp_name"): _remove_tmp_file(nm)), width=30, alignment=ft.Alignment.CENTER),
+            ], width=520, spacing=8, alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            bulk_selected_list.controls.append(row)
+        page.update()
+
+    def _remove_tmp_file(tmp_name):
+        nonlocal bulk_import_files
+        bulk_import_files = [i for i in bulk_import_files if i.get("tmp_name") != tmp_name]
+        _render_bulk_selected_list()
+
+    def _on_bulk_pick(e):
+        nonlocal bulk_import_files
+        files = getattr(e, "files", None) or []
+        if not files:
+            return
+        # Request server-generated temporary upload URLs tied to the authenticated user
+        files_meta = []
+        for f in files:
+            name = getattr(f, "name", None) or ""
+            size = getattr(f, "size", None) or 0
+            files_meta.append({"filename": name, "size": size})
+
+        try:
+            resp = requests.post(f"{BACKEND_URL}/documents/uploads/create_tmp_uploads", json={"files": files_meta}, headers=get_admin_headers(), verify=False, timeout=30)
+            if resp.status_code != 200:
+                raise Exception(resp.text)
+            body = resp.json()
+            upload_items = []
+            for info in body.get("files", []):
+                if not info.get("ok"):
+                    bulk_import_files.append({"name": info.get("filename"), "size": 0, "tmp_name": None, "status": f"Rejected: {info.get('reason')}", "progress": 0.0})
+                    continue
+                name = info.get("filename")
+                tmp_name = info.get("tmp_name")
+                upload_url = info.get("upload_url")
+                bulk_import_files.append({"name": name, "size": 0, "tmp_name": tmp_name, "status": "Queued", "progress": 0.0})
+                upload_items.append(FilePickerUploadFile(name=name, upload_url=upload_url, method="PUT"))
+
+            _render_bulk_selected_list()
+            try:
+                bulk_file_picker.upload(upload_items)
+            except Exception as exc:
+                show_document_notice(f"Upload start failed: {exc}")
+        except Exception as exc:
+            show_document_notice(f"Failed to create upload URLs: {exc}")
+
+    def _on_bulk_upload(e):
+        # e: FilePickerUploadEvent
+        fname = getattr(e, "file_name", None)
+        progress = getattr(e, "progress", None)
+        error = getattr(e, "error", None)
+        for item in bulk_import_files:
+            if item.get("name") == fname:
+                if error:
+                    item["status"] = f"Error: {error}"
+                    item["progress"] = 0.0
+                else:
+                    if progress is None:
+                        item["progress"] = 1.0
+                        item["status"] = "Ready"
+                    else:
+                        item["progress"] = progress
+                        item["status"] = f"Uploading {int(progress*100)}%"
+                break
+        _render_bulk_selected_list()
+
+    bulk_file_picker.on_result = _on_bulk_pick
+    bulk_file_picker.on_upload = _on_bulk_upload
+
+    def open_bulk_register_document_dialog(_=None):
+        # reset
+        nonlocal bulk_import_files
+        bulk_import_files = []
+        bulk_selected_list.controls = []
+        bulk_common_title.value = ""
+        bulk_common_description.value = ""
+        bulk_common_assigned_to.value = ""
+        bulk_common_author.value = ""
+        bulk_register_dialog.open = True
+        page.update()
+
+    bulk_register_dialog = ft.AlertDialog(
+        title=ft.Text("Multiple Document Registration"),
+        content=ft.Column([
+            ft.Text("Select PDF or Word files (PDF, DOC, DOCX)."),
+            ft.Row([ft.Button("Choose files", on_click=lambda _: bulk_file_picker.pick_files(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf","doc","docx"], allow_multiple=True)), ft.Text(" ")]),
+            ft.Text("Selected Files:"),
+            ft.Container(
+                content=ft.Column(
+                    [bulk_selected_list],
+                    width=520,
+                    height=180,
+                    scroll=ft.ScrollMode.AUTO,
+                    spacing=4,
+                ),
+                width=520,
+                height=180,
+                border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                padding=8,
+                clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            ),
+            ft.Divider(height=1),
+            ft.Text("Common Document Information"),
+            bulk_common_title,
+            bulk_common_description,
+            bulk_common_category,
+            bulk_common_document_type,
+            bulk_common_current_office,
+            bulk_common_assigned_to,
+            bulk_common_author,
+            bulk_common_priority,
+        ], spacing=8, scroll=ft.ScrollMode.AUTO, width=560),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_bulk_register_document_dialog()),
+            ft.Button("Validate files", on_click=lambda _: _validate_bulk_files(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+            ft.Button("Confirm Bulk Register", on_click=lambda _: _confirm_bulk_register(), bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE),
+        ],
+    )
+    page.overlay.append(bulk_register_dialog)
+
+    def close_bulk_register_document_dialog():
+        bulk_register_dialog.open = False
+        page.update()
+
+    def _validate_bulk_files():
+        if not bulk_import_files:
+            show_document_notice("No files selected")
+            return
+        tmp_names = [i.get("tmp_name") for i in bulk_import_files]
+        try:
+            response = requests.post(f"{BACKEND_URL}/documents/bulk-register/validate_tmp", json={"tmp_names": tmp_names}, headers=get_admin_headers(), verify=False, timeout=60)
+            if response.status_code != 200:
+                raise Exception(response.text)
+            payload = response.json()
+            for row in payload.get("files", []):
+                for item in bulk_import_files:
+                    if item.get("tmp_name") == row.get("tmp_name") or item.get("name") == row.get("filename"):
+                        if row.get("valid"):
+                            item["status"] = "Ready"
+                            item["progress"] = 1.0
+                        else:
+                            item["status"] = f"Invalid: {', '.join(row.get('errors', []))}"
+                            item["progress"] = 0.0
+            _render_bulk_selected_list()
+        except Exception as exc:
+            show_document_notice(f"Bulk validation failed: {exc}")
+
+    def _confirm_bulk_register():
+        if not bulk_import_files:
+            show_document_notice("No files to register")
+            return
+        tmp_names = [i.get("tmp_name") for i in bulk_import_files]
+        payload = {
+            "tmp_names": tmp_names,
+            "title": (bulk_common_title.value or None),
+            "description": (bulk_common_description.value or None),
+            "category": (bulk_common_category.value or None),
+            "document_type": (bulk_common_document_type.value or None),
+            "current_office": (bulk_common_current_office.value or None),
+            "assigned_to": (bulk_common_assigned_to.value or None),
+            "author": (bulk_common_author.value or None),
+            "priority": (bulk_common_priority.value or None),
+        }
+        try:
+            response = requests.post(f"{BACKEND_URL}/documents/bulk-register/confirm_tmp", json=payload, headers=get_admin_headers(), verify=False, timeout=180)
+            if response.status_code != 200:
+                raise Exception(response.text)
+            result = response.json()
+            show_document_notice(f"Bulk registration completed: {result.get('registered',0)} created, {result.get('failed',0)} failed.")
+            close_bulk_register_document_dialog()
+            load_documents_table()
+        except Exception as exc:
+            show_document_notice(f"Bulk registration failed: {exc}")
+
     def submit_register_document(_=None):
         title = (registration_title.value or "").strip()
         if not title:
@@ -887,6 +1089,7 @@ def main(page: ft.Page):
         ],
         rows=[],
         width=1600,
+        expand=False,
         column_spacing=10,
         horizontal_margin=0,
         data_row_min_height=52,
@@ -1766,7 +1969,21 @@ def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
-                    archived_documents_table,
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                archived_documents_table,
+                            ],
+                            width=1600,
+                            scroll=ft.ScrollMode.AUTO,
+                            spacing=0,
+                            alignment=ft.MainAxisAlignment.START,
+                            vertical_alignment=ft.CrossAxisAlignment.START,
+                        ),
+                        width="100%",
+                        height=520,
+                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    ),
                     archived_documents_empty_state,
                 ],
                 spacing=10,
@@ -1887,6 +2104,7 @@ def main(page: ft.Page):
                 "priority_filter": documents_filter_priority,
                 "assigned_filter": documents_assigned_filter,
                 "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_register_document_dialog()),
+                "bulk_register_button": ft.Button("Multiple Registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register_document_dialog()),
                 "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
                 "qr_monitor_button": ft.OutlinedButton("QR Monitor", icon=ft.Icons.QR_CODE_2, on_click=lambda _: open_qr_monitor()),
                 "qr_labels_button": None,

@@ -5,6 +5,8 @@ from sqlalchemy import text
 from datetime import datetime, timedelta, timezone
 import secrets
 import os
+import json
+import re
 from . import models
 from fastapi import Header
 from .auth_jwt import decode_access_token
@@ -41,10 +43,11 @@ def record_audit_log(
         details=details,
     )
     db.add(audit_log)
-    if not db.in_transaction():
+    try:
         db.commit()
-    else:
-        db.flush()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(audit_log)
     return audit_log
 
@@ -209,14 +212,20 @@ def normalize_permissions(value) -> set[str]:
         text = value.strip()
         if not text:
             return set()
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            parsed = [item.strip() for item in text.split(",") if item.strip()]
+        parsed = None
+        if text.startswith("[") or text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+        if parsed is None:
+            parsed = [item.strip() for item in re.split(r"[\s,]+", text) if item.strip()]
         if isinstance(parsed, str):
             parsed = [parsed]
-        if isinstance(parsed, list):
+        if isinstance(parsed, (list, tuple, set)):
             return {normalize_permission_name(item) for item in parsed}
+        if isinstance(parsed, dict):
+            return {normalize_permission_name(item) for item in parsed.keys()}
         return {normalize_permission_name(str(parsed))}
     if isinstance(value, (list, tuple, set)):
         return {normalize_permission_name(item) for item in value}

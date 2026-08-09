@@ -34,6 +34,7 @@ def build_documents_view(
     assigned_filter = documents_controls.get("assigned_filter")
 
     register_button = documents_controls.get("register_button")
+    bulk_register_button = documents_controls.get("bulk_register_button")
     refresh_button = documents_controls.get("refresh_button")
     qr_monitor_button = documents_controls.get("qr_monitor_button")
     qr_labels_button = documents_controls.get("qr_labels_button")
@@ -70,6 +71,7 @@ def build_documents_view(
 
     action_controls = [
         register_button,
+        bulk_register_button,
         refresh_button,
         qr_monitor_button,
         qr_labels_button,
@@ -212,18 +214,20 @@ def build_documents_view(
     fixed_table_width = 1600
     has_rows = bool(getattr(documents_table, "rows", None) and len(documents_table.rows) > 0)
 
-    table_scroll = ft.Row(
-        controls=[
-            ft.Container(
-                content=documents_table,
-                width=fixed_table_width,
-                alignment=ft.Alignment(-1, 0),
-            )
-        ],
-        width=fixed_table_width,
-        scroll=ft.ScrollMode.AUTO,
-        spacing=0,
-        alignment=ft.MainAxisAlignment.START,
+    table_scroll = ft.Container(
+        content=ft.Row(
+            controls=[
+                documents_table,
+            ],
+            width=fixed_table_width,
+            scroll=ft.ScrollMode.AUTO,
+            spacing=0,
+            alignment=ft.MainAxisAlignment.START,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        ),
+        width="100%",
+        height=560,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
     )
 
     empty_state = documents_empty_state
@@ -251,12 +255,12 @@ def build_documents_view(
                 empty_state,
             ],
             spacing=0,
-            width=fixed_table_width,
+            width="100%",
             alignment=ft.MainAxisAlignment.START,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
-        width=fixed_table_width,
-        height=500,
+        width="100%",
+        height=620,
         bgcolor=ft.Colors.WHITE,
         border=ft.Border(top=side, right=side, bottom=side, left=side),
         border_radius=10,
@@ -277,7 +281,7 @@ def build_documents_view(
                 table_container,
             ],
             spacing=10,
-            width=fixed_table_width,
+            width="100%",
             horizontal_alignment=ft.CrossAxisAlignment.START,
             alignment=ft.MainAxisAlignment.START,
         ),
