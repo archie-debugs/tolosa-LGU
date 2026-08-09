@@ -42,7 +42,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-force_https = os.getenv("FORCE_HTTPS", "1").lower() not in ("0", "false", "no")
+dev_http = os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes")
+force_https = not dev_http and os.getenv("FORCE_HTTPS", "1").lower() not in ("0", "false", "no")
 if force_https:
     app.add_middleware(HTTPSRedirectMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
