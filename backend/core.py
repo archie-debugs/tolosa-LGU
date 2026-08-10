@@ -120,7 +120,6 @@ def ensure_schema_columns() -> None:
             _add_column_if_missing(connection, "documents", "date_registered", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS date_registered VARCHAR"))
             _add_column_if_missing(connection, "documents", "attachment_name", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS attachment_name VARCHAR"))
             _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
-            _add_column_if_missing(connection, "documents", "routing_history", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS routing_history TEXT"))
 
         connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
         connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))
@@ -156,8 +155,6 @@ DEFAULT_ROLE_PERMISSIONS = {
         "export_documents",
         "download_documents",
         "print_documents",
-        "route_documents",
-        "view_routing_history",
         "update_document_status",
         "generate_qr_codes",
         "print_qr_codes",
@@ -168,6 +165,8 @@ DEFAULT_ROLE_PERMISSIONS = {
         "fulfill_document_requests",
         "view_audit_logs",
         "export_audit_logs",
+        "view_analytics",
+        "export_analytics",
     ],
     "SB Member": [
         "view_documents",
@@ -176,7 +175,6 @@ DEFAULT_ROLE_PERMISSIONS = {
         "view_document_details",
         "download_documents",
         "print_documents",
-        "view_routing_history",
         "request_documents",
         "view_own_document_requests",
         "cancel_own_pending_requests",

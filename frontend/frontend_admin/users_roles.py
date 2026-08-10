@@ -22,9 +22,6 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "Print QR Codes",
         "View QR Tracking",
     ],
-    "Document Routing": [
-        "Route Documents",
-    ],
     "Users & Roles": [
         "Create Users",
         "Edit Users",
@@ -44,6 +41,10 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "View Audit Logs",
         "Export Audit Logs",
     ],
+    "Analytics": [
+        "View Analytics",
+        "Export Analytics",
+    ],
     "Settings": [
         "Modify System Settings",
     ],
@@ -54,7 +55,6 @@ SB_MEMBER_PERMISSIONS = [
     "Search Documents",
     "Filter Documents",
     "View Document Details",
-    "View Document Routing History",
     "Download Documents",
     "Print Documents",
 ]

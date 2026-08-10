@@ -20,7 +20,6 @@ class DocumentCreate(BaseModel):
     date_registered: Optional[str] = None
     attachment_name: Optional[str] = None
     qr_code_value: Optional[str] = None
-    routing_history: Optional[list[dict]] = None
     created_by: Optional[str] = None
     archived: bool = False
 
@@ -51,7 +50,6 @@ class DocumentUpdate(BaseModel):
     date_registered: Optional[str] = None
     attachment_name: Optional[str] = None
     qr_code_value: Optional[str] = None
-    routing_history: Optional[list[dict]] = None
     created_by: Optional[str] = None
     archived: Optional[bool] = None
 
@@ -74,7 +72,6 @@ class DocumentResponse(BaseModel):
     date_registered: Optional[str] = None
     attachment_name: Optional[str] = None
     qr_code_value: Optional[str] = None
-    routing_history: Optional[list[dict]] = None
     created_by: Optional[str] = None
     created_by_id: Optional[int] = None
     document_type_id: Optional[int] = None

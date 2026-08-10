@@ -127,6 +127,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
 from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.documents import build_documents_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
+from frontend.frontend_admin.analytics import build_analytics_view
 from frontend.frontend_admin.users_roles import build_users_roles_table, build_users_roles_view
 from frontend.frontend_admin.admin_shell import render_shell
 
@@ -141,6 +142,7 @@ def main(page: ft.Page):
 
     current_user = None
     current_user_role = None
+    current_user_permissions = []
     runtime_token = None
 
     def get_admin_headers():
@@ -174,7 +176,7 @@ def main(page: ft.Page):
         page.update()
 
     def do_login():
-        nonlocal current_user, current_user_role, runtime_token
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token
         try:
             resp = requests.post(
                 f"{BACKEND_URL}/auth/login",
@@ -187,6 +189,7 @@ def main(page: ft.Page):
                 runtime_token = body.get("access_token")
                 current_user = body.get("username") or current_user
                 current_user_role = body.get("role") or current_user_role
+                current_user_permissions = body.get("permissions") or []
                 page.snack_bar = ft.SnackBar(ft.Text("Login successful"), open=True)
             else:
                 page.snack_bar = ft.SnackBar(ft.Text(f"Login failed: {resp.text}"), open=True)
@@ -249,7 +252,6 @@ def main(page: ft.Page):
 
     AUDIT_LOGS_SAMPLE = [
         {"created_at": "11:02 AM", "actor": "Admin", "action": "Reviewed document", "target_type": "Document", "details": "DOC-2026-0015 moved to review."},
-        {"created_at": "10:45 AM", "actor": "Secretary", "action": "Routed resolution", "target_type": "Document", "details": "DOC-2026-0016 forwarded to committee."},
         {"created_at": "10:20 AM", "actor": "Staff", "action": "Archived document", "target_type": "Document", "details": "DOC-2026-0017 archived."},
     ]
 
@@ -433,8 +435,6 @@ def main(page: ft.Page):
         normalized = (status or "").strip().lower()
         if normalized in {"pending", "under review"}:
             return ft.Colors.ORANGE_700, ft.Colors.ORANGE_50
-        if normalized in {"in routing", "routed"}:
-            return ft.Colors.BLUE_700, ft.Colors.BLUE_50
         if normalized in {"received"}:
             return ft.Colors.CYAN_700, ft.Colors.CYAN_50
         if normalized in {"approved", "completed"}:
@@ -455,7 +455,7 @@ def main(page: ft.Page):
     documents_filter_status = ft.Dropdown(
         label="Status",
         width=140,
-        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Pending"), ft.dropdown.Option("In Routing"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Pending"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
         value="All",
     )
     documents_filter_type = ft.Dropdown(
@@ -538,12 +538,11 @@ def main(page: ft.Page):
         label="Status",
         width=200,
         options=[
-            ft.dropdown.Option("In Routing"),
             ft.dropdown.Option("Pending"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
         ],
-        value="In Routing",
+        value="Pending",
     )
     scan_submit_button = ft.Button("Submit Scan", icon=ft.Icons.QR_CODE_2, on_click=lambda _: submit_qr_scan())
 
@@ -1004,6 +1003,17 @@ def main(page: ft.Page):
             details = latest_scan.get('details')
             if details:
                 summary.append(ft.Text(f"Details: {details}", size=12, color=ft.Colors.BLUE_GREY_700))
+        recent_generated_qrs = payload.get('recent_generated_qrs') or []
+        if recent_generated_qrs:
+            summary.append(ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100))
+            summary.append(ft.Text("Recent generated QR codes", size=13, weight=ft.FontWeight.BOLD))
+            for qr in recent_generated_qrs[:8]:
+                summary.append(
+                    ft.Text(
+                        f"{qr.get('tracking_number', 'N/A')} — {qr.get('qr_code_value', 'N/A')} — {qr.get('created_at', 'N/A')}",
+                        size=12,
+                    )
+                )
         documents = payload.get('documents') or []
         if documents:
             summary.append(ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100))
@@ -1036,7 +1046,7 @@ def main(page: ft.Page):
         scan_destination_field.value = scan_destination_field.value or ""
         scan_remarks_field.value = scan_remarks_field.value or ""
         scan_action_dropdown.value = "Scan"
-        scan_status_dropdown.value = "In Routing"
+        scan_status_dropdown.value = "Pending"
         page.update()
 
     def submit_qr_scan():
@@ -1051,7 +1061,7 @@ def main(page: ft.Page):
             "destination": (scan_destination_field.value or "").strip() or "",
             "remarks": (scan_remarks_field.value or "").strip() or scan_action_dropdown.value or "Scan",
             "action": scan_action_dropdown.value or "Scan",
-            "status": scan_status_dropdown.value or "In Routing",
+            "status": scan_status_dropdown.value or "Pending",
         }
         try:
             response = requests.post(f"{BACKEND_URL}/documents/scan", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
@@ -1178,7 +1188,6 @@ def main(page: ft.Page):
         options=[
             ft.dropdown.Option("All"),
             ft.dropdown.Option("Pending"),
-            ft.dropdown.Option("In Routing"),
             ft.dropdown.Option("Received"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
@@ -1376,42 +1385,6 @@ def main(page: ft.Page):
             render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=1)
 
 
-    def open_route_dialog(doc):
-        route_destination = ft.TextField(label="Destination Office", width=300)
-        route_user = ft.TextField(label="Assigned User", width=300)
-        route_remarks = ft.TextField(label="Remarks", multiline=True, min_lines=3, max_lines=5, width=300)
-        route_value = ft.Dropdown(label="Route", width=200, options=[ft.dropdown.Option("Routing"), ft.dropdown.Option("Forward"), ft.dropdown.Option("Review")], value="Routing")
-        route_dialog = ft.AlertDialog(
-            title=ft.Text("Route Document"),
-            content=ft.Column([route_destination, route_user, route_remarks, route_value], spacing=10),
-            actions=[ft.TextButton("Cancel", on_click=lambda _: close_route_dialog()), ft.Button("Route", on_click=lambda _: submit_route(doc, route_destination, route_user, route_remarks, route_value))],
-        )
-        def close_route_dialog():
-            route_dialog.open = False
-            page.update()
-        def submit_route(document, destination_field, user_field, remarks_field, route_field):
-            payload = {
-                "destination_office": (destination_field.value or "").strip(),
-                "assigned_user": (user_field.value or "").strip(),
-                "remarks": (remarks_field.value or "").strip(),
-                "route": (route_field.value or "Routing").strip(),
-                "status": "In Routing",
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "time": datetime.now().strftime("%H:%M"),
-            }
-            try:
-                response = requests.post(f"{BACKEND_URL}/documents/{document.get('id')}/route", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
-                if response.status_code != 200:
-                    raise Exception(response.text)
-                load_documents_table()
-                close_route_dialog()
-                show_document_notice("Document routed successfully.")
-            except Exception as exc:
-                show_document_notice(f"Routing failed: {exc}")
-        page.overlay.append(route_dialog)
-        route_dialog.open = True
-        page.update()
-
     def show_document_details(doc):
         try:
             response = requests.get(f"{BACKEND_URL}/documents/{doc.get('id')}", headers=get_admin_headers(), verify=False, timeout=10)
@@ -1560,31 +1533,6 @@ def main(page: ft.Page):
                     ],
                     spacing=16,
                 ),
-                # QR preview removed for routing-history-only view
-                ft.Text("Routing History", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
-                ft.Column(
-                    [
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(item.get("route", item.get("action", "Action")), size=12, weight=ft.FontWeight.BOLD),
-                                    ft.Text(f"{item.get('date', '-')} {item.get('time', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
-                                    ft.Text(f"From: {item.get('from', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
-                                    ft.Text(f"To: {item.get('to', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
-                                    ft.Text(f"User: {item.get('user', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
-                                    ft.Text(f"Remarks: {item.get('remarks', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
-                                    ft.Text(f"Status: {item.get('status', '-')}", size=12, color=ft.Colors.BLUE_GREY_600),
-                                ],
-                                spacing=3,
-                            ),
-                            padding=10,
-                            bgcolor=ft.Colors.BLUE_GREY_50,
-                            border_radius=14,
-                        )
-                        for item in sorted(doc.get("routing_history", []), key=lambda item: item.get("date", "") + item.get("time", ""), reverse=True)
-                    ],
-                    spacing=8,
-                ),
             ],
             spacing=12,
             scroll=ft.ScrollMode.AUTO,
@@ -1598,13 +1546,11 @@ def main(page: ft.Page):
     def build_document_summary_cards():
         total_documents = len(documents_data)
         pending_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "pending")
-        routing_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"in routing", "routed"})
         completed_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"approved", "completed"})
         archived_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "archived")
         summary_items = [
             {"title": "Total Documents", "value": str(total_documents), "detail": "Tracked records", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
             {"title": "Pending", "value": str(pending_count), "detail": "Awaiting attention", "icon": ft.Icons.HOURGLASS_EMPTY_OUTLINED, "accent": ft.Colors.ORANGE_700},
-            {"title": "In Routing", "value": str(routing_count), "detail": "Currently moving", "icon": ft.Icons.SYNC_ALT_OUTLINED, "accent": ft.Colors.BLUE_700},
             {"title": "Completed", "value": str(completed_count), "detail": "Finalized items", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.GREEN_700},
             {"title": "Archived", "value": str(archived_count), "detail": "Stored for reference", "icon": ft.Icons.ARCHIVE_OUTLINED, "accent": ft.Colors.BLUE_GREY_700},
         ]
@@ -1668,7 +1614,6 @@ def main(page: ft.Page):
             "attachment_name": doc.get("attachment_name") or "-",
             "remarks": doc.get("remarks") or "",
             "attachments": doc.get("attachments") or [],
-            "routing_history": doc.get("routing_history") or [],
             "archived": bool(doc.get("archived", False)),
         }
 
@@ -1722,8 +1667,6 @@ def main(page: ft.Page):
             )
             actions = [
                 ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
-                ft.PopupMenuItem(content=ft.Text("Route Document"), on_click=lambda _, d=doc: open_route_dialog(d)),
-                ft.PopupMenuItem(content=ft.Text("View Routing History"), on_click=lambda _, d=doc: show_document_details(d)),
                 ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _: show_document_notice("Download action preview enabled.")),
                 ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
             ]
@@ -1797,8 +1740,6 @@ def main(page: ft.Page):
             if include_archive_action:
                 actions = [
                     ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
-                    ft.PopupMenuItem(content=ft.Text("Route Document"), on_click=lambda _, d=doc: open_route_dialog(d)),
-                    ft.PopupMenuItem(content=ft.Text("View Routing History"), on_click=lambda _, d=doc: show_document_details(d)),
                     ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
                 ]
             else:
@@ -2188,7 +2129,6 @@ def main(page: ft.Page):
                     "Edit Documents",
                     "Download Documents",
                     "Print Documents",
-                    "Route Documents",
                 ],
                 "last_login": "Yesterday, 04:35 PM",
                 "created": "2026-02-04",
@@ -2204,7 +2144,6 @@ def main(page: ft.Page):
                     "Search Documents",
                     "Filter Documents",
                     "View Document Details",
-                    "View Document Routing History",
                     "Download Documents",
                     "Print Documents",
                 ],
@@ -2284,7 +2223,6 @@ def main(page: ft.Page):
             ft.dropdown.Option("Search Documents"),
             ft.dropdown.Option("Filter Documents"),
             ft.dropdown.Option("View Document Details"),
-            ft.dropdown.Option("View Document Routing History"),
             ft.dropdown.Option("Download Documents"),
             ft.dropdown.Option("Print Documents"),
             ft.dropdown.Option("Register Documents"),
@@ -2295,7 +2233,6 @@ def main(page: ft.Page):
             ft.dropdown.Option("Generate QR Codes"),
             ft.dropdown.Option("Print QR Codes"),
             ft.dropdown.Option("View QR Tracking"),
-            ft.dropdown.Option("Route Documents"),
             ft.dropdown.Option("Create Users"),
             ft.dropdown.Option("Edit Users"),
             ft.dropdown.Option("Reset Passwords"),
@@ -2426,7 +2363,6 @@ def main(page: ft.Page):
                     "Dashboard": ["View Dashboard"],
                     "Documents": ["Register Documents", "Edit Documents", "Delete Documents", "Archive Documents", "Restore Documents", "View Documents", "Import Documents", "Export Documents", "Download Documents", "Print Documents"],
                     "QR Code": ["Generate QR Codes", "Print QR Codes", "View QR Tracking"],
-                    "Document Routing": ["Route Documents"],
                     "Users & Roles": ["Create Users", "Edit Users", "Reset Passwords", "Activate Users", "Deactivate Users", "Delete Users", "Assign Roles", "Manage Permissions"],
                     "Committees": ["Add Committee", "Edit Committee", "Delete Committee"],
                     "Audit Logs": ["View Audit Logs", "Export Audit Logs"],
@@ -2441,11 +2377,10 @@ def main(page: ft.Page):
                     ft.Checkbox(label="Search Documents", value=True, disabled=True),
                     ft.Checkbox(label="Filter Documents", value=True, disabled=True),
                     ft.Checkbox(label="View Document Details", value=True, disabled=True),
-                    ft.Checkbox(label="View Document Routing History", value=True, disabled=True),
                     ft.Checkbox(label="Download Documents", value=True, disabled=True),
                     ft.Checkbox(label="Print Documents", value=True, disabled=True),
                 ], spacing=6))
-                permission_area.controls.append(ft.Text("SB Members do not have QR Tracking, registration, routing, editing, or user-management access.", size=11, color=ft.Colors.BLUE_GREY_600))
+                permission_area.controls.append(ft.Text("SB Members do not have QR Tracking, registration, editing, or user-management access.", size=11, color=ft.Colors.BLUE_GREY_600))
             page.update()
 
         role_choice.on_change = lambda _: render_permission_section()
@@ -2526,7 +2461,7 @@ def main(page: ft.Page):
             access_summary.controls.append(ft.Text("All permissions are permanently enabled.", color=ft.Colors.BLUE_GREY_700))
         elif role == "SB Member":
             access_summary.controls.append(ft.Text("Read-Only Access", weight=ft.FontWeight.BOLD, size=14))
-            for item in ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "View Document Routing History", "Download Documents", "Print Documents"]:
+            for item in ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "Download Documents", "Print Documents"]:
                 access_summary.controls.append(ft.Checkbox(label=item, value=True, disabled=True, scale=0.9))
         else:
             access_summary.controls.append(ft.Text("Assigned Permissions", weight=ft.FontWeight.BOLD, size=14))
@@ -2594,7 +2529,7 @@ def main(page: ft.Page):
             permissions_area.controls.clear()
             if role_choice.value == "SB Member":
                 permissions_area.controls.append(ft.Text("SB Member permissions are fixed and read-only.", size=12, color=ft.Colors.BLUE_GREY_700))
-                for item in ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "View Document Routing History", "Download Documents", "Print Documents"]:
+                for item in ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "Download Documents", "Print Documents"]:
                     permissions_area.controls.append(ft.Checkbox(label=item, value=True, disabled=True, scale=0.9))
             else:
                 permissions_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=13))
@@ -2602,7 +2537,6 @@ def main(page: ft.Page):
                     "Dashboard": ["View Dashboard"],
                     "Documents": ["Register Documents", "Edit Documents", "Delete Documents", "Archive Documents", "Restore Documents", "View Documents", "Import Documents", "Export Documents", "Download Documents", "Print Documents"],
                     "QR Code": ["Generate QR Codes", "Print QR Codes", "View QR Tracking"],
-                    "Document Routing": ["Route Documents"],
                     "Users & Roles": ["Create Users", "Edit Users", "Reset Passwords", "Activate Users", "Deactivate Users", "Delete Users", "Assign Roles", "Manage Permissions"],
                     "Committees": ["Add Committee", "Edit Committee", "Delete Committee"],
                     "Audit Logs": ["View Audit Logs", "Export Audit Logs"],
@@ -2691,14 +2625,32 @@ def main(page: ft.Page):
         return users_roles_view()
 
     def logout_user():
-        nonlocal current_user, current_user_role, runtime_token
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token
         current_user = None
         current_user_role = None
+        current_user_permissions = []
         runtime_token = None
         show_login()
 
     def archived_documents_view():
         return build_archived_documents_view()
+
+    def open_documents_module():
+        target_index = next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Documents"), 0)
+        render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=target_index)
+
+    def open_archived_documents_module():
+        target_index = next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Archived Documents"), 1)
+        render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=target_index)
+
+    def analytics_view():
+        return build_analytics_view(
+            current_user,
+            get_admin_headers(),
+            backend_url=BACKEND_URL,
+            open_documents_view=open_documents_module,
+            open_archived_view=open_archived_documents_module,
+        )
 
     def users_page_view():
         return users_roles_view()
@@ -2733,13 +2685,13 @@ def main(page: ft.Page):
                     current_user_role = role
                     if role == "Super Administrator":
                         nav_items[:] = build_nav_items()
-                        render_shell(page, current_user, logout_user, nav_items, content_view=None)
+                        render_shell(page, current_user, logout_user, nav_items, content_view=None, initial_selected_index=0)
                     elif role == "Employee":
                         nav_items[:] = build_nav_items()
-                        render_shell(page, current_user, logout_user, nav_items, documents_view())
+                        render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=0)
                     elif role == "SB Member":
                         nav_items[:] = build_nav_items()
-                        render_shell(page, current_user, logout_user, nav_items, documents_view())
+                        render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=0)
                     else:
                         page.snack_bar = ft.SnackBar(ft.Text("Your account is not approved for access yet."), open=True)
                         page.update()
@@ -2778,11 +2730,17 @@ def main(page: ft.Page):
         page.update()
 
     def build_nav_items():
-        items = [
+        normalized_permissions = {str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])}
+        items = []
+
+        if "view_analytics" in normalized_permissions or current_user_role == "Super Administrator":
+            items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view()))
+
+        items.extend([
             (ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()),
             (ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()),
             (ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
-        ]
+        ])
         if current_user_role == "Super Administrator":
             items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view()))
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))

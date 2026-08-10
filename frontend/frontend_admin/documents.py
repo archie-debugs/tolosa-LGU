@@ -60,7 +60,7 @@ def build_documents_view(
 
     header = section_header(
         "Documents",
-        "Manage legislative documents, routing progress, and record history.",
+        "Manage legislative documents and record history.",
         ft.Icons.DESCRIPTION_OUTLINED,
         ft.Colors.BLUE_700,
     )

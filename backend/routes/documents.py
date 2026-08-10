@@ -610,7 +610,6 @@ def _serialize_document(doc: models.Document):
         "date_registered": doc.date_registered,
         "attachment_name": doc.attachment_name,
         "qr_code_value": doc.qr_code_value,
-        "routing_history": [],
         "created_by": doc.created_by,
         "created_by_id": getattr(doc, "created_by_id", None),
         "document_type_id": getattr(doc, "document_type_id", None),
@@ -621,11 +620,6 @@ def _serialize_document(doc: models.Document):
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
     }
-    if doc.routing_history:
-        try:
-            payload["routing_history"] = json.loads(doc.routing_history)
-        except Exception:
-            payload["routing_history"] = []
     # include normalized history rows
     try:
         hist_rows = db_session = None
@@ -700,17 +694,6 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
             )
         )
     return query.first()
-
-
-def _append_routing_history_event(doc: models.Document, event: dict):
-    history = []
-    if doc.routing_history:
-        try:
-            history = json.loads(doc.routing_history)
-        except Exception:
-            history = []
-    history.append(event)
-    doc.routing_history = json.dumps(history)
 
 
 def _render_qr_label_pdf(documents: list[models.Document]):
@@ -1009,62 +992,6 @@ def register_document(
     return _serialize_document(doc)
 
 
-@router.post("/{document_id:int}/route", response_model=schemas.DocumentResponse)
-def route_document(document_id: int, payload: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    require_permission(current_user, "route_documents")
-    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    destination_office = (payload.get("destination_office") or "").strip()
-    assigned_user = (payload.get("assigned_user") or "").strip()
-    remarks = (payload.get("remarks") or "").strip()
-    route_label = (payload.get("route") or "Routing").strip() or "Routing"
-    previous_status = doc.status or "Pending"
-    from_office = doc.current_office or doc.originating_office or "Unknown"
-    history = []
-    if doc.routing_history:
-        try:
-            history = json.loads(doc.routing_history)
-        except Exception:
-            history = []
-
-    history.append(
-        {
-            "date": payload.get("date") or "",
-            "time": payload.get("time") or "",
-            "from": from_office,
-            "to": destination_office or "Unassigned",
-            "user": assigned_user or doc.assigned_to or "Unassigned",
-            "remarks": remarks or "Routed",
-            "status": payload.get("status") or "In Routing",
-            "route": route_label,
-        }
-    )
-    doc.current_office = destination_office or doc.current_office
-    doc.assigned_to = assigned_user or doc.assigned_to
-    doc.status = payload.get("status") or "In Routing"
-    doc.routing_history = json.dumps(history)
-    # also persist a normalized history row for querying
-    try:
-        history_row = models.DocumentHistory(
-            document_id=doc.id,
-            action=route_label or "Routing",
-            actor=assigned_user or doc.assigned_to or None,
-            from_office=from_office,
-            to_office=destination_office or None,
-            notes=remarks or None,
-        )
-        db.add(history_row)
-    except Exception:
-        # best-effort: don't fail the route if history row cannot be created
-        pass
-
-    db.commit()
-    db.refresh(doc)
-    return _serialize_document(doc)
-
-
 @router.post("/{document_id:int}/qr", response_model=schemas.DocumentResponse)
 def regenerate_qr(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     require_permission(current_user, "generate_qr_codes")
@@ -1077,76 +1004,6 @@ def regenerate_qr(document_id: int, db: Session = Depends(get_db), current_user:
     return _serialize_document(doc)
 
 
-@router.post("/scan", response_model=schemas.DocumentResponse)
-def scan_document(payload: dict = Body(...), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    require_permission(current_user, "view_qr_tracking")
-    qr_value = (payload.get("qr_value") or "").strip()
-    if not qr_value:
-        raise HTTPException(status_code=400, detail="QR value is required")
-
-    doc = _find_document_by_qr_or_tracking(db, qr_value)
-    scanner = (payload.get("scanner") or "Unknown").strip() or "Unknown"
-    current_location = (payload.get("current_location") or "").strip()
-    destination = (payload.get("destination") or "").strip()
-    action = (payload.get("action") or "Scan").strip() or "Scan"
-    status_value = (payload.get("status") or "").strip() or doc.status or "In Routing"
-    remarks = (payload.get("remarks") or "").strip() or action
-
-    if not doc:
-        record_audit_log(
-            db,
-            actor=scanner,
-            action="QR_SCAN_UNRECOGNIZED",
-            target_type="Document",
-            target_id=qr_value,
-            details=json.dumps({"scanner": scanner, "current_location": current_location, "destination": destination, "action": action, "status": status_value, "remarks": remarks}),
-        )
-        raise HTTPException(status_code=404, detail="Document not found for provided QR/tracking value")
-
-    from_office = doc.current_office or doc.originating_office or "Unknown"
-    to_office = destination or current_location or from_office
-
-    event = {
-        "date": payload.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "time": payload.get("time") or datetime.now(timezone.utc).strftime("%H:%M:%S"),
-        "from": from_office,
-        "to": to_office,
-        "user": scanner,
-        "remarks": remarks,
-        "status": status_value,
-        "route": action,
-    }
-    _append_routing_history_event(doc, event)
-
-    doc.current_office = to_office
-    doc.assigned_to = scanner or doc.assigned_to
-    doc.status = status_value
-    db.add(doc)
-
-    try:
-        history_row = models.DocumentHistory(
-            document_id=doc.id,
-            action=action,
-            actor=scanner,
-            from_office=from_office,
-            to_office=to_office,
-            notes=remarks,
-        )
-        db.add(history_row)
-    except Exception:
-        pass
-
-    db.commit()
-    record_audit_log(
-        db,
-        actor=scanner,
-        action="QR_SCAN_SUCCESS",
-        target_type="Document",
-        target_id=doc.tracking_number,
-        details=json.dumps({"from": from_office, "to": to_office, "status": status_value, "action": action}),
-    )
-    db.refresh(doc)
-    return _serialize_document(doc)
 
 
 @router.get("/qr/labels")
@@ -1201,12 +1058,34 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
         for doc in documents
     ]
 
+    recent_generated_qrs = (
+        db.query(models.Document)
+        .filter(models.Document.archived.is_(False))
+        .filter(models.Document.qr_code_value.isnot(None))
+        .order_by(models.Document.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    recent_generated_summary = [
+        {
+            "id": doc.id,
+            "tracking_number": doc.tracking_number,
+            "qr_code_value": doc.qr_code_value,
+            "title": doc.title,
+            "document_type": doc.document_type,
+            "current_office": doc.current_office,
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+        }
+        for doc in recent_generated_qrs
+    ]
+
     return {
         "total_documents": total_documents,
         "successful_scans": successful_scans,
         "unrecognized_scans": unrecognized_scans,
         "latest_scan": latest_scan,
         "documents": documents_summary,
+        "recent_generated_qrs": recent_generated_summary,
     }
 
 

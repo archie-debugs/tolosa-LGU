@@ -66,7 +66,6 @@ class Document(Base):
     date_registered = Column(String, nullable=True, index=True)
     attachment_name = Column(String, nullable=True)
     qr_code_value = Column(String, nullable=True, index=True)
-    routing_history = Column(Text, nullable=True, default='[]')
 
     # new attachment relation will be defined via Attachment model
 

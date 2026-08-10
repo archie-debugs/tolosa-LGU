@@ -27,7 +27,7 @@ def upgrade():
     )
 
     # seed common values
-    op.bulk_insert(sa.table('status_lookup', sa.column('name', sa.String())), [{'name': 'Pending'}, {'name': 'In Routing'}, {'name': 'Completed'}, {'name': 'Archived'}])
+    op.bulk_insert(sa.table('status_lookup', sa.column('name', sa.String())), [{'name': 'Pending'}, {'name': 'Completed'}, {'name': 'Archived'}])
     op.bulk_insert(sa.table('priority_lookup', sa.column('name', sa.String())), [{'name': 'Low'}, {'name': 'Medium'}, {'name': 'High'}])
 
 
