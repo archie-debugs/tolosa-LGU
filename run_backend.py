@@ -26,7 +26,7 @@ if __name__ == "__main__":
 
     ssl_kwargs = {}
     if dev_http:
-        print("DEV_HTTP=1 set — forcing HTTP (no SSL) for development")
+        print("DEV_HTTP=1 set - forcing HTTP (no SSL) for development")
     elif cert_file.exists() and key_file.exists():
         ssl_kwargs = {"ssl_certfile": str(cert_file), "ssl_keyfile": str(key_file)}
         print("HTTPS enabled on backend with self-signed certificate")

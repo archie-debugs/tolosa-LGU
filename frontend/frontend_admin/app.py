@@ -2953,7 +2953,21 @@ def main(page: ft.Page):
                 login_error.value = f"Connection failed: {ex}"
                 page.update()
 
+        def go_back(_=None):
+            page.clean()
+            page.overlay.clear()
+            page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
+            page.vertical_alignment = ft.MainAxisAlignment.START
+            page.padding = 0
+            page.scroll = ft.ScrollMode.AUTO
+            page.title = "Sangguniang Bayan of Tolosa | Public Legislative Portal"
+            page.bgcolor = ft.Colors.BLUE_GREY_50
+            from frontend.frontend_public.app import render_public_home
+            render_public_home(page)
+            page.update()
+
         login_btn = ft.Button("Log In", width=300, on_click=attempt_login, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE)
+        back_btn = ft.TextButton("Go Back", on_click=go_back)
 
         page.add(
             surface_card(
@@ -2971,7 +2985,7 @@ def main(page: ft.Page):
                     password_field,
                     login_error,
                     ft.Container(height=6),
-                    login_btn,
+                    ft.Row([login_btn, back_btn], alignment=ft.MainAxisAlignment.CENTER, spacing=12),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
                 width=420,
                 padding=36,
