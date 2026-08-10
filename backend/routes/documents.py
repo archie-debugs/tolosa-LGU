@@ -27,6 +27,7 @@ from reportlab.lib.utils import ImageReader
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+QR_IMAGE_DIR = os.path.join(UPLOAD_DIR, "qr")
 
 # bulk registration settings
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -340,12 +341,17 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 status="Pending",
                 priority=(priority or "Medium") or "Medium",
                 date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                qr_code_value=tracking_number,
+                qr_code_value=None,
                 created_by=getattr(current_user, "username", None),
             )
             db.add(doc)
             db.commit()
             db.refresh(doc)
+            payload = _compute_qr_payload(doc)
+            doc.qr_code_value = payload
+            db.commit()
+            db.refresh(doc)
+            _ensure_qr_png(doc, payload)
 
             # move file from tmp to uploads
             safe_stored = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(safe_name)}"
@@ -676,12 +682,14 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     if not qr_text:
         return None
     normalized_tracking = _normalize_tracking_query(qr_text)
+    candidate_value = qr_text
     query = db.query(models.Document)
     if normalized_tracking is not None:
         canonical_tracking = f"DOC-{int(normalized_tracking)}"
         query = query.filter(
             or_(
-                models.Document.qr_code_value == qr_text,
+                models.Document.qr_code_value == candidate_value,
+                models.Document.qr_code_value == canonical_tracking,
                 models.Document.tracking_number == canonical_tracking,
                 models.Document.tracking_number == qr_text.upper(),
             )
@@ -689,43 +697,106 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     else:
         query = query.filter(
             or_(
-                models.Document.qr_code_value == qr_text,
+                models.Document.qr_code_value == candidate_value,
+                models.Document.qr_code_value == qr_text.upper(),
                 models.Document.tracking_number == qr_text.upper(),
             )
         )
     return query.first()
 
 
+def _compute_qr_payload(doc: models.Document) -> str:
+    backend_url = os.getenv("BACKEND_URL") or os.getenv("PUBLIC_BACKEND_URL") or os.getenv("API_BASE_URL") or "http://127.0.0.1:8001"
+    backend_url = backend_url.rstrip("/")
+    tracking = (doc.tracking_number or "").strip()
+    if not tracking:
+        tracking = f"DOC-{doc.id}"
+    return f"{backend_url}/documents/qr/{quote(str(tracking), safe='')}"
+
+
+def _qr_image_path_for_document(doc: models.Document) -> str:
+    os.makedirs(QR_IMAGE_DIR, exist_ok=True)
+    safe_tracking = (doc.tracking_number or f"DOC-{doc.id}").strip().replace(os.sep, "_").replace("/", "_")
+    return os.path.join(QR_IMAGE_DIR, f"{safe_tracking}.png")
+
+
+def _ensure_qr_png(doc: models.Document, payload: str | None = None) -> str:
+    payload = payload or _compute_qr_payload(doc)
+    image_path = _qr_image_path_for_document(doc)
+    os.makedirs(QR_IMAGE_DIR, exist_ok=True)
+    try:
+        if not os.path.exists(image_path):
+            qr_img = qrcode.make(payload)
+            qr_img.save(image_path, format="PNG")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Unable to generate the QR PNG image")
+    return image_path
+
+
 def _render_qr_label_pdf(documents: list[models.Document]):
     buffer = io.BytesIO()
     page_width, page_height = letter
-    margin = 20
-    columns = 2
-    rows = 5
-    label_width = (page_width - margin * 2) / columns
-    label_height = (page_height - margin * 2) / rows
+
+    # The chosen QR label density is a compact, scan-friendly 4 x 6 page layout.
+    # It prevents the QR from consuming too much page area while still leaving
+    # enough room for the metadata below it.
+    margin = 24
+    columns = 4
+    rows = 6
+
+    label_width = (page_width - (margin * 2)) / columns
+    label_height = (page_height - (margin * 2)) / rows
+
+    # Keep the QR code in a forgiving size range for standard printer output.
+    qr_side = min(52, label_width - 24, (label_height * 0.48))
+    if qr_side < 40:
+        qr_side = 40
+
     pdf = canvas.Canvas(buffer, pagesize=letter)
 
     for index, doc in enumerate(documents):
         if index > 0 and index % (columns * rows) == 0:
             pdf.showPage()
-        col = index % columns
-        row = (index // columns) % rows
-        x = margin + col * label_width
-        y = page_height - margin - row * label_height
+
+        local_index = index % (columns * rows)
+        col = local_index % columns
+        row_from_top = local_index // columns
+
+        label_left = margin + col * label_width
+        label_bottom = page_height - margin - (row_from_top + 1) * label_height
+
+        qr_x = label_left + (label_width - qr_side) / 2
+        qr_y = label_bottom + label_height - 24 - qr_side
+
+        # Draw QR in the upper part of the label cell so the metadata is below it.
         value = doc.qr_code_value or doc.tracking_number or f"DOC-{doc.id}"
         qr_img = qrcode.make(str(value))
         qr_buffer = io.BytesIO()
         qr_img.save(qr_buffer, format="PNG")
         qr_buffer.seek(0)
         image = ImageReader(qr_buffer)
-        img_size = min(label_width - 20, label_height - 40)
-        pdf.drawImage(image, x + 10, y - img_size - 10, width=img_size, height=img_size, mask='auto')
-        pdf.setFont("Helvetica-Bold", 10)
-        pdf.drawString(x + 10, y - img_size - 18, f"{doc.tracking_number}")
-        pdf.setFont("Helvetica", 9)
-        pdf.drawString(x + 10, y - img_size - 32, f"{doc.title[:40]}")
-        pdf.drawString(x + 10, y - img_size - 44, f"{doc.current_office or 'No location'}")
+
+        pdf.drawImage(
+            image,
+            qr_x,
+            qr_y,
+            width=qr_side,
+            height=qr_side,
+            mask="auto",
+        )
+
+        text_y = label_bottom + 12
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.drawString(label_left + 8, text_y, f"{doc.tracking_number or 'No tracking'}")
+
+        text_y += 13
+        pdf.setFont("Helvetica", 7)
+        title = (doc.title or "Untitled")[:38]
+        pdf.drawString(label_left + 8, text_y, title)
+
+        text_y += 12
+        office = doc.current_office or "No location"
+        pdf.drawString(label_left + 8, text_y, office)
 
     pdf.save()
     buffer.seek(0)
@@ -948,12 +1019,17 @@ def register_document(
         status="Pending",
         priority=priority,
         date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        qr_code_value=tracking_number,
+        qr_code_value=None,
         created_by=getattr(current_user, "username", None),
     )
     db.add(doc)
     db.commit()
     db.refresh(doc)
+    payload = _compute_qr_payload(doc)
+    doc.qr_code_value = payload
+    db.commit()
+    db.refresh(doc)
+    _ensure_qr_png(doc, payload)
 
     # handle optional file upload and persist attachment metadata
     if file is not None:
@@ -992,37 +1068,52 @@ def register_document(
     return _serialize_document(doc)
 
 
-@router.post("/{document_id:int}/qr", response_model=schemas.DocumentResponse)
+@router.post("/{document_id:int}/qr")
 def regenerate_qr(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     require_permission(current_user, "generate_qr_codes")
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    doc.qr_code_value = doc.tracking_number or f"DOC-{doc.id}"
+
+    payload = _compute_qr_payload(doc)
+    _ensure_qr_png(doc, payload)
+    doc.qr_code_value = payload
     db.commit()
     db.refresh(doc)
-    return _serialize_document(doc)
 
-
-
-
-@router.get("/qr/labels")
-def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    require_permission(current_user, "print_qr_codes")
-    query = db.query(models.Document).filter(models.Document.archived.is_(False))
-    if ids:
-        id_list = [int(item.strip()) for item in str(ids).split(",") if item.strip().isdigit()]
-        if id_list:
-            query = query.filter(models.Document.id.in_(id_list))
-    documents = query.order_by(models.Document.id.asc()).all()
-    if not documents:
-        raise HTTPException(status_code=404, detail="No documents found for QR label generation")
-    pdf_buffer = _render_qr_label_pdf(documents)
-    return StreamingResponse(
-        pdf_buffer,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=qr_labels.pdf"},
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="QR_GENERATED",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Generated QR payload for {doc.tracking_number}",
     )
+
+    return {
+        "document_id": doc.id,
+        "tracking_number": doc.tracking_number,
+        "qr_payload": payload,
+        "qr_image_url": f"/documents/{doc.id}/qr-image",
+        "status": "generated",
+    }
+
+
+
+
+@router.get("/{document_id:int}/qr-image")
+def get_document_qr_image(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_qr_tracking")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    payload = doc.qr_code_value or _compute_qr_payload(doc)
+    image_path = _ensure_qr_png(doc, payload)
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="QR image not found")
+
+    return FileResponse(image_path, media_type="image/png")
 
 
 @router.get("/qr/monitor")
@@ -1087,6 +1178,63 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
         "documents": documents_summary,
         "recent_generated_qrs": recent_generated_summary,
     }
+
+
+@router.get("/qr/{qr_value:path}")
+def lookup_qr_by_value(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_qr_tracking")
+
+    if qr_value.strip().lower() == "monitor":
+        return monitor_qr(db=db, current_user=current_user)
+
+    doc = _find_document_by_qr_or_tracking(db, qr_value)
+    if not doc:
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="QR_SCAN_UNRECOGNIZED",
+            target_type="qr_lookup",
+            target_id=str(qr_value),
+            details="QR identifier was not matched to a document",
+        )
+        raise HTTPException(status_code=404, detail="QR code not recognized")
+
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="QR_SCAN_SUCCESS",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"QR lookup resolved to {doc.tracking_number}",
+    )
+
+    return {
+        "document_id": doc.id,
+        "tracking_number": doc.tracking_number,
+        "title": doc.title,
+        "document_type": doc.document_type,
+        "current_office": doc.current_office,
+        "qr_payload": doc.qr_code_value,
+    }
+
+
+@router.get("/qr/labels")
+def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "print_qr_codes")
+    query = db.query(models.Document).filter(models.Document.archived.is_(False))
+    if ids:
+        id_list = [int(item.strip()) for item in str(ids).split(",") if item.strip().isdigit()]
+        if id_list:
+            query = query.filter(models.Document.id.in_(id_list))
+    documents = query.order_by(models.Document.id.asc()).all()
+    if not documents:
+        raise HTTPException(status_code=404, detail="No documents found for QR label generation")
+    pdf_buffer = _render_qr_label_pdf(documents)
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=qr_labels.pdf"},
+    )
 
 
 @router.delete("/{document_id:int}")

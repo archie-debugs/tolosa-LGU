@@ -575,6 +575,18 @@ def main(page: ft.Page):
     )
     page.overlay.append(qr_monitor_dialog)
 
+    qr_label_dialog_content = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
+    qr_label_download_dialog = ft.AlertDialog(
+        title=ft.Text("Download QR Labels"),
+        content=ft.Container(content=qr_label_dialog_content, padding=14, width=560, height=420),
+        actions=[
+            ft.TextButton("Close", on_click=lambda _: close_qr_label_download_dialog()),
+            ft.TextButton("Deselect All", on_click=lambda _: clear_selected_qr_documents()),
+            ft.Button("Download PDF", icon=ft.Icons.DOWNLOAD, on_click=lambda _: download_selected_qr_labels()),
+        ],
+    )
+    page.overlay.append(qr_label_download_dialog)
+
     registration_title = ft.TextField(label="Title", width=420)
     registration_description = ft.TextField(label="Description", multiline=True, min_lines=3, max_lines=5, width=420)
     registration_category = ft.Dropdown(
@@ -705,6 +717,66 @@ def main(page: ft.Page):
 
     def close_qr_monitor_dialog():
         qr_monitor_dialog.open = False
+        page.update()
+
+    def clear_selected_qr_documents():
+        selected_qr_document_ids.clear()
+        refresh_qr_selection_badge()
+        apply_document_search_to_current_view()
+        close_qr_label_download_dialog()
+        page.update()
+
+    def close_qr_label_download_dialog():
+        qr_label_download_dialog.open = False
+        page.update()
+
+    def open_qr_label_download_dialog(_=None):
+        selected_ids = sorted(selected_qr_document_ids)
+        qr_label_dialog_content.controls = []
+        if not selected_ids:
+            qr_label_dialog_content.controls = [
+                ft.Text("No documents are currently selected for QR label printing.", size=13, color=ft.Colors.BLUE_GREY_700),
+                ft.Text("Select rows in the Documents table first, then open this dialog again.", size=12, color=ft.Colors.BLUE_GREY_600),
+            ]
+        else:
+            selected_doc_lines = []
+            for doc_id in selected_ids:
+                match = next((doc for doc in documents_data if doc.get("id") == doc_id), None)
+                if match:
+                    selected_doc_lines.append(
+                        ft.Text(
+                            f"{match.get('tracking_number', '-')} — {match.get('title', '-')} — {match.get('current_office', '-')}",
+                            size=12,
+                            color=ft.Colors.BLUE_GREY_800,
+                            max_lines=2,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        )
+                    )
+
+            qr_label_dialog_content.controls = [
+                ft.Text("Selected Documents", size=15, weight=ft.FontWeight.BOLD),
+                ft.Text(f"{len(selected_ids)} document(s) ready for QR label export", size=12, color=ft.Colors.BLUE_GREY_700),
+                ft.Container(
+                    content=ft.Column(
+                        controls=selected_doc_lines,
+                        spacing=8,
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    width="100%",
+                    height=260,
+                    border=ft.Border(
+                        top=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
+                        right=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
+                        bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
+                        left=ft.BorderSide(1, ft.Colors.BLUE_GREY_200),
+                    ),
+                    border_radius=8,
+                    padding=10,
+                    bgcolor=ft.Colors.WHITE,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                ),
+            ]
+        qr_label_download_dialog.open = True
         page.update()
 
     def close_register_document_dialog():
@@ -1082,8 +1154,18 @@ def main(page: ft.Page):
             padding=ft.Padding(0, 0, 0, 0),
         )
 
+    selected_qr_document_ids = set()
+
+    def refresh_qr_selection_badge():
+        if selected_qr_document_ids:
+            documents_notice.value = f"{len(selected_qr_document_ids)} QR labels selected"
+        else:
+            documents_notice.value = ""
+        page.update()
+
     documents_table = ft.DataTable(
         columns=[
+            ft.DataColumn(label=make_document_header("Select", 78)),
             ft.DataColumn(label=make_document_header("Actions", 90)),
             ft.DataColumn(label=make_document_header("Tracking No.", 120)),
             ft.DataColumn(label=make_document_header("Title", 280)),
@@ -1385,6 +1467,32 @@ def main(page: ft.Page):
             render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=1)
 
 
+    def download_selected_qr_labels():
+        selected_ids = sorted(str(doc_id) for doc_id in selected_qr_document_ids if doc_id is not None)
+        if not selected_ids:
+            show_document_notice("Select one or more documents to download QR labels.")
+            return
+        try:
+            response = requests.get(
+                f"{BACKEND_URL}/documents/qr/labels",
+                params={"ids": ",".join(selected_ids)},
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=30,
+                stream=True,
+            )
+            if response.status_code != 200:
+                raise Exception(response.text)
+            download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+            os.makedirs(download_dir, exist_ok=True)
+            file_path = os.path.join(download_dir, "qr_labels.pdf")
+            with open(file_path, "wb") as handle:
+                handle.write(response.content)
+            os.startfile(file_path)
+            show_document_notice(f"Downloaded QR labels for {len(selected_ids)} selected document(s).")
+        except Exception as exc:
+            show_document_notice(f"QR label download failed: {exc}")
+
     def show_document_details(doc):
         try:
             response = requests.get(f"{BACKEND_URL}/documents/{doc.get('id')}", headers=get_admin_headers(), verify=False, timeout=10)
@@ -1397,34 +1505,26 @@ def main(page: ft.Page):
             return
 
         qr_image = ft.Image(width=220, height=220, fit=ft.ImageFit.CONTAIN)
-        qr_generation_notice = ft.Text("", size=12, color=ft.Colors.GREEN_700)
 
-        def update_qr_image(value):
-            if not value:
+        def update_qr_image(document_id: int | None):
+            if not document_id:
                 qr_image.src_base64 = ""
                 return
-            qr_img = qrcode.make(str(value))
-            qr_buffer = io.BytesIO()
-            qr_img.save(qr_buffer, format="PNG")
-            qr_buffer.seek(0)
-            qr_image.src_base64 = base64.b64encode(qr_buffer.read()).decode("ascii")
-
-        def generate_document_qr(document):
             try:
-                response = requests.post(f"{BACKEND_URL}/documents/{document.get('id')}/qr", headers=get_admin_headers(), verify=False, timeout=10)
+                response = requests.get(
+                    f"{BACKEND_URL}/documents/{document_id}/qr-image",
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=10,
+                )
                 if response.status_code != 200:
                     raise Exception(response.text)
-                updated = normalize_document(response.json())
-                document.update(updated)
-                qr_value = document.get("qr_code_value") or document.get("tracking_number") or f"DOC-{document.get('id')}"
-                update_qr_image(qr_value)
-                qr_generation_notice.value = "QR generated successfully."
-                page.update()
+                qr_image.src_base64 = base64.b64encode(response.content).decode("ascii")
             except Exception as exc:
-                qr_generation_notice.value = f"QR generation failed: {exc}"
-                page.update()
+                show_document_notice(f"Unable to load QR image: {exc}")
+                qr_image.src_base64 = ""
 
-        update_qr_image(doc.get("qr_code_value") or doc.get("tracking_number") or f"DOC-{doc.get('id')}")
+        update_qr_image(doc.get("id"))
         status_color, status_bg = get_document_status_style(doc.get("status", "Pending"))
         details_content = ft.Column(
             [
@@ -1481,20 +1581,7 @@ def main(page: ft.Page):
                     [
                         ft.Column(
                             [
-                                ft.Text("Generate QR", size=12, color=ft.Colors.BLUE_GREY_600),
-                                ft.ElevatedButton(
-                                    "Generate QR",
-                                    icon=ft.Icons.QR_CODE_2,
-                                    on_click=lambda _: generate_document_qr(doc),
-                                ),
-                                qr_generation_notice,
-                            ],
-                            spacing=6,
-                            width=220,
-                        ),
-                        ft.Column(
-                            [
-                                ft.Text("Generated QR", size=12, color=ft.Colors.BLUE_GREY_600),
+                                ft.Text("Scanable QR", size=12, color=ft.Colors.BLUE_GREY_600),
                                 ft.Container(
                                     content=qr_image,
                                     width=220,
@@ -1643,6 +1730,7 @@ def main(page: ft.Page):
             status = doc.get("status", "Pending")
             status_color, status_bg = get_document_status_style(status)
             document_title = str(doc.get("title", "-") or "-")
+            doc_id = doc.get("id")
             title_cell = ft.DataCell(
                 ft.Container(
                     content=ft.Row(
@@ -1673,6 +1761,15 @@ def main(page: ft.Page):
             rows.append(
                 ft.DataRow(
                     cells=[
+                        ft.DataCell(
+                            ft.Checkbox(
+                                value=doc_id in selected_qr_document_ids,
+                                on_change=lambda e, doc_id_value=doc_id: (
+                                    selected_qr_document_ids.add(doc_id_value) if e.control.value else selected_qr_document_ids.discard(doc_id_value),
+                                    refresh_qr_selection_badge(),
+                                ),
+                            )
+                        ),
                         ft.DataCell(
                             ft.Container(
                                 content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
@@ -2048,7 +2145,7 @@ def main(page: ft.Page):
                 "bulk_register_button": ft.Button("Multiple Registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register_document_dialog()),
                 "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
                 "qr_monitor_button": ft.OutlinedButton("QR Monitor", icon=ft.Icons.QR_CODE_2, on_click=lambda _: open_qr_monitor()),
-                "qr_labels_button": None,
+                "qr_labels_button": ft.OutlinedButton("Download QR Labels", icon=ft.Icons.PRINT, on_click=lambda _: open_qr_label_download_dialog()),
                 "export_button": None,
                 "print_button": None,
                 "import_button": None,
@@ -2562,7 +2659,7 @@ def main(page: ft.Page):
                     permissions_area,
                 ], width=560, spacing=10, scroll=ft.ScrollMode.AUTO),
                 width=580,
-                max_height=640,
+                height=640,
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
