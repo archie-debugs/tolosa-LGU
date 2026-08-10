@@ -1,24 +1,21 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
 from dotenv import load_dotenv
 
-# Load .env early so core.py picks up environment overrides
 load_dotenv()
 
-from .database import engine, get_database_info
-from . import models
-from .core import ensure_schema_columns, ensure_user_role_column
-from .routes.auth import router as auth_router
-from .routes.status import router as status_router
-from .routes.audit import router as audit_router
-from .routes.registration import router as registration_router
-from .routes.documents import router as documents_router
-from .routes.analytics import router as analytics_router
+from backend.database import engine
+from backend import models
+from backend.core import ensure_schema_columns, ensure_user_role_column
+from backend.routes.status import router as status_router
+from backend.routes.documents import router as documents_router
+from backend.routes.analytics import router as analytics_router
+from backend.routes.audit import router as audit_router
+from backend.routes.auth import login_user
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -33,7 +30,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app = FastAPI(title="LGU Tolosa SB Legislative Tracking Backend")
+app = FastAPI(title="LGU Tolosa - Employee Backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,21 +54,16 @@ try:
 except Exception:
     pass
 
+auth_router = APIRouter()
+auth_router.post("/auth/login")(login_user)
+
 app.include_router(status_router)
 app.include_router(auth_router)
-app.include_router(registration_router)
-app.include_router(audit_router)
 app.include_router(documents_router)
 app.include_router(analytics_router)
-
-
-@app.on_event("startup")
-def log_database_info():
-    info = get_database_info()
-    print(f"Database dialect: {info['dialect']}, URL: {info['url']}")
+app.include_router(audit_router)
 
 
 @app.get("/health")
 def health():
-    info = get_database_info()
-    return {"status": "ok", "database": {"dialect": info['dialect'], "url": info['url']}}
+    return {"status": "ok"}

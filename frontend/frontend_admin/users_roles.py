@@ -304,21 +304,13 @@ def build_users_roles_view(
 
     if user_table_holder is None:
         table_container = ft.Container(
-            content=ft.Row(
-                [
-                    ft.Container(
-                        content=table,
-                        width=1600,
-                        padding=ft.Padding(left=6, top=8, right=6, bottom=8),
-                        bgcolor=ft.Colors.WHITE,
-                        border_radius=12,
-                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                    )
-                ],
-                width="100%",
+            content=ft.Container(
+                content=table,
+                width=1600,
+                height=360,
+                padding=ft.Padding(left=6, top=8, right=6, bottom=8),
                 scroll=ft.ScrollMode.AUTO,
-                spacing=0,
-                vertical_alignment=ft.CrossAxisAlignment.START,
+                bgcolor=ft.Colors.WHITE,
             ),
             width="100%",
             height=420,

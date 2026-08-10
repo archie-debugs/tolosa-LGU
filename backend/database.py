@@ -24,3 +24,10 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def get_database_info():
+    return {
+        "dialect": engine.url.get_dialect().name,
+        "url": str(engine.url),
+    }

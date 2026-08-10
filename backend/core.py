@@ -1,3 +1,4 @@
+import ast
 from fastapi import Depends, Header, HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -100,6 +101,9 @@ def ensure_schema_columns() -> None:
             _add_column_if_missing(connection, "users", "is_active", "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
             _add_column_if_missing(connection, "users", "created_at", "ALTER TABLE users ADD COLUMN created_at DATETIME")
             _add_column_if_missing(connection, "users", "updated_at", "ALTER TABLE users ADD COLUMN updated_at DATETIME")
+            _add_column_if_missing(connection, "users", "permissions", "ALTER TABLE users ADD COLUMN permissions TEXT")
+            _add_column_if_missing(connection, "users", "full_name", "ALTER TABLE users ADD COLUMN full_name VARCHAR")
+            _add_column_if_missing(connection, "users", "email", "ALTER TABLE users ADD COLUMN email VARCHAR")
             _add_column_if_missing(connection, "registration_requests", "assigned_role", "ALTER TABLE registration_requests ADD COLUMN assigned_role VARCHAR")
             _add_column_if_missing(connection, "registration_requests", "approved_by", "ALTER TABLE registration_requests ADD COLUMN approved_by VARCHAR")
             _add_column_if_missing(connection, "registration_requests", "approved_at", "ALTER TABLE registration_requests ADD COLUMN approved_at DATETIME")
@@ -110,6 +114,9 @@ def ensure_schema_columns() -> None:
             _add_column_if_missing(connection, "users", "is_active", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"))
             _add_column_if_missing(connection, "users", "created_at", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP"))
             _add_column_if_missing(connection, "users", "updated_at", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP"))
+            _add_column_if_missing(connection, "users", "permissions", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT"))
+            _add_column_if_missing(connection, "users", "full_name", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR"))
+            _add_column_if_missing(connection, "users", "email", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR"))
             _add_column_if_missing(connection, "registration_requests", "assigned_role", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS assigned_role VARCHAR"))
             _add_column_if_missing(connection, "registration_requests", "approved_by", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS approved_by VARCHAR"))
             _add_column_if_missing(connection, "registration_requests", "approved_at", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"))
@@ -126,6 +133,8 @@ def ensure_schema_columns() -> None:
         connection.execute(text("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')"))
         connection.execute(text("UPDATE users SET status = 'Active' WHERE status IS NULL OR status = ''"))
         connection.execute(text("UPDATE users SET is_active = TRUE WHERE is_active IS NULL"))
+        connection.execute(text("UPDATE users SET permissions = '[]' WHERE permissions IS NULL"))
+        connection.execute(text("UPDATE users SET created_at = current_timestamp WHERE created_at IS NULL"))
         _add_column_if_missing(connection, "users", "permissions", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT"))
 
 
@@ -215,7 +224,10 @@ def normalize_permissions(value) -> set[str]:
             try:
                 parsed = json.loads(text)
             except Exception:
-                parsed = None
+                try:
+                    parsed = ast.literal_eval(text)
+                except Exception:
+                    parsed = None
         if parsed is None:
             parsed = [item.strip() for item in re.split(r"[\s,]+", text) if item.strip()]
         if isinstance(parsed, str):

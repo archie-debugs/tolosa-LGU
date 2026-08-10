@@ -89,6 +89,8 @@ class User(Base):
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String, nullable=False, default="Super Administrator")
+    full_name = Column(String, nullable=True)
+    email = Column(String, nullable=True, index=True)
     permissions = Column(Text, nullable=True, default="[]")
     status = Column(String, nullable=False, default="Active", index=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)

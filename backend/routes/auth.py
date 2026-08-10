@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
@@ -17,16 +17,29 @@ router = APIRouter()
 
 
 @router.post("/auth/register")
-def register_user(
-    username: str,
-    password: str,
-    role: str = "Super Administrator",
-    permissions: str | None = None,
+async def register_user(
+    request: Request,
     db: Session = Depends(get_db),
     current_admin: models.User = Depends(get_current_admin_user),
 ):
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="Username and password are required")
+    # Accept JSON body (preferred) or fall back to query/form parameters for backward compatibility.
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        # No JSON body provided; fall back to query params / form data
+        data = dict(request.query_params)
+
+    username = data.get("username")
+    password = data.get("password")
+    full_name = data.get("full_name")
+    email = data.get("email")
+    role = data.get("role", "Super Administrator")
+    permissions = data.get("permissions")
+
+    if not username or not password or not full_name or not email:
+        raise HTTPException(status_code=400, detail="Full name, email, username, and password are required")
 
     normalized_role = normalize_user_role(role)
     if normalized_role not in {"Super Administrator", "Employee", "SB Member"}:
@@ -34,7 +47,7 @@ def register_user(
 
     existing_user = db.query(models.User).filter(models.User.username == username).first()
     if existing_user:
-        raise HTTPException(status_code=409, detail="Username already exists")
+        raise HTTPException(status_code=409, detail=f"Username '{username}' already exists")
 
     permission_list = []
     if permissions:
@@ -46,6 +59,8 @@ def register_user(
         new_user = models.User(
             username=username,
             hashed_password=get_password_hash(password),
+            full_name=full_name,
+            email=email,
             role=normalized_role,
             permissions=str(permission_list),
             status="Active",
@@ -67,7 +82,37 @@ def register_user(
         details=f"Super Administrator {current_admin.username} created account {new_user.username} for role {normalized_role}",
     )
 
-    return {"message": "User registered successfully", "username": new_user.username, "role": new_user.role, "permissions": permission_list}
+    return {
+        "message": "User registered successfully",
+        "id": new_user.id,
+        "username": new_user.username,
+        "full_name": new_user.full_name,
+        "email": new_user.email,
+        "role": new_user.role,
+        "permissions": permission_list,
+    }
+
+
+@router.get("/auth/users")
+def list_users(
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    users = db.query(models.User).order_by(models.User.id.asc()).all()
+    return [
+        {
+            "id": user.id,
+            "full_name": getattr(user, "full_name", None) or user.username,
+            "username": user.username,
+            "email": getattr(user, "email", None) or None,
+            "role": normalize_user_role(user.role),
+            "status": getattr(user, "status", "Active"),
+            "permissions": sorted(list(normalize_permissions(getattr(user, "permissions", None)))),
+            "last_login": None,
+            "created": user.created_at.isoformat() if user.created_at else None,
+        }
+        for user in users
+    ]
 
 
 @router.post("/auth/login")

@@ -132,7 +132,7 @@ from frontend.frontend_admin.users_roles import build_users_roles_table, build_u
 from frontend.frontend_admin.admin_shell import render_shell
 
 def main(page: ft.Page):
-    page.title = "LGU Tolosa - Sangguniang Bayan Admin System"
+    page.title = "LGU Tolosa — Legislative Document Tracking Management System"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.bgcolor = ft.Colors.WHITE
     page.scroll = ft.ScrollMode.AUTO
@@ -162,7 +162,7 @@ def main(page: ft.Page):
     login_password = ft.TextField(label="Password", width=280, password=True, can_reveal_password=True)
 
     login_dialog = ft.AlertDialog(
-        title=ft.Text("Admin Login"),
+        title=ft.Text("LGU Tolosa Login"),
         content=ft.Column([login_username, login_password], spacing=8),
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_login_dialog()),
@@ -1899,6 +1899,16 @@ def main(page: ft.Page):
 
     def load_archived_documents_table():
         try:
+            # Permission check to avoid unnecessary backend calls when user cannot view documents
+            normalized_permissions = {str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])}
+            if not ("view_documents" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator"):
+                archived_documents_data[:] = []
+                archived_documents_table.rows = []
+                archived_documents_empty_state.visible = True
+                archived_documents_notice.value = "Unable to load archived documents: Permission denied"
+                page.update()
+                return
+
             params = {"archived": "true"}
             if archived_documents_search_field.value:
                 params["search"] = archived_documents_search_field.value
@@ -2080,6 +2090,16 @@ def main(page: ft.Page):
 
     def load_documents_table():
         try:
+            # Check permissions locally before requesting documents to avoid backend permission errors.
+            normalized_permissions = {str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])}
+            if not ("view_documents" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator"):
+                documents_data[:] = []
+                documents_table.rows = []
+                documents_empty_state.visible = True
+                documents_notice.value = "Unable to load documents: Permission denied"
+                page.update()
+                return
+
             params = {}
             if documents_search_field.value:
                 params["search"] = documents_search_field.value
@@ -2202,70 +2222,31 @@ def main(page: ft.Page):
             expand=True,
         )
 
-    def build_user_list_data():
-        base = [
-            {
-                "full_name": "Archie Delos Reyes",
-                "username": "devadmin",
-                "email": "devadmin@tolosa.gov.ph",
-                "role": "Super Administrator",
-                "status": "Active",
-                "permissions": ["*"],
-                "last_login": "Today, 09:14 AM",
-                "created": "2026-01-10",
-            },
-            {
-                "full_name": "Maria Santos",
-                "username": "employee1",
-                "email": "maria.santos@tolosa.gov.ph",
-                "role": "Employee",
-                "status": "Active",
-                "permissions": [
-                    "View Documents",
-                    "Register Documents",
-                    "Edit Documents",
-                    "Download Documents",
-                    "Print Documents",
-                ],
-                "last_login": "Yesterday, 04:35 PM",
-                "created": "2026-02-04",
-            },
-            {
-                "full_name": "Liza Martinez",
-                "username": "sbmember1",
-                "email": "liza.martinez@tolosa.gov.ph",
-                "role": "SB Member",
-                "status": "Active",
-                "permissions": [
-                    "View Documents",
-                    "Search Documents",
-                    "Filter Documents",
-                    "View Document Details",
-                    "Download Documents",
-                    "Print Documents",
-                ],
-                "last_login": "Aug 08, 2026",
-                "created": "2026-03-21",
-            },
-            {
-                "full_name": "Rafael Dela Cruz",
-                "username": "employee2",
-                "email": "rafael.delacruz@tolosa.gov.ph",
-                "role": "Employee",
-                "status": "Inactive",
-                "permissions": [
-                    "View Documents",
-                    "Search Documents",
-                    "Filter Documents",
-                    "Download Documents",
-                ],
-                "last_login": "—",
-                "created": "2026-04-01",
-            },
-        ]
-        return base
+    def load_user_management_data():
+        nonlocal user_management_data
+        previous_data = list(user_management_data)
+        try:
+            response = requests.get(
+                f"{BACKEND_URL}/auth/users",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=20,
+            )
+            if response.status_code != 200:
+                detail = response.text
+                try:
+                    detail = response.json().get("detail", detail)
+                except Exception:
+                    detail = response.text
+                raise Exception(f"{response.status_code}: {detail}")
+            user_management_data = response.json() if response.content else []
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Unable to load users: {exc}"), open=True)
+            user_management_data = previous_data
+        finally:
+            update_users_role_view()
 
-    user_management_data = build_user_list_data()
+    user_management_data = []
 
     user_table_holder = ft.Container(width="100%")
     user_no_users_notice = ft.Container(width="100%", visible=False)
@@ -2281,6 +2262,9 @@ def main(page: ft.Page):
         )
         user_no_users_notice.visible = len(visible_users) == 0
         page.update()
+
+    def refresh_user_management_data(_=None):
+        load_user_management_data()
 
     user_search_field = ft.TextField(
         label="Search users...",
@@ -2403,6 +2387,7 @@ def main(page: ft.Page):
         return visible
 
     def users_roles_view():
+        load_user_management_data()
         visible_users = filter_user_data()
 
         create_button = ft.Button(
@@ -2411,7 +2396,7 @@ def main(page: ft.Page):
             bgcolor=ft.Colors.BLUE_800,
             color=ft.Colors.WHITE,
         )
-        refresh_button = ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: page.update())
+        refresh_button = ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=refresh_user_management_data)
         view = build_users_roles_view(
             visible_users,
             user_search_field,
@@ -2504,23 +2489,63 @@ def main(page: ft.Page):
                 page.update()
                 return
 
+            if not password.value:
+                error_message.value = "Password is required."
+                page.update()
+                return
+
+            if not runtime_token and not AUTH_TOKEN:
+                error_message.value = "Unable to register user: no admin authentication available."
+                page.update()
+                return
+
             permissions = []
             for control in permission_area.controls:
                 permissions.extend(collect_selected_permissions(control))
 
-            new_user = {
-                "full_name": full_name.value,
-                "username": username.value,
-                "email": email.value,
+            payload = {
+                "username": username.value.strip(),
+                "password": password.value,
+                "full_name": full_name.value.strip(),
+                "email": email.value.strip(),
                 "role": role_choice.value,
-                "status": "Active",
-                "permissions": permissions,
-                "last_login": "—",
-                "created": date.today().strftime("%Y-%m-%d"),
             }
-            user_management_data.append(new_user)
-            close_dialog(dialog)
-            update_users_role_view()
+            if permissions:
+                payload["permissions"] = str(permissions)
+
+            try:
+                response = requests.post(
+                    f"{BACKEND_URL}/auth/register",
+                    json=payload,
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=20,
+                )
+                if response.status_code != 200:
+                    detail = response.text
+                    try:
+                        detail = response.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    raise Exception(detail)
+                body = response.json()
+                created_user = {
+                    "full_name": full_name.value,
+                    "username": body.get("username", username.value.strip()),
+                    "email": email.value,
+                    "role": body.get("role", role_choice.value),
+                    "status": "Active",
+                    "permissions": permissions,
+                    "last_login": "—",
+                    "created": date.today().strftime("%Y-%m-%d"),
+                }
+                user_management_data.append(created_user)
+                close_dialog(dialog)
+                update_users_role_view()
+            except Exception as exc:
+                error_message.value = f"Account creation failed: {exc}"
+                page.update()
+                return
 
         error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
 
@@ -2940,7 +2965,7 @@ def main(page: ft.Page):
                         border_radius=20,
                     ),
                     ft.Text("LGU Tolosa - Sangguniang Bayan", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                    ft.Text("Administration System Login", size=14, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text("LGU Tolosa Login", size=14, color=ft.Colors.BLUE_GREY_600),
                     ft.Container(height=4),
                     username_field,
                     password_field,

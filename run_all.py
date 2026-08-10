@@ -5,7 +5,7 @@ Usage:
     .venv\Scripts\python.exe run_all.py
 
 Options:
-        --no-admin        Don't start the admin frontend
+        --no-frontend     Don't start the frontend
 
 The script starts child processes and will terminate them on Ctrl+C.
 """
@@ -23,18 +23,20 @@ PY = sys.executable
 # Load development environment settings before starting child processes
 load_dotenv(override=True)
 
-FRONTENDS = {
-    "admin": str(REPO_ROOT / "frontend" / "frontend_admin" / "app.py"),
-}
+FRONTEND = str(REPO_ROOT / "frontend" / "app.py")
 
 children = []
 
 
-def start_process(name, script_path):
+def start_process(name, script_path, env=None):
     cmd = [PY, script_path]
     print(f"Starting {name}: {' '.join(cmd)}")
     # Start without piping so output flows to the console
-    p = subprocess.Popen(cmd, cwd=str(REPO_ROOT))
+    full_env = os.environ.copy()
+    if env:
+        full_env.update(env)
+    full_env["PYTHONPATH"] = str(REPO_ROOT)
+    p = subprocess.Popen(cmd, cwd=str(REPO_ROOT), env=full_env)
     children.append((name, p))
     print(f"{name} started (pid {p.pid})")
 
@@ -84,11 +86,20 @@ def main():
         time.sleep(0.6)
 
         if children and children[0][1].poll() is None:
-            if "--no-admin" not in args:
-                start_process("admin", FRONTENDS["admin"])
-            print("All processes started. Press Ctrl+C to stop.")
+            frontend_port = int(os.getenv("FRONTEND_PORT", "8550"))
+            frontend_host = "127.0.0.1"
+            if not check_port_available(frontend_host, frontend_port):
+                print(f"Port {frontend_port} is already in use. Frontend cannot start.")
+                print("Backend started, but the frontend was not launched.")
+            elif "--no-frontend" not in args:
+                frontend_env = os.environ.copy()
+                frontend_env["FRONTEND_PORT"] = str(frontend_port)
+                start_process("frontend", FRONTEND, env=frontend_env)
+                print("All processes started. Press Ctrl+C to stop.")
+            else:
+                print("Backend started without frontend. Press Ctrl+C to stop.")
         else:
-            print("Backend failed to start. Admin frontend will not be launched.")
+            print("Backend failed to start. Frontend will not be launched.")
 
         # Wait until children exit or user interrupts
         while True:
