@@ -30,7 +30,7 @@ def render_shell(
         bgcolor=ft.Colors.WHITE,
         border=None,
         border_radius=0,
-        expand=False,
+        expand=True,
         content=(
             content_view
             if content_view is not None
@@ -325,9 +325,7 @@ def render_shell(
                     content=content_holder,
                 ),
             ],
-            # IMPORTANT:
-            # The outer Row no longer expands vertically.
-            expand=False,
+            expand=True,
             spacing=0,
             vertical_alignment=ft.CrossAxisAlignment.START,
         )

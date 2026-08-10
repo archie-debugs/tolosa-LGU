@@ -105,7 +105,7 @@ def login_user(
 
     role = normalize_user_role(user.role)
     permissions = list(normalize_permissions(getattr(user, "permissions", None)))
-    if not permissions and role != "Super Administrator":
+    if not permissions:
         permissions = get_default_permissions_for_role(role)
 
     return {

@@ -2740,6 +2740,137 @@ def main(page: ft.Page):
         target_index = next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Archived Documents"), 1)
         render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=target_index)
 
+    def dashboard_view():
+        try:
+            load_documents_table()
+            load_archived_documents_table()
+        except Exception:
+            pass
+
+        total_docs = len(documents_data) + len(archived_documents_data)
+        active_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() not in {"approved", "completed", "archived"})
+        pending_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "pending")
+        completed_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"approved", "completed"})
+        archived_docs = len(archived_documents_data)
+        users_total = len(user_management_data)
+        users_active = sum(1 for user in user_management_data if (user.get("status") or "").lower() == "active")
+        users_employees = sum(1 for user in user_management_data if user.get("role") == "Employee")
+        users_sb_members = sum(1 for user in user_management_data if user.get("role") == "SB Member")
+        cards = []
+        summary_items = [
+            {"title": "Total Records", "value": str(total_docs), "detail": "Active + archived documents", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
+            {"title": "Active Documents", "value": str(active_docs), "detail": "Currently in process", "icon": ft.Icons.LIBRARY_ADD_CHECK_OUTLINED, "accent": ft.Colors.GREEN_700},
+            {"title": "Pending", "value": str(pending_docs), "detail": "Awaiting action", "icon": ft.Icons.SCHEDULE_OUTLINED, "accent": ft.Colors.ORANGE_700},
+            {"title": "Completed", "value": str(completed_docs), "detail": "Finished workflows", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.TEAL_700},
+            {"title": "Archived", "value": str(archived_docs), "detail": "Stored records", "icon": ft.Icons.ARCHIVE_OUTLINED, "accent": ft.Colors.BLUE_GREY_700},
+        ]
+        for item in summary_items:
+            cards.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row([ft.Icon(item["icon"], color=item["accent"], size=22), ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Text(item["value"], size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                            ft.Text(item["detail"], size=12, color=ft.Colors.BLUE_GREY_600),
+                        ],
+                        spacing=6,
+                    ),
+                    padding=16,
+                    bgcolor=ft.Colors.WHITE,
+                    border_radius=18,
+                    width=220,
+                )
+            )
+
+        user_cards = [
+            {"title": "Total Users", "value": str(users_total), "detail": "All configured accounts", "icon": ft.Icons.PEOPLE_ALT_OUTLINED, "accent": ft.Colors.BLUE_700},
+            {"title": "Active Users", "value": str(users_active), "detail": "Currently enabled accounts", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.GREEN_700},
+            {"title": "Employees", "value": str(users_employees), "detail": "Employee accounts", "icon": ft.Icons.WORK_OUTLINED, "accent": ft.Colors.INDIGO_700},
+            {"title": "SB Members", "value": str(users_sb_members), "detail": "Read-only members", "icon": ft.Icons.GROUP_OUTLINED, "accent": ft.Colors.PURPLE_700},
+        ]
+        user_cards_row = ft.Row(
+            [
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row([ft.Icon(item["icon"], color=item["accent"], size=22), ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Text(item["value"], size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                            ft.Text(item["detail"], size=12, color=ft.Colors.BLUE_GREY_600),
+                        ],
+                        spacing=6,
+                    ),
+                    padding=16,
+                    bgcolor=ft.Colors.WHITE,
+                    border_radius=18,
+                    width=220,
+                )
+                for item in user_cards
+            ],
+            spacing=12,
+            wrap=True,
+        )
+
+        buttons = [
+            ft.Button("Documents", icon=ft.Icons.DESCRIPTION_OUTLINED, on_click=lambda _: open_documents_module(), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
+            ft.Button("Archived", icon=ft.Icons.ARCHIVE_OUTLINED, on_click=lambda _: open_archived_documents_module(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+        ]
+        if "view_analytics" in {(p or "").strip().lower().replace(" ", "_") for p in (current_user_permissions or [])} or current_user_role == "Super Administrator":
+            buttons.append(ft.Button("Analytics", icon=ft.Icons.ANALYTICS_OUTLINED, on_click=lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Analytics"), 0)), bgcolor=ft.Colors.TEAL_700, color=ft.Colors.WHITE))
+
+        normalized_permissions = sorted({str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])})
+        if current_user_role == "Super Administrator" and not normalized_permissions:
+            normalized_permissions = ["*"]
+        elif not normalized_permissions:
+            normalized_permissions = ["(none)"]
+
+        dashboard_content = ft.Container(
+            content=ft.Column(
+                [
+                    section_header(
+                        "Dashboard",
+                        "Super Administrator overview and quick access.",
+                        ft.Icons.DASHBOARD,
+                        ft.Colors.BLUE_700,
+                    ),
+                    ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                    ft.Row(
+                        [
+                            ft.Text(f"Logged in as: {current_user} ({current_user_role})", size=13, weight=ft.FontWeight.BOLD),
+                            ft.Text("Permissions:", size=13, weight=ft.FontWeight.BOLD),
+                        ],
+                        spacing=16,
+                        wrap=True,
+                    ),
+                    ft.Container(
+                        content=ft.Text(
+                            ", ".join(normalized_permissions),
+                            size=12,
+                            color=ft.Colors.BLUE_GREY_700,
+                        ),
+                        padding=ft.Padding(12, 12, 12, 12),
+                        bgcolor=ft.Colors.BLUE_GREY_50,
+                        border_radius=14,
+                    ),
+                    ft.Row(cards, spacing=12, wrap=True),
+                    ft.Row(buttons, spacing=12),
+                    ft.Text("User and document summary", size=14, weight=ft.FontWeight.BOLD),
+                    user_cards_row,
+                ],
+                spacing=18,
+            ),
+            width="100%",
+            padding=24,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+            border_radius=24,
+        )
+
+        return ft.Column(
+            [dashboard_content],
+            spacing=16,
+            expand=True,
+        )
+
     def analytics_view():
         return build_analytics_view(
             current_user,
@@ -2780,16 +2911,13 @@ def main(page: ft.Page):
                     role = (payload.get("role") or "Super Administrator").strip()
                     current_user = payload.get("username")
                     current_user_role = role
-                    if role == "Super Administrator":
-                        nav_items[:] = build_nav_items()
-                        render_shell(page, current_user, logout_user, nav_items, content_view=None, initial_selected_index=0)
-                    elif role == "Employee":
-                        nav_items[:] = build_nav_items()
-                        render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=0)
-                    elif role == "SB Member":
-                        nav_items[:] = build_nav_items()
-                        render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=0)
+                    nav_items[:] = build_nav_items()
+                    if nav_items:
+                        initial_view = nav_items[0][2]()
                     else:
+                        initial_view = ft.Column([ft.Text("No available modules for this account.")])
+                    render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)
+                    if role not in {"Super Administrator", "Employee", "SB Member"}:
                         page.snack_bar = ft.SnackBar(ft.Text("Your account is not approved for access yet."), open=True)
                         page.update()
                 else:
@@ -2830,7 +2958,9 @@ def main(page: ft.Page):
         normalized_permissions = {str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])}
         items = []
 
-        if "view_analytics" in normalized_permissions or current_user_role == "Super Administrator":
+        if "view_dashboard" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator":
+            items.append((ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view()))
+        if "view_analytics" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator":
             items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view()))
 
         items.extend([
