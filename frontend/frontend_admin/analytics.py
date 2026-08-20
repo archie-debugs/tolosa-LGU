@@ -21,16 +21,6 @@ def build_analytics_view(
     office_distribution = ft.Column([], spacing=8)
     processing_panel = ft.Column([], spacing=8)
     monthly_panel = ft.Column([], spacing=8)
-    activity_table = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("Tracking #")),
-            ft.DataColumn(ft.Text("Activity")),
-            ft.DataColumn(ft.Text("Date/Time")),
-            ft.DataColumn(ft.Text("Actor")),
-        ],
-        rows=[],
-        width=900,
-    )
     recent_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Tracking #")),
@@ -42,7 +32,7 @@ def build_analytics_view(
             ft.DataColumn(ft.Text("Date Registered")),
         ],
         rows=[],
-        width=1100,
+        width=900,
     )
 
     def build_status_bar(max_value, count, label):
@@ -82,7 +72,6 @@ def build_analytics_view(
             overview = payload.get("overview") or {}
             processing = payload.get("processing") or {}
             monthly_activity = payload.get("monthly_activity") or []
-            recent_activity = payload.get("recent_activity") or []
             recent_documents = payload.get("recent_documents") or []
 
             cards = [
@@ -173,27 +162,28 @@ def build_analytics_view(
                     ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
                 )
 
-            activity_rows = []
-            for item in recent_activity:
-                activity_rows.append(
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(ft.Text(str(item.get("tracking_number") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("activity") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("created_at") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("actor") or "-"))),
-                        ]
-                    )
-                )
-            activity_table.rows = activity_rows
-
             recent_rows = []
             for item in recent_documents:
+                title_text = str(item.get("title") or "-")
+                title_cell = ft.Tooltip(
+                    message=title_text,
+                    content=ft.Container(
+                        content=ft.Text(
+                            title_text,
+                            size=11,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            no_wrap=True,
+                        ),
+                        width=240,
+                        alignment=ft.Alignment.CENTER_LEFT,
+                    ),
+                )
                 recent_rows.append(
                     ft.DataRow(
                         cells=[
                             ft.DataCell(ft.Text(str(item.get("tracking_number") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("title") or "-"))),
+                            ft.DataCell(title_cell),
                             ft.DataCell(ft.Text(str(item.get("document_type") or "-"))),
                             ft.DataCell(ft.Text(str(item.get("status") or "-"))),
                             ft.DataCell(ft.Text(str(item.get("priority") or "-"))),
@@ -273,30 +263,9 @@ def build_analytics_view(
             ft.Container(
                 content=ft.Column(
                     [
-                        ft.Row([
-                            ft.Text("Recent Document Activity", size=14, weight=ft.FontWeight.BOLD),
-                            ft.TextButton("View All", on_click=lambda _: None),
-                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                        ft.Container(
-                            content=ft.Row([activity_table], scroll=ft.ScrollMode.AUTO),
-                            padding=8,
-                            border_radius=10,
-                            bgcolor=ft.Colors.WHITE,
-                            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                        ),
-                    ],
-                    spacing=12,
-                ),
-                padding=12,
-                border_radius=12,
-                bgcolor=ft.Colors.WHITE,
-            ),
-            ft.Container(
-                content=ft.Column(
-                    [
                         ft.Text("Recent Documents", size=14, weight=ft.FontWeight.BOLD),
                         ft.Container(
-                            content=ft.Row([recent_table], scroll=ft.ScrollMode.AUTO),
+                            content=recent_table,
                             padding=8,
                             border_radius=10,
                             bgcolor=ft.Colors.WHITE,

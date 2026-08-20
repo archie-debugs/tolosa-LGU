@@ -1732,25 +1732,20 @@ def main(page: ft.Page):
             document_title = str(doc.get("title", "-") or "-")
             doc_id = doc.get("id")
             title_cell = ft.DataCell(
-                ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            ft.Text(
-                                document_title,
-                                size=13,
-                                no_wrap=True,
-                                overflow=ft.TextOverflow.CLIP,
-                            )
-                        ],
-                        spacing=0,
-                        scroll=ft.ScrollMode.AUTO,
-                        width=280,
+                ft.Tooltip(
+                    message=document_title,
+                    content=ft.Container(
+                        content=ft.Text(
+                            document_title,
+                            size=13,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            no_wrap=True,
+                        ),
+                        width=260,
+                        padding=ft.Padding(left=4, top=0, right=4, bottom=0),
+                        alignment=ft.Alignment.CENTER_LEFT,
                     ),
-                    width=280,
-                    height=40,
-                    padding=ft.Padding(left=4, top=0, right=4, bottom=0),
-                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                    alignment=ft.Alignment.CENTER_LEFT,
                 )
             )
             actions = [
@@ -1813,25 +1808,20 @@ def main(page: ft.Page):
             status_color, status_bg = get_document_status_style(status)
             document_title = str(doc.get("title", "-") or "-")
             title_cell = ft.DataCell(
-                ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            ft.Text(
-                                document_title,
-                                size=13,
-                                no_wrap=True,
-                                overflow=ft.TextOverflow.CLIP,
-                            )
-                        ],
-                        spacing=0,
-                        scroll=ft.ScrollMode.AUTO,
-                        width=280,
+                ft.Tooltip(
+                    message=document_title,
+                    content=ft.Container(
+                        content=ft.Text(
+                            document_title,
+                            size=13,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            no_wrap=True,
+                        ),
+                        width=260,
+                        padding=ft.Padding(left=4, top=0, right=4, bottom=0),
+                        alignment=ft.Alignment.CENTER_LEFT,
                     ),
-                    width=280,
-                    height=40,
-                    padding=ft.Padding(left=4, top=0, right=4, bottom=0),
-                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                    alignment=ft.Alignment.CENTER_LEFT,
                 )
             )
             if include_archive_action:
