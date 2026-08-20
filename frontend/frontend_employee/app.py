@@ -88,14 +88,69 @@ def main(page: ft.Page):
     current_user_role = None
     current_user_permissions = []
     runtime_token = None
+    refresh_token = None
 
     documents_data: list[dict] = []
     audit_log_rows = []
 
+    def save_session_state():
+        try:
+            if hasattr(page, "client_storage"):
+                page.client_storage.set("sb_employee_access_token", runtime_token or "")
+                page.client_storage.set("sb_employee_refresh_token", refresh_token or "")
+                page.client_storage.set("sb_employee_current_user", current_user or "")
+                page.client_storage.set("sb_employee_current_user_role", current_user_role or "")
+                page.client_storage.set("sb_employee_current_user_permissions", __import__('json').dumps(current_user_permissions or []))
+        except Exception:
+            pass
+
+    def clear_session_state():
+        try:
+            if hasattr(page, "client_storage"):
+                page.client_storage.remove("sb_employee_access_token")
+                page.client_storage.remove("sb_employee_refresh_token")
+                page.client_storage.remove("sb_employee_current_user")
+                page.client_storage.remove("sb_employee_current_user_role")
+                page.client_storage.remove("sb_employee_current_user_permissions")
+        except Exception:
+            pass
+
     def normalize_permissions(permissions):
         return {str(p).strip().lower().replace(" ", "_") for p in (permissions or []) if str(p).strip()}
 
+    def refresh_runtime_token_if_needed():
+        nonlocal runtime_token, refresh_token
+        if not runtime_token or not refresh_token:
+            return
+        try:
+            token_parts = runtime_token.split('.')
+            if len(token_parts) == 3:
+                payload_part = token_parts[1]
+                payload_part += '=' * (-len(payload_part) % 4)
+                payload = __import__('json').loads(__import__('base64').urlsafe_b64decode(payload_part).decode('utf-8'))
+                exp = payload.get('exp')
+                if exp is not None and int(exp) - int(__import__('time').time()) > 300:
+                    return
+        except Exception:
+            pass
+
+        try:
+            resp = requests.post(
+                f"{BACKEND_URL}/auth/refresh",
+                data={"refresh_token": refresh_token},
+                verify=False,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                body = resp.json()
+                runtime_token = body.get("access_token") or runtime_token
+                refresh_token = body.get("refresh_token") or refresh_token
+                save_session_state()
+        except Exception:
+            pass
+
     def get_employee_headers():
+        refresh_runtime_token_if_needed()
         hdrs = {}
         if runtime_token:
             hdrs["Authorization"] = f"Bearer {runtime_token}"
@@ -489,11 +544,13 @@ def main(page: ft.Page):
         )
 
     def logout_user():
-        nonlocal current_user, current_user_role, current_user_permissions, runtime_token
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
         current_user = None
         current_user_role = None
         current_user_permissions = []
         runtime_token = None
+        refresh_token = None
+        clear_session_state()
         show_login()
 
     def open_documents_module():
@@ -547,9 +604,11 @@ def main(page: ft.Page):
                 res.raise_for_status()
                 payload = res.json()
                 runtime_token = payload.get("access_token")
+                refresh_token = payload.get("refresh_token")
                 current_user = payload.get("username")
                 current_user_role = (payload.get("role") or "Employee").strip()
                 current_user_permissions = payload.get("permissions") or []
+                save_session_state()
                 nav_items = build_nav_items()
                 initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
                 render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)
@@ -594,7 +653,39 @@ def main(page: ft.Page):
         page.update()
 
     nav_items = []
-    show_login()
+
+    def restore_saved_session():
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
+        try:
+            if not hasattr(page, "client_storage"):
+                return False
+            saved_access = page.client_storage.get("sb_employee_access_token")
+            saved_refresh = page.client_storage.get("sb_employee_refresh_token")
+            saved_user = page.client_storage.get("sb_employee_current_user")
+            saved_role = page.client_storage.get("sb_employee_current_user_role")
+            saved_permissions = page.client_storage.get("sb_employee_current_user_permissions")
+            if not saved_access or not saved_user:
+                return False
+            runtime_token = saved_access
+            refresh_token = saved_refresh
+            current_user = saved_user
+            current_user_role = saved_role or "Employee"
+            try:
+                current_user_permissions = __import__('json').loads(saved_permissions) if saved_permissions else []
+            except Exception:
+                current_user_permissions = []
+            nav_items[:] = build_nav_items()
+            if nav_items:
+                initial_view = nav_items[0][2]()
+            else:
+                initial_view = ft.Column([ft.Text("No available modules for this account.")])
+            render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)
+            return True
+        except Exception:
+            return False
+
+    if not restore_saved_session():
+        show_login()
 
 
 if __name__ == "__main__":

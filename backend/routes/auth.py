@@ -11,7 +11,7 @@ from ..core import (
     normalize_permissions,
     get_default_permissions_for_role,
 )
-from ..auth_jwt import create_access_token
+from ..auth_jwt import create_access_token, create_refresh_token, decode_refresh_token
 
 router = APIRouter()
 
@@ -145,8 +145,8 @@ def login_user(
         details="Successful login",
     )
 
-    # create JWT access token (subject=username)
-    token = create_access_token({"sub": user.username})
+    access_token = create_access_token({"sub": user.username})
+    refresh_token = create_refresh_token({"sub": user.username})
 
     role = normalize_user_role(user.role)
     permissions = list(normalize_permissions(getattr(user, "permissions", None)))
@@ -158,6 +158,31 @@ def login_user(
         "username": user.username,
         "role": role,
         "permissions": permissions,
-        "access_token": token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
+
+
+@router.post("/auth/refresh")
+def refresh_access_token(
+    refresh_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Refresh token is required")
+
+    payload = decode_refresh_token(refresh_token)
+    username = payload.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="Refresh token invalid")
+
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=401, detail="User no longer active")
+
+    return {
+        "access_token": create_access_token({"sub": user.username}),
+        "refresh_token": create_refresh_token({"sub": user.username}),
         "token_type": "bearer",
     }
