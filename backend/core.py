@@ -109,6 +109,13 @@ def ensure_schema_columns() -> None:
             _add_column_if_missing(connection, "registration_requests", "approved_at", "ALTER TABLE registration_requests ADD COLUMN approved_at DATETIME")
             _add_column_if_missing(connection, "registration_requests", "rejected_by", "ALTER TABLE registration_requests ADD COLUMN rejected_by VARCHAR")
             _add_column_if_missing(connection, "registration_requests", "rejected_at", "ALTER TABLE registration_requests ADD COLUMN rejected_at DATETIME")
+            _add_column_if_missing(connection, "documents", "author", "ALTER TABLE documents ADD COLUMN author VARCHAR")
+            _add_column_if_missing(connection, "documents", "session", "ALTER TABLE documents ADD COLUMN session VARCHAR")
+            _add_column_if_missing(connection, "documents", "date_registered", "ALTER TABLE documents ADD COLUMN date_registered VARCHAR")
+            _add_column_if_missing(connection, "documents", "attachment_name", "ALTER TABLE documents ADD COLUMN attachment_name VARCHAR")
+            _add_column_if_missing(connection, "documents", "qr_code_value", "ALTER TABLE documents ADD COLUMN qr_code_value VARCHAR")
+            _add_column_if_missing(connection, "documents", "archived_at", "ALTER TABLE documents ADD COLUMN archived_at DATETIME")
+            _add_column_if_missing(connection, "documents", "archived_by", "ALTER TABLE documents ADD COLUMN archived_by VARCHAR")
         else:
             _add_column_if_missing(connection, "users", "status", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'Active'"))
             _add_column_if_missing(connection, "users", "is_active", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"))
@@ -127,6 +134,8 @@ def ensure_schema_columns() -> None:
             _add_column_if_missing(connection, "documents", "date_registered", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS date_registered VARCHAR"))
             _add_column_if_missing(connection, "documents", "attachment_name", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS attachment_name VARCHAR"))
             _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
+            _add_column_if_missing(connection, "documents", "archived_at", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP"))
+            _add_column_if_missing(connection, "documents", "archived_by", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_by VARCHAR"))
 
         connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
         connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))

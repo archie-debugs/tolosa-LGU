@@ -519,6 +519,28 @@ def main(page: ft.Page):
     )
     page.overlay.append(documents_delete_dialog)
 
+    pending_restore_document = None
+    archived_restore_dialog = ft.AlertDialog(
+        title=ft.Text("Restore Document"),
+        content=ft.Text("Are you sure you want to restore this document to the active document records?"),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_archived_restore_dialog()),
+            ft.Button("Restore", bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE, on_click=lambda _: run_restore_archived_document_action()),
+        ],
+    )
+    page.overlay.append(archived_restore_dialog)
+
+    pending_permanent_delete_document = None
+    archived_delete_dialog = ft.AlertDialog(
+        title=ft.Text("Delete Archived Document Permanently"),
+        content=ft.Text("This action permanently deletes the archived document and cannot be undone. Are you sure you want to continue?"),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_archived_delete_dialog()),
+            ft.Button("Delete Permanently", bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE, on_click=lambda _: run_permanent_delete_archived_document_action()),
+        ],
+    )
+    page.overlay.append(archived_delete_dialog)
+
     scan_input_field = ft.TextField(label="Scan QR / Tracking", width=280, hint_text="Scan code or enter tracking number")
     scan_destination_field = ft.TextField(label="Destination Office", width=280)
     scan_location_field = ft.TextField(label="Current Location", width=280)
@@ -1213,20 +1235,14 @@ def main(page: ft.Page):
     archived_documents_table = ft.DataTable(
         columns=[
             ft.DataColumn(label=make_document_header("Actions", 90)),
-            ft.DataColumn(label=make_document_header("Tracking No.", 120)),
-            ft.DataColumn(label=make_document_header("Title", 280)),
-            ft.DataColumn(label=make_document_header("Document Type", 120)),
-            ft.DataColumn(label=make_document_header("Category", 100)),
-            ft.DataColumn(label=make_document_header("Originating Office", 150)),
-            ft.DataColumn(label=make_document_header("Current Office", 140)),
-            ft.DataColumn(label=make_document_header("Assigned To", 110)),
-            ft.DataColumn(label=make_document_header("Status", 120)),
-            ft.DataColumn(label=make_document_header("Priority", 80)),
-            ft.DataColumn(label=make_document_header("Date Received", 100)),
-            ft.DataColumn(label=make_document_header("Last Updated", 100)),
+            ft.DataColumn(label=make_document_header("Tracking No.", 140)),
+            ft.DataColumn(label=make_document_header("Title", 320)),
+            ft.DataColumn(label=make_document_header("Document Type", 150)),
+            ft.DataColumn(label=make_document_header("Date Archived", 150)),
+            ft.DataColumn(label=make_document_header("Archived By", 150)),
         ],
         rows=[],
-        width=1600,
+        width=1100,
         column_spacing=10,
         horizontal_margin=0,
         data_row_min_height=52,
@@ -1466,6 +1482,70 @@ def main(page: ft.Page):
             delete_document_record(document.get("id"))
             render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=1)
 
+    def close_archived_restore_dialog():
+        nonlocal pending_restore_document
+        pending_restore_document = None
+        archived_restore_dialog.open = False
+        page.update()
+
+    def confirm_restore_archived_document(doc):
+        nonlocal pending_restore_document
+        pending_restore_document = doc
+        archived_restore_dialog.open = True
+        page.update()
+
+    def run_restore_archived_document_action():
+        nonlocal pending_restore_document
+        document = pending_restore_document
+        close_archived_restore_dialog()
+        if not document:
+            return
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/documents/{document.get('id')}/restore",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                raise Exception(response.text)
+            show_document_notice("Document restored successfully.")
+            load_documents_table()
+            load_archived_documents_table()
+        except Exception as exc:
+            show_document_notice(f"Restore failed: {exc}")
+
+    def close_archived_delete_dialog():
+        nonlocal pending_permanent_delete_document
+        pending_permanent_delete_document = None
+        archived_delete_dialog.open = False
+        page.update()
+
+    def confirm_permanent_delete_archived_document(doc):
+        nonlocal pending_permanent_delete_document
+        pending_permanent_delete_document = doc
+        archived_delete_dialog.open = True
+        page.update()
+
+    def run_permanent_delete_archived_document_action():
+        nonlocal pending_permanent_delete_document
+        document = pending_permanent_delete_document
+        close_archived_delete_dialog()
+        if not document:
+            return
+        try:
+            response = requests.delete(
+                f"{BACKEND_URL}/documents/{document.get('id')}/permanent",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                raise Exception(response.text)
+            show_document_notice("Archived document permanently deleted.")
+            load_archived_documents_table()
+        except Exception as exc:
+            show_document_notice(f"Permanent delete failed: {exc}")
 
     def download_selected_qr_labels():
         selected_ids = sorted(str(doc_id) for doc_id in selected_qr_document_ids if doc_id is not None)
@@ -1694,6 +1774,8 @@ def main(page: ft.Page):
             "priority": doc.get("priority") or "Medium",
             "date_received": doc.get("created_at") or doc.get("date_received") or "-",
             "last_updated": doc.get("updated_at") or doc.get("last_updated") or doc.get("created_at") or "-",
+            "date_archived": doc.get("date_archived") or doc.get("archived_at") or "-",
+            "archived_by": doc.get("archived_by") or "-",
             "created_by": doc.get("created_by") or "-",
             "author": doc.get("author") or "-",
             "session": doc.get("session") or "-",
@@ -1875,13 +1957,42 @@ def main(page: ft.Page):
         visible_documents = apply_document_search(visible_documents, archived_documents_search_field.value)
 
         if documents_sort_filter.value == "Oldest":
-            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=False)
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or ""), reverse=False)
         elif documents_sort_filter.value == "Title":
             visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("title", "")).lower(), reverse=False)
         else:
-            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_received", "")), reverse=True)
+            visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or ""), reverse=True)
 
-        rows = build_document_rows(visible_documents, include_archive_action=False)
+        rows = []
+        for doc in visible_documents:
+            archive_title = str(doc.get("title", "-") or "-")
+            date_archived = doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or "-"
+            archived_by = doc.get("archived_by") or "-"
+            rows.append(
+                ft.DataRow(
+                    cells=[
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.PopupMenuButton(
+                                    icon=ft.Icons.MORE_VERT,
+                                    tooltip="Archived document actions",
+                                    items=[
+                                        ft.PopupMenuItem(content=ft.Text("Restore"), on_click=lambda _, d=doc: confirm_restore_archived_document(d)),
+                                        ft.PopupMenuItem(content=ft.Text("Delete Permanently"), on_click=lambda _, d=doc: confirm_permanent_delete_archived_document(d)),
+                                    ],
+                                ),
+                                width=90,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ),
+                        ft.DataCell(ft.Container(content=ft.Text(str(doc.get("tracking_number", doc.get("id", "-"))), size=13), width=140, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Tooltip(message=archive_title, content=ft.Container(content=ft.Text(archive_title, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=300, padding=ft.Padding(left=4, top=0, right=4, bottom=0), alignment=ft.Alignment.CENTER_LEFT))),
+                        ft.DataCell(ft.Container(content=ft.Text(str(doc.get("document_type", "-")), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(date_archived), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(str(archived_by), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
+                    ]
+                )
+            )
         archived_documents_table.rows = rows
         archived_documents_empty_state.visible = len(rows) == 0
         update_document_result_indicator(visible_documents, visible_count=len(rows))

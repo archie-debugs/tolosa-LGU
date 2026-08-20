@@ -81,6 +81,8 @@ class DocumentResponse(BaseModel):
     history_rows: Optional[list[dict]] = None
     attachments: Optional[list[dict]] = None
     archived: bool
+    archived_at: Optional[datetime] = None
+    archived_by: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

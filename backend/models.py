@@ -78,6 +78,8 @@ class Document(Base):
     assigned_to_rel = relationship("User", foreign_keys=[assigned_to_id])
 
     archived = Column(Boolean, nullable=False, default=False, index=True)
+    archived_at = Column(DateTime, nullable=True, index=True)
+    archived_by = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 

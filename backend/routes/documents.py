@@ -623,6 +623,9 @@ def _serialize_document(doc: models.Document):
         "originating_office_id": getattr(doc, "originating_office_id", None),
         "current_office_id": getattr(doc, "current_office_id", None),
         "archived": bool(doc.archived),
+        "archived_at": doc.archived_at,
+        "archived_by": doc.archived_by,
+        "date_archived": doc.archived_at.isoformat() if doc.archived_at else None,
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
     }
@@ -1245,8 +1248,71 @@ def delete_document(document_id: int, db: Session = Depends(get_db), current_use
         raise HTTPException(status_code=404, detail="Document not found")
 
     doc.archived = True
+    doc.archived_at = datetime.now(timezone.utc)
+    doc.archived_by = getattr(current_user, "username", None)
     db.commit()
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="ARCHIVE_DOCUMENT",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Archived document {doc.tracking_number}: {doc.title}",
+    )
     return {"message": "Document archived successfully"}
+
+
+@router.post("/{document_id:int}/restore")
+def restore_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "restore_documents")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    doc.archived = False
+    doc.archived_at = None
+    doc.archived_by = None
+    db.commit()
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="RESTORE_ARCHIVED_DOCUMENT",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Restored archived document {doc.tracking_number}: {doc.title}",
+    )
+    return {"message": "Document restored successfully"}
+
+
+@router.delete("/{document_id:int}/permanent")
+def permanently_delete_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "delete_documents")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    tracking_number = doc.tracking_number
+    title = doc.title
+    attachments = db.query(models.Attachment).filter(models.Attachment.document_id == doc.id).all()
+    for attachment in attachments:
+        try:
+            if attachment.stored_path and os.path.exists(attachment.stored_path):
+                os.remove(attachment.stored_path)
+        except Exception:
+            pass
+        db.delete(attachment)
+
+    db.delete(doc)
+    db.commit()
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="PERMANENT_DELETE_ARCHIVED_DOCUMENT",
+        target_type="document",
+        target_id=str(document_id),
+        details=f"Permanently deleted archived document {tracking_number}: {title}",
+    )
+    return {"message": "Archived document permanently deleted."}
 
 
 @router.get("/{document_id:int}/attachments/{attachment_id:int}")
