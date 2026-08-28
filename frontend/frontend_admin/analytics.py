@@ -12,8 +12,15 @@ def build_analytics_view(
     backend_url=None,
     open_documents_view=None,
     open_archived_view=None,
+    page=None,
 ):
     backend_url = backend_url or BACKEND_URL
+    is_dark = page is not None and page.theme_mode == ft.ThemeMode.DARK
+    primary_text = ft.Colors.BLUE_GREY_100 if is_dark else ft.Colors.BLUE_GREY_900
+    secondary_text = ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_600
+    panel_color = ft.Colors.GREY_900 if is_dark else ft.Colors.WHITE
+    soft_panel_color = "#26343a" if is_dark else ft.Colors.BLUE_GREY_50
+    border_color = ft.Colors.BLUE_GREY_700 if is_dark else ft.Colors.BLUE_GREY_100
 
     metric_cards = ft.Row([], spacing=12, wrap=True)
     status_chart = ft.Column([], spacing=8)
@@ -54,7 +61,7 @@ def build_analytics_view(
                 ),
                 width=bar_width + 20,
             ),
-            ft.Text(str(count), size=11, color=ft.Colors.BLUE_GREY_700),
+            ft.Text(str(count), size=11, color=secondary_text),
         ], spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def load_analytics():
@@ -97,18 +104,26 @@ def build_analytics_view(
                             [
                                 ft.Row([
                                     ft.Icon(icon, color=color, size=28),
-                                    ft.Text(title, size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                                    ft.Text(
+                                        title,
+                                        size=13,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=primary_text,
+                                        width=135,
+                                        max_lines=2,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
                                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                                ft.Text(str(value), size=26, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                ft.Text(detail, size=11, color=ft.Colors.BLUE_GREY_600),
+                                ft.Text(str(value), size=26, weight=ft.FontWeight.BOLD, color=primary_text),
+                                ft.Text(detail, size=11, color=secondary_text),
                             ],
                             spacing=4,
                         ),
-                        width=210,
+                        width=195,
                         padding=12,
-                        bgcolor=ft.Colors.WHITE,
+                        bgcolor=panel_color,
                         border_radius=12,
-                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                        border=ft.border.all(1, border_color),
                         on_click=card_on_click,
                     )
                 )
@@ -209,8 +224,8 @@ def build_analytics_view(
         controls=[
             ft.Row([
                 ft.Column([
-                    ft.Text("ANALYTICS", size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                    ft.Text("Operational document insights", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text("ANALYTICS", size=24, weight=ft.FontWeight.BOLD, color=primary_text),
+                    ft.Text("Operational document insights", size=12, color=secondary_text),
                 ], spacing=2),
                 ft.Container(expand=True),
                 refresh_button,
@@ -227,7 +242,7 @@ def build_analytics_view(
                 ),
                 padding=12,
                 border_radius=12,
-                bgcolor=ft.Colors.BLUE_GREY_50,
+                bgcolor=soft_panel_color,
             ),
             ft.Container(
                 content=ft.Row([
@@ -235,15 +250,15 @@ def build_analytics_view(
                         content=ft.Column([type_distribution], spacing=8),
                         expand=True,
                         padding=12,
-                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                        bgcolor=ft.Colors.WHITE,
+                        border=ft.border.all(1, border_color),
+                        bgcolor=panel_color,
                     ),
                     ft.Container(
                         content=ft.Column([office_distribution], spacing=8),
                         expand=True,
                         padding=12,
-                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                        bgcolor=ft.Colors.WHITE,
+                        border=ft.border.all(1, border_color),
+                        bgcolor=panel_color,
                     ),
                 ], spacing=12),
                 padding=0,
@@ -251,13 +266,13 @@ def build_analytics_view(
             ft.Container(
                 content=ft.Column([processing_panel], spacing=8),
                 padding=12,
-                bgcolor=ft.Colors.BLUE_GREY_50,
+                bgcolor=soft_panel_color,
                 border_radius=12,
             ),
             ft.Container(
                 content=ft.Column([monthly_panel], spacing=8),
                 padding=12,
-                bgcolor=ft.Colors.BLUE_GREY_50,
+                bgcolor=soft_panel_color,
                 border_radius=12,
             ),
             ft.Container(
@@ -268,15 +283,15 @@ def build_analytics_view(
                             content=recent_table,
                             padding=8,
                             border_radius=10,
-                            bgcolor=ft.Colors.WHITE,
-                            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                            bgcolor=panel_color,
+                            border=ft.border.all(1, border_color),
                         ),
                     ],
                     spacing=12,
                 ),
                 padding=12,
                 border_radius=12,
-                bgcolor=ft.Colors.BLUE_GREY_50,
+                bgcolor=soft_panel_color,
             ),
         ],
         spacing=14,

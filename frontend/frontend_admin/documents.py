@@ -226,8 +226,6 @@ def build_documents_view(
             vertical_alignment=ft.CrossAxisAlignment.START,
         ),
         width="100%",
-        height=560,
-        clip_behavior=ft.ClipBehavior.HARD_EDGE,
     )
 
     empty_state = documents_empty_state
@@ -246,8 +244,6 @@ def build_documents_view(
             padding=ft.Padding(left=0, top=8, right=0, bottom=8),
         )
 
-    side = ft.BorderSide(1, ft.Colors.BLUE_GREY_100)
-
     table_container = ft.Container(
         content=ft.Column(
             controls=[
@@ -260,12 +256,9 @@ def build_documents_view(
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
         width="100%",
-        height=620,
-        bgcolor=ft.Colors.WHITE,
-        border=ft.Border(top=side, right=side, bottom=side, left=side),
-        border_radius=10,
-        padding=6,
-        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        bgcolor=ft.Colors.BLUE_GREY_50,
+        border_radius=18,
+        padding=12,
         expand=False,
         alignment=ft.Alignment(-1, 0),
     )

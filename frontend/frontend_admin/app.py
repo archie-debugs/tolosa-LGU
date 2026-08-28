@@ -1,5 +1,5 @@
 import flet as ft
-from datetime import date
+from datetime import date, datetime
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
@@ -135,7 +135,6 @@ def main(page: ft.Page):
     page.title = "LGU Tolosa — Legislative Document Tracking Management System"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.bgcolor = ft.Colors.WHITE
-    page.scroll = ft.ScrollMode.AUTO
     page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.padding = 8
@@ -666,11 +665,11 @@ def main(page: ft.Page):
     )
     page.overlay.append(qr_label_download_dialog)
 
-    registration_title = ft.TextField(label="Title", width=420)
-    registration_description = ft.TextField(label="Description", multiline=True, min_lines=3, max_lines=5, width=420)
+    registration_title = ft.TextField(label="Title", width=680)
+    registration_description = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=3, width=680)
     registration_category = ft.Dropdown(
         label="Category",
-        width=420,
+        width=330,
         options=[
             ft.dropdown.Option("Legislation"),
             ft.dropdown.Option("Policy"),
@@ -680,7 +679,7 @@ def main(page: ft.Page):
     )
     registration_document_type = ft.Dropdown(
         label="Document Type",
-        width=420,
+        width=330,
         options=[
             ft.dropdown.Option("Ordinance"),
             ft.dropdown.Option("Resolution"),
@@ -690,7 +689,7 @@ def main(page: ft.Page):
     )
     registration_current_office = ft.Dropdown(
         label="Current Office",
-        width=420,
+        width=330,
         options=[
             ft.dropdown.Option("SB Secretariat"),
             ft.dropdown.Option("Office of the Mayor"),
@@ -698,11 +697,11 @@ def main(page: ft.Page):
         ],
         value="SB Secretariat",
     )
-    registration_assigned_to = ft.TextField(label="Assigned To", width=420)
-    registration_author = ft.TextField(label="Author", width=420)
+    registration_assigned_to = ft.TextField(label="Assigned To", width=330)
+    registration_author = ft.TextField(label="Author", width=330)
     registration_priority = ft.Dropdown(
         label="Priority",
-        width=210,
+        width=330,
         options=[
             ft.dropdown.Option("Low"),
             ft.dropdown.Option("Medium"),
@@ -764,28 +763,87 @@ def main(page: ft.Page):
     # attach handler to file_picker
     file_picker.on_result = _on_registration_file
 
-    register_document_dialog = ft.AlertDialog(
-        title=ft.Text("Register Document"),
-        content=ft.Column(
+    def registration_section(title):
+        return ft.Text(
+            title.upper(),
+            size=11,
+            weight=ft.FontWeight.BOLD,
+            color=ft.Colors.BLUE_700,
+        )
+
+    registration_upload_area = ft.Container(
+        content=ft.Row(
             [
-                ft.Text("Create a new document using a minimal form.", size=13, color=ft.Colors.BLUE_GREY_600),
-                registration_title,
-                registration_description,
-                registration_category,
-                registration_document_type,
-                registration_current_office,
-                registration_assigned_to,
-                registration_author,
-                registration_priority,
-                ft.Row([ft.Button("Choose file", on_click=lambda _: file_picker.pick_files()), registration_attachment_label], spacing=12),
+                ft.Container(
+                    content=ft.Icon(ft.Icons.UPLOAD_FILE, color=ft.Colors.BLUE_700, size=24),
+                    padding=10,
+                    bgcolor=ft.Colors.BLUE_GREY_50,
+                    border_radius=10,
+                ),
+                ft.Column(
+                    [
+                        ft.Text("Choose document file", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                        registration_attachment_label,
+                    ],
+                    spacing=3,
+                    expand=True,
+                ),
+                ft.OutlinedButton("Choose file", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: file_picker.pick_files()),
             ],
             spacing=12,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        width=680,
+        padding=12,
+        bgcolor=ft.Colors.BLUE_GREY_50,
+        border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
+        border_radius=10,
+    )
+
+    register_document_dialog = ft.AlertDialog(
+        title=ft.Row(
+            [
+                ft.Container(
+                    content=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=ft.Colors.BLUE_700, size=22),
+                    padding=9,
+                    bgcolor=ft.Colors.BLUE_GREY_50,
+                    border_radius=10,
+                ),
+                ft.Column(
+                    [
+                        ft.Text("Register Document", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ft.Text("Add a new legislative document record.", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ],
+                    spacing=2,
+                ),
+            ],
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        content=ft.Column(
+            [
+                registration_section("Basic Information"),
+                registration_title,
+                registration_description,
+                ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                registration_section("Document Classification"),
+                ft.Row([registration_category, registration_document_type], spacing=12, wrap=True),
+                registration_priority,
+                ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                registration_section("Assignment"),
+                ft.Row([registration_current_office, registration_assigned_to], spacing=12, wrap=True),
+                registration_author,
+                ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                registration_section("Document File"),
+                registration_upload_area,
+            ],
+            spacing=10,
             scroll=ft.ScrollMode.AUTO,
-            width=420,
+            width=700,
         ),
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_register_document_dialog()),
-            ft.Button("Save", on_click=lambda _: submit_register_document()),
+            ft.Button("Save Document", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: submit_register_document(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
         ],
     )
     page.overlay.append(register_document_dialog)
@@ -879,14 +937,25 @@ def main(page: ft.Page):
 
     # --- Multiple / Bulk Registration dialog and upload flow (browser-safe) ---
     bulk_import_files = []  # list of dicts: {name, size, tmp_name, status, progress}
-    bulk_selected_list = ft.Column()
-    bulk_common_title = ft.TextField(label="Common Title (optional)", width=420)
-    bulk_common_description = ft.TextField(label="Common Description", multiline=True, min_lines=2, max_lines=4, width=420)
-    bulk_common_category = ft.Dropdown(label="Category", width=420, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")], value="Legislation")
-    bulk_common_document_type = ft.Dropdown(label="Document Type", width=420, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
-    bulk_common_current_office = ft.Dropdown(label="Current Office", width=420, options=[ft.dropdown.Option("SB Secretariat"), ft.dropdown.Option("Office of the Mayor"), ft.dropdown.Option("Committee on Health")], value="SB Secretariat")
-    bulk_common_assigned_to = ft.TextField(label="Assigned To", width=420)
-    bulk_common_author = ft.TextField(label="Author", width=420)
+    bulk_selected_list = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=0)
+    bulk_selected_count = ft.Text("Selected Files (0)", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800)
+    bulk_selected_list_container = ft.Container(
+        content=bulk_selected_list,
+        width=640,
+        height=200,
+        visible=False,
+        padding=8,
+        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+        border_radius=8,
+        bgcolor=ft.Colors.WHITE,
+    )
+    bulk_common_title = ft.TextField(label="Common Title (optional)", width=320)
+    bulk_common_description = ft.TextField(label="Common Description", multiline=True, min_lines=2, max_lines=3, width=320)
+    bulk_common_category = ft.Dropdown(label="Category", width=210, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")], value="Legislation")
+    bulk_common_document_type = ft.Dropdown(label="Document Type", width=210, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
+    bulk_common_current_office = ft.Dropdown(label="Current Office", width=210, options=[ft.dropdown.Option("SB Secretariat"), ft.dropdown.Option("Office of the Mayor"), ft.dropdown.Option("Committee on Health")], value="SB Secretariat")
+    bulk_common_assigned_to = ft.TextField(label="Assigned To", width=210)
+    bulk_common_author = ft.TextField(label="Author", width=210)
     bulk_common_priority = ft.Dropdown(label="Priority", width=210, options=[ft.dropdown.Option("Low"), ft.dropdown.Option("Medium"), ft.dropdown.Option("High")], value="Medium")
 
     bulk_file_picker = ft.FilePicker(on_result=lambda e: None, on_upload=lambda e: None)
@@ -894,17 +963,28 @@ def main(page: ft.Page):
 
     def _render_bulk_selected_list():
         bulk_selected_list.controls = []
+        bulk_selected_count.value = f"Selected Files ({len(bulk_import_files)})"
+        if not bulk_import_files:
+            bulk_selected_list.controls.append(ft.Text("No files selected", size=11, color=ft.Colors.BLUE_GREY_600))
+        bulk_selected_list_container.visible = bool(bulk_import_files)
         for item in bulk_import_files:
-            prog = ft.ProgressBar(value=item.get("progress", 0.0), width=120) if item.get("progress") is not None else None
             status_text = item.get("status", "")
-            row = ft.Row([
-                ft.Container(content=ft.Text(item.get("name", "-"), size=12, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS), width=150, alignment=ft.Alignment.CENTER_LEFT),
-                ft.Container(content=ft.Text(f"{(item.get('size') or 0)//1024} KB", size=12), width=50, alignment=ft.Alignment.CENTER_LEFT),
-                ft.Container(content=ft.Text(status_text, size=12, color=ft.Colors.GREEN_700 if status_text == "Ready" else ft.Colors.BLUE_GREY_700), width=110, alignment=ft.Alignment.CENTER_LEFT),
-                ft.Container(content=prog or ft.Container(width=120), width=120, alignment=ft.Alignment.CENTER_LEFT),
-                ft.Container(content=ft.IconButton(ft.icons.DELETE, on_click=lambda e, nm=item.get("tmp_name"): _remove_tmp_file(nm)), width=30, alignment=ft.Alignment.CENTER),
-            ], width=520, spacing=8, alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-            bulk_selected_list.controls.append(row)
+            row_controls = [
+                ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=18, color=ft.Colors.BLUE_700),
+                ft.Container(content=ft.Text(item.get("name", "-"), size=12, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS), width=190, alignment=ft.Alignment.CENTER_LEFT),
+                ft.Text(f"{(item.get('size') or 0)//1024} KB", size=11, color=ft.Colors.BLUE_GREY_600),
+                ft.Text(status_text, size=11, color=ft.Colors.GREEN_700 if status_text == "Ready" else ft.Colors.BLUE_GREY_700),
+            ]
+            if item.get("progress") is not None:
+                row_controls.append(ft.ProgressBar(value=item.get("progress", 0.0), width=100))
+            row_controls.append(ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove file", on_click=lambda e, nm=item.get("tmp_name"): _remove_tmp_file(nm)))
+            bulk_selected_list.controls.append(
+                ft.Container(
+                    content=ft.Row(row_controls, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    padding=ft.Padding(4, 6, 4, 6),
+                    border=ft.border.only(bottom=ft.border.all(1, ft.Colors.BLUE_GREY_100)),
+                )
+            )
         page.update()
 
     def _remove_tmp_file(tmp_name):
@@ -975,7 +1055,7 @@ def main(page: ft.Page):
         # reset
         nonlocal bulk_import_files
         bulk_import_files = []
-        bulk_selected_list.controls = []
+        _render_bulk_selected_list()
         bulk_common_title.value = ""
         bulk_common_description.value = ""
         bulk_common_assigned_to.value = ""
@@ -983,41 +1063,82 @@ def main(page: ft.Page):
         bulk_register_dialog.open = True
         page.update()
 
-    bulk_register_dialog = ft.AlertDialog(
-        title=ft.Text("Multiple Document Registration"),
-        content=ft.Column([
-            ft.Text("Select PDF or Word files (PDF, DOC, DOCX)."),
-            ft.Row([ft.Button("Choose files", on_click=lambda _: bulk_file_picker.pick_files(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf","doc","docx"], allow_multiple=True)), ft.Text(" ")]),
-            ft.Text("Selected Files:"),
-            ft.Container(
-                content=ft.Column(
-                    [bulk_selected_list],
-                    width=520,
-                    height=180,
-                    scroll=ft.ScrollMode.AUTO,
-                    spacing=4,
+    def bulk_section_label(title, subtitle):
+        return ft.Column(
+            [
+                ft.Text(title, size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                ft.Text(subtitle, size=11, color=ft.Colors.BLUE_GREY_600),
+            ],
+            spacing=2,
+        )
+
+    bulk_upload_area = ft.Container(
+        content=ft.Column(
+            [
+                ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, color=ft.Colors.BLUE_700, size=32),
+                ft.Text("Drag and drop files here", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                ft.Text("or", size=11, color=ft.Colors.BLUE_GREY_600),
+                ft.OutlinedButton(
+                    "Choose files",
+                    icon=ft.Icons.FOLDER_OPEN_OUTLINED,
+                    on_click=lambda _: bulk_file_picker.pick_files(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf", "doc", "docx"], allow_multiple=True),
                 ),
-                width=520,
-                height=180,
-                border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                padding=8,
-                clip_behavior=ft.ClipBehavior.HARD_EDGE,
-            ),
-            ft.Divider(height=1),
-            ft.Text("Common Document Information"),
-            bulk_common_title,
-            bulk_common_description,
-            bulk_common_category,
-            bulk_common_document_type,
-            bulk_common_current_office,
-            bulk_common_assigned_to,
-            bulk_common_author,
-            bulk_common_priority,
-        ], spacing=8, scroll=ft.ScrollMode.AUTO, width=560),
+                ft.Text("You can select multiple files at once.", size=10, color=ft.Colors.BLUE_GREY_600),
+                bulk_selected_count,
+                bulk_selected_list_container,
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=5,
+        ),
+        width=680,
+        padding=14,
+        border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
+        border_radius=10,
+        bgcolor=ft.Colors.BLUE_GREY_50,
+    )
+
+    bulk_register_dialog = ft.AlertDialog(
+        title=ft.Row(
+            [
+                ft.Container(
+                    content=ft.Icon(ft.Icons.NOTE_ADD_OUTLINED, color=ft.Colors.BLUE_700, size=23),
+                    padding=9,
+                    bgcolor=ft.Colors.BLUE_GREY_50,
+                    border_radius=10,
+                ),
+                ft.Column(
+                    [
+                        ft.Text("Multiple Document Registration", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ft.Text("Upload and register multiple documents at once.", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ],
+                    spacing=2,
+                ),
+                ft.IconButton(icon=ft.Icons.CLOSE, tooltip="Close", on_click=lambda _: close_bulk_register_document_dialog()),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        content=ft.Column(
+            [
+                bulk_section_label("1. Upload Files", "Select PDF or Word files (PDF, DOC, DOCX)."),
+                bulk_upload_area,
+                ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                bulk_section_label("2. Common Document Information", "These details will be applied to all uploaded documents."),
+                ft.Row([bulk_common_title, bulk_common_description], spacing=12, wrap=True),
+                ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                bulk_section_label("3. Document Details", "Set the classification and assignment for all uploaded documents."),
+                ft.Row([bulk_common_category, bulk_common_document_type, bulk_common_priority], spacing=12, wrap=True),
+                ft.Row([bulk_common_current_office, bulk_common_assigned_to, bulk_common_author], spacing=12, wrap=True),
+            ],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            width=700,
+        ),
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_bulk_register_document_dialog()),
-            ft.Button("Validate files", on_click=lambda _: _validate_bulk_files(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-            ft.Button("Confirm Bulk Register", on_click=lambda _: _confirm_bulk_register(), bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE),
+            ft.Button("Validate Files", icon=ft.Icons.CHECK_OUTLINED, on_click=lambda _: _validate_bulk_files(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+            ft.Button("Confirm Bulk Register", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: _confirm_bulk_register(), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
         ],
     )
     page.overlay.append(bulk_register_dialog)
@@ -2941,7 +3062,6 @@ def main(page: ft.Page):
         users_active = sum(1 for user in user_management_data if (user.get("status") or "").lower() == "active")
         users_employees = sum(1 for user in user_management_data if user.get("role") == "Employee")
         users_sb_members = sum(1 for user in user_management_data if user.get("role") == "SB Member")
-        cards = []
         summary_items = [
             {"title": "Total Records", "value": str(total_docs), "detail": "Active + archived documents", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
             {"title": "Active Documents", "value": str(active_docs), "detail": "Currently in process", "icon": ft.Icons.LIBRARY_ADD_CHECK_OUTLINED, "accent": ft.Colors.GREEN_700},
@@ -2949,23 +3069,6 @@ def main(page: ft.Page):
             {"title": "Completed", "value": str(completed_docs), "detail": "Finished workflows", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.TEAL_700},
             {"title": "Archived", "value": str(archived_docs), "detail": "Stored records", "icon": ft.Icons.ARCHIVE_OUTLINED, "accent": ft.Colors.BLUE_GREY_700},
         ]
-        for item in summary_items:
-            cards.append(
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Row([ft.Icon(item["icon"], color=item["accent"], size=22), ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                            ft.Text(item["value"], size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                            ft.Text(item["detail"], size=12, color=ft.Colors.BLUE_GREY_600),
-                        ],
-                        spacing=6,
-                    ),
-                    padding=16,
-                    bgcolor=ft.Colors.WHITE,
-                    border_radius=18,
-                    width=220,
-                )
-            )
 
         user_cards = [
             {"title": "Total Users", "value": str(users_total), "detail": "All configured accounts", "icon": ft.Icons.PEOPLE_ALT_OUTLINED, "accent": ft.Colors.BLUE_700},
@@ -2973,34 +3076,66 @@ def main(page: ft.Page):
             {"title": "Employees", "value": str(users_employees), "detail": "Employee accounts", "icon": ft.Icons.WORK_OUTLINED, "accent": ft.Colors.INDIGO_700},
             {"title": "SB Members", "value": str(users_sb_members), "detail": "Read-only members", "icon": ft.Icons.GROUP_OUTLINED, "accent": ft.Colors.PURPLE_700},
         ]
-        user_cards_row = ft.Row(
-            [
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Row([ft.Icon(item["icon"], color=item["accent"], size=22), ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                            ft.Text(item["value"], size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                            ft.Text(item["detail"], size=12, color=ft.Colors.BLUE_GREY_600),
-                        ],
-                        spacing=6,
-                    ),
-                    padding=16,
-                    bgcolor=ft.Colors.WHITE,
-                    border_radius=18,
-                    width=220,
-                )
-                for item in user_cards
-            ],
-            spacing=12,
-            wrap=True,
-        )
+
+        def metric_card(item):
+            return ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Container(
+                                    content=ft.Icon(item["icon"], color=item["accent"], size=21),
+                                    padding=9,
+                                    bgcolor=ft.Colors.BLUE_GREY_50,
+                                    border_radius=10,
+                                ),
+                                ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                            ],
+                            spacing=9,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Text(item["value"], size=26, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ft.Text(item["detail"], size=11, color=ft.Colors.BLUE_GREY_600),
+                    ],
+                    spacing=8,
+                ),
+                padding=14,
+                bgcolor=ft.Colors.WHITE,
+                border=ft.border.only(bottom=ft.border.all(3, item["accent"])),
+                border_radius=12,
+                width=220,
+            )
+
+        def quick_action(label, detail, icon, color, on_click):
+            return ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(icon, color=ft.Colors.WHITE, size=25),
+                        ft.Column(
+                            [
+                                ft.Text(label, size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                ft.Text(detail, size=11, color=ft.Colors.BLUE_GREY_100),
+                            ],
+                            spacing=3,
+                        ),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, color=ft.Colors.WHITE, size=20),
+                    ],
+                    spacing=12,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(14, 13, 14, 13),
+                bgcolor=color,
+                border_radius=10,
+                on_click=on_click,
+                width=300,
+            )
 
         buttons = [
-            ft.Button("Documents", icon=ft.Icons.DESCRIPTION_OUTLINED, on_click=lambda _: open_documents_module(), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
-            ft.Button("Archived", icon=ft.Icons.ARCHIVE_OUTLINED, on_click=lambda _: open_archived_documents_module(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+            quick_action("Documents", "Manage all documents", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_800, lambda _: open_documents_module()),
+            quick_action("Archived Documents", "View archived records", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_700, lambda _: open_archived_documents_module()),
         ]
         if "view_analytics" in {(p or "").strip().lower().replace(" ", "_") for p in (current_user_permissions or [])} or current_user_role == "Super Administrator":
-            buttons.append(ft.Button("Analytics", icon=ft.Icons.ANALYTICS_OUTLINED, on_click=lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Analytics"), 0)), bgcolor=ft.Colors.TEAL_700, color=ft.Colors.WHITE))
+            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Analytics"), 0))))
 
         normalized_permissions = sorted({str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])})
         if current_user_role == "Super Administrator" and not normalized_permissions:
@@ -3011,50 +3146,107 @@ def main(page: ft.Page):
         dashboard_content = ft.Container(
             content=ft.Column(
                 [
-                    section_header(
-                        "Dashboard",
-                        "Super Administrator overview and quick access.",
-                        ft.Icons.DASHBOARD,
-                        ft.Colors.BLUE_700,
-                    ),
-                    ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
                     ft.Row(
                         [
-                            ft.Text(f"Logged in as: {current_user} ({current_user_role})", size=13, weight=ft.FontWeight.BOLD),
-                            ft.Text("Permissions:", size=13, weight=ft.FontWeight.BOLD),
+                            ft.Container(
+                                content=ft.Icon(ft.Icons.DASHBOARD, color=ft.Colors.BLUE_700, size=24),
+                                padding=10,
+                                bgcolor=ft.Colors.BLUE_GREY_50,
+                                border_radius=10,
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text("Dashboard", size=25, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                                    ft.Text("Super Administrator overview and quick access.", size=12, color=ft.Colors.BLUE_GREY_600),
+                                ],
+                                spacing=2,
+                            ),
                         ],
-                        spacing=16,
-                        wrap=True,
+                        spacing=12,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Container(
-                        content=ft.Text(
-                            ", ".join(normalized_permissions),
-                            size=12,
-                            color=ft.Colors.BLUE_GREY_700,
+                        content=ft.Row(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Container(
+                                            content=ft.Icon(ft.Icons.EMOJI_EVENTS_OUTLINED, color=ft.Colors.AMBER_700, size=25),
+                                            padding=10,
+                                            bgcolor=ft.Colors.WHITE,
+                                            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                                            border_radius=30,
+                                        ),
+                                        ft.Column(
+                                            [
+                                                ft.Text(f"Welcome back, {current_user_role or 'User'}!", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                                                ft.Text("Here's what's happening with your system today.", size=11, color=ft.Colors.BLUE_GREY_600),
+                                                ft.Text(f"Logged in as {current_user} | Permissions: {', '.join(normalized_permissions)}", size=10, color=ft.Colors.BLUE_GREY_500),
+                                            ],
+                                            spacing=2,
+                                        ),
+                                    ],
+                                    spacing=10,
+                                ),
+                                ft.Column(
+                                    [
+                                        ft.Row([ft.Icon(ft.Icons.CALENDAR_TODAY_OUTLINED, size=16, color=ft.Colors.BLUE_GREY_600), ft.Text(date.today().strftime("%B %d, %Y"), size=11, color=ft.Colors.BLUE_GREY_700)], spacing=6),
+                                        ft.Row([ft.Icon(ft.Icons.ACCESS_TIME_OUTLINED, size=16, color=ft.Colors.BLUE_GREY_600), ft.Text(datetime.now().strftime("%I:%M %p").lstrip("0"), size=11, color=ft.Colors.BLUE_GREY_700)], spacing=6),
+                                    ],
+                                    spacing=5,
+                                ),
+                            ],
+                            spacing=10,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            wrap=True,
                         ),
-                        padding=ft.Padding(12, 12, 12, 12),
+                        padding=12,
                         bgcolor=ft.Colors.BLUE_GREY_50,
-                        border_radius=14,
+                        border_radius=10,
                     ),
-                    ft.Row(cards, spacing=12, wrap=True),
-                    ft.Row(buttons, spacing=12),
-                    ft.Text("User and document summary", size=14, weight=ft.FontWeight.BOLD),
-                    user_cards_row,
+                    ft.Text("Overview", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                    ft.Row([metric_card(item) for item in summary_items], spacing=10, run_spacing=10, wrap=True),
+                    ft.Text("Quick Access", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                    ft.Row(buttons, spacing=12, run_spacing=12, wrap=True),
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.PEOPLE_ALT_OUTLINED, color=ft.Colors.BLUE_700, size=21),
+                            ft.Text("User & Document Summary", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Row([metric_card(item) for item in user_cards], spacing=10, run_spacing=10, wrap=True),
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.SHIELD_OUTLINED, color=ft.Colors.BLUE_700, size=22),
+                                ft.Column(
+                                    [
+                                        ft.Text("System Overview", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                                        ft.Text("Monitor and manage your legislative document tracking system efficiently.", size=11, color=ft.Colors.BLUE_GREY_600),
+                                    ],
+                                    spacing=2,
+                                ),
+                            ],
+                            spacing=10,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        padding=12,
+                        bgcolor=ft.Colors.BLUE_GREY_50,
+                        border_radius=10,
+                    ),
                 ],
-                spacing=18,
+                spacing=14,
             ),
             width="100%",
-            padding=24,
+            padding=22,
             bgcolor=ft.Colors.BLUE_GREY_50,
             border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-            border_radius=24,
+            border_radius=18,
         )
 
-        return ft.Column(
-            [dashboard_content],
-            spacing=16,
-            expand=True,
-        )
+        return ft.Column([dashboard_content], spacing=12, tight=True)
 
     def analytics_view():
         return build_analytics_view(
@@ -3063,6 +3255,7 @@ def main(page: ft.Page):
             backend_url=BACKEND_URL,
             open_documents_view=open_documents_module,
             open_archived_view=open_archived_documents_module,
+            page=page,
         )
 
     def users_page_view():
@@ -3070,6 +3263,7 @@ def main(page: ft.Page):
 
     def show_login():
         page.clean()
+        page.scroll = None
         page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         page.vertical_alignment = ft.MainAxisAlignment.CENTER
         page.bgcolor = ft.Colors.BLUE_GREY_50
@@ -3121,6 +3315,7 @@ def main(page: ft.Page):
         def go_back(_=None):
             page.clean()
             page.overlay.clear()
+            page.scroll = None
             page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
             page.vertical_alignment = ft.MainAxisAlignment.START
             page.padding = 0

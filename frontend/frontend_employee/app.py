@@ -79,7 +79,6 @@ def main(page: ft.Page):
     page.title = "LGU Tolosa - Employee System"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.bgcolor = ft.Colors.WHITE
-    page.scroll = ft.ScrollMode.AUTO
     page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.padding = 8
@@ -492,6 +491,7 @@ def main(page: ft.Page):
             backend_url=BACKEND_URL,
             open_documents_view=open_documents_module,
             open_archived_view=None,
+            page=page,
         )
 
     audit_logs_table = ft.DataTable(

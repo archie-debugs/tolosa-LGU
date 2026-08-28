@@ -27,6 +27,46 @@ def render_shell(
     selected_color = ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_50
     page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
 
+    def apply_view_theme(control):
+        if control is None:
+            return
+        if is_dark:
+            if isinstance(control, ft.Text):
+                if control.color in {
+                    ft.Colors.BLUE_GREY_900,
+                    ft.Colors.BLUE_GREY_800,
+                    ft.Colors.BLUE_GREY_700,
+                    ft.Colors.BLUE_GREY_600,
+                    ft.Colors.BLUE_GREY_500,
+                    ft.Colors.BLUE_900,
+                }:
+                    control.color = ft.Colors.BLUE_GREY_100
+            elif isinstance(control, (ft.TextField, ft.Dropdown)):
+                control.bgcolor = "#14212B"
+                control.focused_bgcolor = "#1b2d3a"
+                if isinstance(control, ft.Dropdown):
+                    control.filled = True
+                control.color = ft.Colors.BLUE_GREY_100
+                control.text_style = ft.TextStyle(color=ft.Colors.BLUE_GREY_100)
+                control.label_style = ft.TextStyle(color=ft.Colors.BLUE_GREY_300)
+                control.hint_style = ft.TextStyle(color="#64748b")
+                control.border_color = ft.Colors.WHITE
+                control.focused_border_color = ft.Colors.WHITE
+                if isinstance(control, ft.TextField):
+                    control.cursor_color = "#3B82F6"
+                    if isinstance(control.prefix_icon, ft.Icon):
+                        control.prefix_icon.color = "#334653"
+            elif hasattr(control, "bgcolor") and control.bgcolor in {
+                ft.Colors.WHITE,
+                ft.Colors.BLUE_GREY_50,
+            }:
+                control.bgcolor = ft.Colors.GREY_900 if control.bgcolor == ft.Colors.WHITE else "#26343a"
+        for child in getattr(control, "controls", []) or []:
+            apply_view_theme(child)
+        content = getattr(control, "content", None)
+        if content is not None:
+            apply_view_theme(content)
+
     def night_mode_setting():
         return ft.Switch(
             label="Night mode",
@@ -60,6 +100,17 @@ def render_shell(
         expand=False,
     )
 
+    def natural_height_view(view):
+        if hasattr(view, "expand"):
+            view.expand = False
+        return view
+
+    content_scroll = ft.Column(
+        controls=[natural_height_view(content_view)] if content_view is not None else [],
+        expand=True,
+        scroll=ft.ScrollMode.AUTO,
+    )
+
     # =========================================================
     # CONTENT HOLDER
     # =========================================================
@@ -70,17 +121,7 @@ def render_shell(
         border=None,
         border_radius=0,
         expand=True,
-        content=(
-            content_view
-            if content_view is not None
-            else ft.Container(
-                content=ft.Text(
-                    "Documents view unavailable",
-                    color=ft.Colors.BLUE_GREY_700,
-                ),
-                bgcolor=surface_color,
-            )
-        ),
+        content=content_scroll,
     )
 
     # =========================================================
@@ -96,7 +137,9 @@ def render_shell(
         try:
             next_view = shell_nav_items[index][2]()
             if shell_nav_items[index][1] == "Settings" and shell_nav_items[index][2] is not shared_settings_view:
-                next_view = ft.Column([next_view, night_mode_setting()], spacing=16)
+                next_view = ft.Column([natural_height_view(next_view), night_mode_setting()], spacing=16)
+            next_view = natural_height_view(next_view)
+            apply_view_theme(next_view)
 
         except Exception as exc:
             tb = traceback.format_exc()
@@ -138,7 +181,7 @@ def render_shell(
                 border_radius=8,
             )
 
-        content_holder.content = next_view
+        content_scroll.controls = [next_view]
 
         try:
             page.update()
@@ -151,7 +194,7 @@ def render_shell(
 
             side2 = ft.BorderSide(1, ft.Colors.RED_100)
 
-            content_holder.content = ft.Container(
+            content_scroll.controls = [ft.Container(
                 content=ft.Column(
                     [
                         ft.Text(
@@ -181,7 +224,7 @@ def render_shell(
                 bgcolor=surface_color,
                 border=ft.Border(top=side2, right=side2, bottom=side2, left=side2),
                 border_radius=8,
-            )
+            )]
 
             try:
                 page.update()
@@ -204,8 +247,7 @@ def render_shell(
             pass
         page.bgcolor = surface_color
         content_holder.bgcolor = surface_color
-        build_nav()
-        page.update()
+        switch_view(selected_index)
 
     # =========================================================
     # BUILD NAVIGATION
