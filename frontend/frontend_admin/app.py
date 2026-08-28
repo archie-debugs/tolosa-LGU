@@ -3072,9 +3072,11 @@ def main(page: ft.Page):
         page.clean()
         page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         page.vertical_alignment = ft.MainAxisAlignment.CENTER
+        page.bgcolor = ft.Colors.BLUE_GREY_50
+        page.padding = 24
 
-        username_field = ft.TextField(label="Username", width=300, icon=ft.Icons.PERSON)
-        password_field = ft.TextField(label="Password", width=300, password=True, can_reveal_password=True, icon=ft.Icons.LOCK)
+        username_field = ft.TextField(label="Username", prefix_icon=ft.Icons.PERSON_OUTLINE, autofocus=True)
+        password_field = ft.TextField(label="Password", password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK_OUTLINE)
         login_error = ft.Text("", size=12, color=ft.Colors.RED_700)
 
         def attempt_login(_):
@@ -3119,31 +3121,67 @@ def main(page: ft.Page):
         def go_back(_=None):
             page.clean()
             page.overlay.clear()
-            show_login()
+            page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
+            page.vertical_alignment = ft.MainAxisAlignment.START
+            page.padding = 0
+            page.bgcolor = ft.Colors.WHITE
+            from frontend.Frontend_Homepage.page import build_homepage_view
+            page.add(build_homepage_view(page))
+            page.update()
 
-        login_btn = ft.Button("Log In", width=300, on_click=attempt_login, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE)
+        login_btn = ft.Button("Log In", width=360, on_click=attempt_login, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE)
         back_btn = ft.TextButton("Go Back", on_click=go_back)
 
         page.add(
-            surface_card(
-                ft.Column([
-                    ft.Container(
-                        content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, size=52, color=ft.Colors.BLUE_800),
-                        padding=14,
-                        bgcolor=ft.Colors.BLUE_GREY_50,
-                        border_radius=20,
-                    ),
-                    ft.Text("LGU Tolosa - Sangguniang Bayan", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                    ft.Text("LGU Tolosa Login", size=14, color=ft.Colors.BLUE_GREY_600),
-                    ft.Container(height=4),
-                    username_field,
-                    password_field,
-                    login_error,
-                    ft.Container(height=6),
-                    ft.Row([login_btn, back_btn], alignment=ft.MainAxisAlignment.CENTER, spacing=12),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
-                width=420,
-                padding=36,
+            ft.Container(
+                content=ft.ResponsiveRow(
+                    [
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Icon(ft.Icons.ACCOUNT_BALANCE_OUTLINED, size=56, color=ft.Colors.AMBER_300),
+                                    ft.Text("SANGGUNIAN BAYAN", size=27, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                    ft.Text("MUNICIPALITY OF TOLOSA", size=12, color=ft.Colors.BLUE_GREY_100),
+                                    ft.Divider(height=1, color=ft.Colors.BLUE_GREY_400),
+                                    ft.Text("Legislative Document Tracking Management System", size=15, color=ft.Colors.BLUE_GREY_100),
+                                    ft.Text("Secure access for authorized personnel managing municipal legislative records.", size=13, color=ft.Colors.BLUE_GREY_200),
+                                ],
+                                spacing=16,
+                                horizontal_alignment=ft.CrossAxisAlignment.START,
+                            ),
+                            bgcolor=ft.Colors.BLUE_900,
+                            padding=ft.Padding(42, 42, 42, 42),
+                            col={"xs": 12, "md": 6},
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text("Welcome back", size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
+                                    ft.Text("Sign in to continue to the management system.", size=13, color=ft.Colors.BLUE_GREY_600),
+                                    username_field,
+                                    password_field,
+                                    login_error,
+                                    ft.Container(
+                                        content=login_btn,
+                                        alignment=ft.Alignment.CENTER,
+                                    ),
+                                    ft.Row([back_btn], alignment=ft.MainAxisAlignment.CENTER),
+                                ],
+                                spacing=16,
+                            ),
+                            bgcolor=ft.Colors.WHITE,
+                            padding=ft.Padding(42, 42, 42, 42),
+                            col={"xs": 12, "md": 6},
+                        ),
+                    ],
+                    spacing=0,
+                    run_spacing=0,
+                ),
+                width=920,
+                height=540,
+                border_radius=18,
+                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                shadow=ft.BoxShadow(blur_radius=24, spread_radius=1, color="#102a3a26", offset=ft.Offset(0, 10)),
             )
         )
         page.update()

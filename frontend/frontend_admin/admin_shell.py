@@ -11,6 +11,45 @@ def render_shell(
     initial_selected_index: int = 0,
 ):
     selected_index = initial_selected_index
+    shell_nav_items = list(nav_items)
+    is_dark = page.theme_mode == ft.ThemeMode.DARK
+    try:
+        stored_night_mode = page.client_storage.get("sb_night_mode")
+        if stored_night_mode is not None:
+            is_dark = bool(stored_night_mode)
+    except Exception:
+        pass
+
+    surface_color = ft.Colors.GREY_900 if is_dark else ft.Colors.WHITE
+    sidebar_color = "#111c22" if is_dark else None
+    text_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_GREY_700
+    heading_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_900
+    selected_color = ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_50
+    page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+
+    def night_mode_setting():
+        return ft.Switch(
+            label="Night mode",
+            value=is_dark,
+            on_change=toggle_night_mode,
+        )
+
+    def shared_settings_view():
+        return ft.Container(
+            padding=20,
+            bgcolor=surface_color,
+            content=ft.Column(
+                [
+                    ft.Text("Settings", size=24, weight=ft.FontWeight.BOLD, color=heading_color),
+                    ft.Text("Personalize your workspace appearance.", color=text_color),
+                    night_mode_setting(),
+                ],
+                spacing=16,
+            ),
+        )
+
+    if not any(label == "Settings" for _, label, _ in shell_nav_items):
+        shell_nav_items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", shared_settings_view))
 
     # =========================================================
     # SIDEBAR
@@ -27,7 +66,7 @@ def render_shell(
 
     content_holder = ft.Container(
         padding=0,
-        bgcolor=ft.Colors.WHITE,
+        bgcolor=surface_color,
         border=None,
         border_radius=0,
         expand=True,
@@ -39,7 +78,7 @@ def render_shell(
                     "Documents view unavailable",
                     color=ft.Colors.BLUE_GREY_700,
                 ),
-                bgcolor=ft.Colors.WHITE,
+                bgcolor=surface_color,
             )
         ),
     )
@@ -55,7 +94,9 @@ def render_shell(
         build_nav()
 
         try:
-            next_view = nav_items[index][2]()
+            next_view = shell_nav_items[index][2]()
+            if shell_nav_items[index][1] == "Settings" and shell_nav_items[index][2] is not shared_settings_view:
+                next_view = ft.Column([next_view, night_mode_setting()], spacing=16)
 
         except Exception as exc:
             tb = traceback.format_exc()
@@ -92,7 +133,7 @@ def render_shell(
                     spacing=8,
                 ),
                 padding=16,
-                bgcolor=ft.Colors.WHITE,
+                bgcolor=surface_color,
                 border=ft.Border(top=side, right=side, bottom=side, left=side),
                 border_radius=8,
             )
@@ -137,7 +178,7 @@ def render_shell(
                     spacing=8,
                 ),
                 padding=16,
-                bgcolor=ft.Colors.WHITE,
+                bgcolor=surface_color,
                 border=ft.Border(top=side2, right=side2, bottom=side2, left=side2),
                 border_radius=8,
             )
@@ -146,6 +187,25 @@ def render_shell(
                 page.update()
             except Exception:
                 pass
+
+    def toggle_night_mode(_):
+        nonlocal is_dark, surface_color, sidebar_color, text_color, heading_color, selected_color
+
+        is_dark = not is_dark
+        page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+        surface_color = ft.Colors.GREY_900 if is_dark else ft.Colors.WHITE
+        sidebar_color = "#111c22" if is_dark else None
+        text_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_GREY_700
+        heading_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_900
+        selected_color = ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_50
+        try:
+            page.client_storage.set("sb_night_mode", is_dark)
+        except Exception:
+            pass
+        page.bgcolor = surface_color
+        content_holder.bgcolor = surface_color
+        build_nav()
+        page.update()
 
     # =========================================================
     # BUILD NAVIGATION
@@ -175,12 +235,12 @@ def render_shell(
                             "SB Tolosa",
                             size=14,
                             weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.BLUE_900,
+                            color=heading_color,
                         ),
                         ft.Text(
                             "Admin Panel",
                             size=12,
-                            color=ft.Colors.BLUE_GREY_600,
+                            color=(ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_600),
                         ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -198,9 +258,8 @@ def render_shell(
 
         # -----------------------------------------------------
         # NAVIGATION ITEMS
-        # -----------------------------------------------------
 
-        for idx, (icon, label, _) in enumerate(nav_items):
+        for idx, (icon, label, _) in enumerate(shell_nav_items):
 
             is_selected = idx == selected_index
 
@@ -213,7 +272,7 @@ def render_shell(
                                 color=(
                                     ft.Colors.BLUE_800
                                     if is_selected
-                                    else ft.Colors.BLUE_GREY_700
+                                    else text_color
                                 ),
                             ),
                             ft.Container(width=8),
@@ -223,7 +282,7 @@ def render_shell(
                                 color=(
                                     ft.Colors.BLUE_800
                                     if is_selected
-                                    else ft.Colors.BLUE_GREY_700
+                                    else text_color
                                 ),
                             ),
                         ],
@@ -231,7 +290,7 @@ def render_shell(
                     ),
                     padding=ft.Padding(left=12, top=10, right=12, bottom=10),
                     width=200,
-                    bgcolor=(ft.Colors.BLUE_50 if is_selected else None),
+                    bgcolor=(selected_color if is_selected else None),
                     border_radius=10,
                     on_click=lambda e, i=idx: switch_view(i),
                 )
@@ -279,7 +338,7 @@ def render_shell(
 
     page.horizontal_alignment = ft.CrossAxisAlignment.START
     page.vertical_alignment = ft.MainAxisAlignment.START
-    page.bgcolor = ft.Colors.WHITE
+    page.bgcolor = surface_color
 
     # =========================================================
     # MAIN LAYOUT
@@ -301,7 +360,7 @@ def render_shell(
                         bottom=0,
                     ),
                     content=nav_container,
-                    bgcolor=None,
+                    bgcolor=sidebar_color,
                     border=None,
                     border_radius=0,
                     alignment=ft.Alignment.TOP_CENTER,
@@ -319,7 +378,7 @@ def render_shell(
                         right=8,
                         bottom=8,
                     ),
-                    bgcolor=ft.Colors.WHITE,
+                    bgcolor=surface_color,
                     border=None,
                     border_radius=0,
                     content=content_holder,

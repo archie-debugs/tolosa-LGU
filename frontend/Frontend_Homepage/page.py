@@ -16,13 +16,23 @@ if hasattr(ft, "Alignment") and hasattr(ft, "alignment"):
 
 
 def build_homepage_view(page=None):
+    is_dark = False
+    if page is not None:
+        try:
+            is_dark = bool(page.client_storage.get("sb_night_mode"))
+            page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+        except Exception:
+            pass
+
     navy = "#103449"
-    teal = "#176b70"
+    teal = "#176b70" if not is_dark else "#7fd0cb"
     gold = "#c9953d"
-    ink = "#173042"
-    muted = "#607684"
+    ink = "#173042" if not is_dark else "#eef6f5"
+    muted = "#607684" if not is_dark else "#b8ccca"
     pale = "#eef4f3"
     hero_photo = "sb_tolosa_homepage.jpg"
+
+    night_mode_button = None
 
     def visual_link(label, color=ink, on_click=None):
         return ft.TextButton(
@@ -34,6 +44,26 @@ def build_homepage_view(page=None):
     def open_login(_):
         if page is not None:
             admin_main(page)
+
+    def toggle_night_mode(_):
+        nonlocal is_dark
+        is_dark = not is_dark
+        if page is not None:
+            page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+            page.bgcolor = "#17252b" if is_dark else "#ffffff"
+            try:
+                page.client_storage.set("sb_night_mode", is_dark)
+            except Exception:
+                pass
+            page.clean()
+            page.add(build_homepage_view(page))
+            page.update()
+
+    night_mode_button = ft.IconButton(
+        icon=(ft.Icons.LIGHT_MODE if is_dark else ft.Icons.DARK_MODE),
+        tooltip=("Switch to light mode" if is_dark else "Switch to night mode"),
+        on_click=toggle_night_mode,
+    )
 
     utility_bar = ft.Container(
         content=ft.ResponsiveRow(
@@ -80,7 +110,7 @@ def build_homepage_view(page=None):
             ),
             ft.Column(
                 [
-                    ft.Text("SANGGUNIAN BAYAN", size=15, weight=ft.FontWeight.BOLD, color=navy),
+                    ft.Text("SANGGUNIAN BAYAN", size=15, weight=ft.FontWeight.BOLD, color=ink),
                     ft.Text("MUNICIPALITY OF TOLOSA", size=10, color=muted),
                 ],
                 spacing=1,
@@ -112,6 +142,7 @@ def build_homepage_view(page=None):
                 ft.Container(
                     content=ft.Row(
                         [
+                            night_mode_button,
                             visual_link("Login", muted, on_click=open_login),
                             ft.ElevatedButton(
                                 "Public Documents",
@@ -129,7 +160,7 @@ def build_homepage_view(page=None):
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        bgcolor="#ffffff",
+        bgcolor="#23343a" if is_dark else "#ffffff",
         padding=ft.Padding(28, 16, 28, 16),
         shadow=ft.BoxShadow(blur_radius=12, color="#183b4a12", offset=ft.Offset(0, 3)),
     )
@@ -159,10 +190,6 @@ def build_homepage_view(page=None):
                             bgcolor=navy,
                             style=ft.ButtonStyle(padding=ft.Padding(18, 13, 18, 13)),
                         ),
-                        ft.TextButton(
-                            text="LEARN ABOUT THE SYSTEM",
-                            style=ft.ButtonStyle(color=navy, padding=ft.Padding(8, 13, 8, 13)),
-                        ),
                     ],
                     spacing=8,
                     wrap=True,
@@ -170,7 +197,7 @@ def build_homepage_view(page=None):
             ],
             spacing=18,
         ),
-        bgcolor="#ffffff",
+        bgcolor="#1d2d33" if is_dark else "#ffffff",
         padding=ft.Padding(30, 34, 30, 34),
         col={"xs": 12, "md": 5},
     )
@@ -185,7 +212,7 @@ def build_homepage_view(page=None):
 
     hero = ft.Container(
         content=ft.ResponsiveRow([hero_content, hero_image], spacing=34, run_spacing=24),
-        bgcolor="#f7faf9",
+        bgcolor="#1d2d33" if is_dark else "#f7faf9",
         padding=ft.Padding(34, 46, 34, 54),
     )
 
@@ -220,7 +247,7 @@ def build_homepage_view(page=None):
             spacing=26,
             run_spacing=14,
         ),
-        bgcolor="#ffffff",
+        bgcolor="#23343a" if is_dark else "#ffffff",
         padding=ft.Padding(30, 22, 30, 22),
         border=ft.border.only(top=ft.border.all(1, "#dce7e5"), bottom=ft.border.all(1, "#dce7e5")),
     )
@@ -260,7 +287,7 @@ def build_homepage_view(page=None):
             run_spacing=22,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        bgcolor="#f7faf9",
+        bgcolor="#1d2d33" if is_dark else "#f7faf9",
         border=ft.border.only(top=ft.border.all(1, "#dce7e5"), bottom=ft.border.all(1, "#dce7e5")),
         padding=ft.Padding(44, 42, 44, 42),
         key="about-section",
@@ -357,7 +384,7 @@ def build_homepage_view(page=None):
             run_spacing=24,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        bgcolor="#ffffff",
+        bgcolor="#23343a" if is_dark else "#ffffff",
         padding=ft.Padding(44, 46, 44, 46),
         border=ft.border.only(top=ft.border.all(1, "#dce7e5")),
         key="announcements-section",
@@ -372,7 +399,7 @@ def build_homepage_view(page=None):
             spacing=12,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        bgcolor="#ffffff",
+        bgcolor="#1d2d33" if is_dark else "#ffffff",
         padding=ft.Padding(40, 44, 40, 44),
     )
 
