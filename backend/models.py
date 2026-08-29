@@ -96,6 +96,7 @@ class User(Base):
     permissions = Column(Text, nullable=True, default="[]")
     status = Column(String, nullable=False, default="Active", index=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
+    last_login = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 

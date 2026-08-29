@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 from ..database import get_db
 from .. import models
 from ..core import (
@@ -14,6 +16,15 @@ from ..core import (
 from ..auth_jwt import create_access_token, create_refresh_token, decode_refresh_token
 
 router = APIRouter()
+
+
+class UserUpdate(BaseModel):
+    full_name: str
+    username: str
+    email: str
+    role: str
+    status: str
+    permissions: list[str] = []
 
 
 @router.post("/auth/register")
@@ -108,11 +119,113 @@ def list_users(
             "role": normalize_user_role(user.role),
             "status": getattr(user, "status", "Active"),
             "permissions": sorted(list(normalize_permissions(getattr(user, "permissions", None)))),
-            "last_login": None,
+            "last_login": user.last_login.isoformat() if user.last_login else None,
             "created": user.created_at.isoformat() if user.created_at else None,
         }
         for user in users
     ]
+
+
+@router.put("/auth/users/{user_id}")
+def update_user(
+    user_id: int,
+    payload: UserUpdate,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if normalize_user_role(user.role) == "Super Administrator":
+        raise HTTPException(status_code=400, detail="The Super Administrator account cannot be edited")
+
+    normalized_role = normalize_user_role(payload.role)
+    if normalized_role not in {"Employee", "SB Member"}:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    normalized_status = payload.status.strip().capitalize()
+    if normalized_status not in {"Active", "Inactive"}:
+        raise HTTPException(status_code=400, detail="Status must be Active or Inactive")
+    if not payload.username.strip() or not payload.full_name.strip() or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Full name, email, and username are required")
+
+    duplicate = db.query(models.User).filter(models.User.username == payload.username.strip(), models.User.id != user_id).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Username already exists")
+
+    user.full_name = payload.full_name.strip()
+    user.username = payload.username.strip()
+    user.email = payload.email.strip()
+    user.role = normalized_role
+    user.permissions = str(list(normalize_permissions(payload.permissions)))
+    user.status = normalized_status
+    user.is_active = normalized_status == "Active"
+    db.commit()
+    record_audit_log(
+        db,
+        actor=current_admin.username,
+        action="USER_UPDATED",
+        target_type="User",
+        target_id=str(user.id),
+        details=f"{current_admin.username} updated account {user.username}",
+    )
+    return {"message": "User updated successfully", "id": user.id}
+
+
+@router.delete("/auth/users/{user_id}")
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if normalize_user_role(user.role) == "Super Administrator":
+        raise HTTPException(status_code=400, detail="The Super Administrator account cannot be deleted")
+
+    username = user.username
+    db.delete(user)
+    db.commit()
+    record_audit_log(
+        db,
+        actor=current_admin.username,
+        action="USER_DELETED",
+        target_type="User",
+        target_id=str(user_id),
+        details=f"{current_admin.username} deleted account {username}",
+    )
+    return {"message": "User deleted successfully", "id": user_id}
+
+
+@router.post("/auth/users/{user_id}/status")
+def update_user_status(
+    user_id: int,
+    status: str = Form(...),
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    normalized_status = status.strip().capitalize()
+    if normalized_status not in {"Active", "Inactive"}:
+        raise HTTPException(status_code=400, detail="Status must be Active or Inactive")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if normalize_user_role(user.role) == "Super Administrator":
+        raise HTTPException(status_code=400, detail="The Super Administrator account cannot be deactivated")
+
+    user.status = normalized_status
+    user.is_active = normalized_status == "Active"
+    db.commit()
+    record_audit_log(
+        db,
+        actor=current_admin.username,
+        action=f"USER_{normalized_status.upper()}",
+        target_type="User",
+        target_id=str(user.id),
+        details=f"{current_admin.username} changed {user.username} status to {normalized_status}",
+    )
+    return {"message": f"User {normalized_status.lower()} successfully", "id": user.id, "status": normalized_status}
 
 
 @router.post("/auth/login")
@@ -144,6 +257,8 @@ def login_user(
         target_id=user.username,
         details="Successful login",
     )
+    user.last_login = datetime.now(timezone.utc)
+    db.commit()
 
     access_token = create_access_token({"sub": user.username})
     refresh_token = create_refresh_token({"sub": user.username})
@@ -181,8 +296,16 @@ def refresh_access_token(
     if not user or not getattr(user, "is_active", True):
         raise HTTPException(status_code=401, detail="User no longer active")
 
+    role = normalize_user_role(user.role)
+    permissions = list(normalize_permissions(getattr(user, "permissions", None)))
+    if not permissions:
+        permissions = get_default_permissions_for_role(role)
+
     return {
         "access_token": create_access_token({"sub": user.username}),
         "refresh_token": create_refresh_token({"sub": user.username}),
+        "username": user.username,
+        "role": role,
+        "permissions": permissions,
         "token_type": "bearer",
     }

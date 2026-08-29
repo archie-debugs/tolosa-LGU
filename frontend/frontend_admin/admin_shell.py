@@ -343,6 +343,7 @@ def render_shell(
         # -----------------------------------------------------
 
         nav_container.controls.append(
+
             ft.Container(
                 content=ft.Row(
                     [
@@ -395,13 +396,18 @@ def render_shell(
 
                 ft.Container(
                     width=220,
+                    height=float("inf"),
                     padding=ft.Padding(
                         left=0,
                         top=8,
                         right=6,
                         bottom=0,
                     ),
-                    content=nav_container,
+                    content=ft.Column(
+                        controls=[nav_container],
+                        expand=True,
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
                     bgcolor=sidebar_color,
                     border=None,
                     border_radius=0,

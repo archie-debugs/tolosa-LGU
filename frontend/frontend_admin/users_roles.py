@@ -12,15 +12,25 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "Archive Documents",
         "Restore Documents",
         "View Documents",
+        "Search Documents",
+        "Filter Documents",
+        "View Document Details",
         "Import Documents",
         "Export Documents",
         "Download Documents",
         "Print Documents",
+        "Update Document Status",
     ],
     "QR Code": [
         "Generate QR Codes",
         "Print QR Codes",
         "View QR Tracking",
+    ],
+    "Document Requests": [
+        "View Document Requests",
+        "Approve Document Requests",
+        "Reject Document Requests",
+        "Fulfill Document Requests",
     ],
     "Users & Roles": [
         "Create Users",
@@ -129,7 +139,7 @@ def build_users_roles_table(
     open_view_user_dialog,
     open_edit_user_dialog,
     open_reset_password_dialog,
-    toggle_user_status,
+    delete_user,
 ):
     user_rows = []
     for user in users_data:
@@ -140,21 +150,21 @@ def build_users_roles_table(
         permissions = user.get("permissions") or []
         last_login = user.get("last_login", "—")
         created = user.get("created", "—")
-        is_active = status.lower() == "active"
-
-        action_buttons = ft.Row(
-            [
-                ft.TextButton("View", on_click=lambda _, item=user: open_view_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
-                ft.TextButton("Edit", on_click=lambda _, item=user: open_edit_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
-                ft.TextButton("Reset Password", on_click=lambda _, item=user: open_reset_password_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
-                ft.TextButton("Deactivate" if is_active else "Activate", on_click=lambda _, item=user: toggle_user_status(item), style=ft.ButtonStyle(color=ft.Colors.RED_700 if is_active else ft.Colors.GREEN_700)),
+        action_buttons = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="User actions",
+            items=[
+                ft.PopupMenuItem(content=ft.Text("View"), on_click=lambda _, item=user: open_view_user_dialog(item)),
+                ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, item=user: open_edit_user_dialog(item)),
+                ft.PopupMenuItem(content=ft.Text("Reset Password"), on_click=lambda _, item=user: open_reset_password_dialog(item)),
+                ft.PopupMenuItem(content=ft.Text("Delete"), on_click=lambda _, item=user: delete_user(item)),
             ],
-            spacing=4,
         )
 
         user_rows.append(
             ft.DataRow(
                 cells=[
+                    ft.DataCell(action_buttons),
                     ft.DataCell(
                         ft.Column(
                             [
@@ -171,13 +181,13 @@ def build_users_roles_table(
                     ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
                     ft.DataCell(ft.Text(last_login, size=12)),
                     ft.DataCell(ft.Text(created, size=12)),
-                    ft.DataCell(action_buttons),
                 ]
             )
         )
 
     table = ft.DataTable(
         columns=[
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("User", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD, size=12)),
@@ -185,7 +195,6 @@ def build_users_roles_table(
             ft.DataColumn(ft.Text("Permissions", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Last Login", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Created", weight=ft.FontWeight.BOLD, size=12)),
-            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
         ],
         rows=user_rows,
         width=1600,
@@ -231,7 +240,7 @@ def build_users_roles_view(
     open_view_user_dialog,
     open_edit_user_dialog,
     open_reset_password_dialog,
-    toggle_user_status,
+    delete_user,
     page,
     surface_card,
     section_header,
@@ -247,21 +256,21 @@ def build_users_roles_view(
         permissions = user.get("permissions") or []
         last_login = user.get("last_login", "—")
         created = user.get("created", "—")
-        is_active = status.lower() == "active"
-
-        action_buttons = ft.Row(
-            [
-                ft.TextButton("View", on_click=lambda _, item=user: open_view_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
-                ft.TextButton("Edit", on_click=lambda _, item=user: open_edit_user_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
-                ft.TextButton("Reset Password", on_click=lambda _, item=user: open_reset_password_dialog(item), style=ft.ButtonStyle(color=ft.Colors.BLUE_700)),
-                ft.TextButton("Deactivate" if is_active else "Activate", on_click=lambda _, item=user: toggle_user_status(item), style=ft.ButtonStyle(color=ft.Colors.RED_700 if is_active else ft.Colors.GREEN_700)),
+        action_buttons = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="User actions",
+            items=[
+                ft.PopupMenuItem(content=ft.Text("View"), on_click=lambda _, item=user: open_view_user_dialog(item)),
+                ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, item=user: open_edit_user_dialog(item)),
+                ft.PopupMenuItem(content=ft.Text("Reset Password"), on_click=lambda _, item=user: open_reset_password_dialog(item)),
+                ft.PopupMenuItem(content=ft.Text("Delete"), on_click=lambda _, item=user: delete_user(item)),
             ],
-            spacing=4,
         )
 
         user_rows.append(
             ft.DataRow(
                 cells=[
+                    ft.DataCell(action_buttons),
                     ft.DataCell(
                         ft.Column(
                             [
@@ -278,13 +287,13 @@ def build_users_roles_view(
                     ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
                     ft.DataCell(ft.Text(last_login, size=12)),
                     ft.DataCell(ft.Text(created, size=12)),
-                    ft.DataCell(action_buttons),
                 ]
             )
         )
 
     table = ft.DataTable(
         columns=[
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("User", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD, size=12)),
@@ -292,7 +301,6 @@ def build_users_roles_view(
             ft.DataColumn(ft.Text("Permissions", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Last Login", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Created", weight=ft.FontWeight.BOLD, size=12)),
-            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
         ],
         rows=user_rows,
         width=1600,

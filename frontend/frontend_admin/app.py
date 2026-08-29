@@ -101,6 +101,7 @@ import mimetypes
 import os
 import sys
 import json
+import ast
 import re
 import secrets
 from pathlib import Path
@@ -128,7 +129,7 @@ from frontend.frontend_admin.committees import build_committees_view
 from frontend.frontend_admin.documents import build_documents_view
 from frontend.frontend_admin.audit_logs import build_audit_logs_view
 from frontend.frontend_admin.analytics import build_analytics_view
-from frontend.frontend_admin.users_roles import build_users_roles_table, build_users_roles_view
+from frontend.frontend_admin.users_roles import build_users_roles_table, build_users_roles_view, EMPLOYEE_PERMISSION_GROUPS
 from frontend.frontend_admin.admin_shell import render_shell
 
 def main(page: ft.Page):
@@ -144,6 +145,30 @@ def main(page: ft.Page):
     current_user_permissions = []
     runtime_token = None
     refresh_token = None
+
+    def has_permission(permission):
+        normalized_role = (current_user_role or "").strip().lower()
+        if normalized_role == "super administrator":
+            return True
+        raw_permissions = current_user_permissions or []
+        if isinstance(raw_permissions, str):
+            try:
+                raw_permissions = json.loads(raw_permissions)
+            except (TypeError, ValueError):
+                try:
+                    raw_permissions = ast.literal_eval(raw_permissions)
+                except (SyntaxError, ValueError):
+                    raw_permissions = [raw_permissions]
+        if isinstance(raw_permissions, dict):
+            raw_permissions = raw_permissions.keys()
+        normalized_permissions = {
+            str(item).strip().lower().replace(" ", "_")
+            for item in raw_permissions
+        }
+        return permission.strip().lower().replace(" ", "_") in normalized_permissions or "*" in normalized_permissions
+
+    def is_employee():
+        return (current_user_role or "").strip().lower() == "employee"
 
     def save_session_state():
         try:
@@ -167,8 +192,12 @@ def main(page: ft.Page):
         except Exception:
             pass
 
-    def refresh_runtime_token_if_needed():
-        nonlocal runtime_token, refresh_token
+    def refresh_runtime_token_if_needed(force=False):
+        nonlocal current_user_role, current_user_permissions, runtime_token, refresh_token
+        if force:
+            should_refresh = True
+        else:
+            should_refresh = False
         if not runtime_token or not refresh_token:
             return
         try:
@@ -178,7 +207,7 @@ def main(page: ft.Page):
                 payload_part += '=' * (-len(payload_part) % 4)
                 payload = json.loads(base64.urlsafe_b64decode(payload_part))
                 exp = payload.get('exp')
-                if exp is not None and int(exp) - int(time.time()) > 300:
+                if exp is not None and int(exp) - int(time.time()) > 300 and not should_refresh:
                     return
         except Exception:
             pass
@@ -194,6 +223,10 @@ def main(page: ft.Page):
                 body = resp.json()
                 runtime_token = body.get("access_token") or runtime_token
                 refresh_token = body.get("refresh_token") or refresh_token
+                if body.get("role"):
+                    current_user_role = body["role"]
+                if body.get("permissions") is not None:
+                    current_user_permissions = body["permissions"]
                 save_session_state()
         except Exception:
             pass
@@ -2008,11 +2041,15 @@ def main(page: ft.Page):
                     ),
                 )
             )
-            actions = [
-                ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
-                ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _: show_document_notice("Download action preview enabled.")),
-                ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
-            ]
+            actions = []
+            if has_permission("view_document_details"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)))
+            if has_permission("download_documents"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _: show_document_notice("Download action preview enabled.")))
+            if has_permission("edit_documents"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _: show_document_notice("Edit action available.")))
+            if has_permission("archive_documents"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)))
             rows.append(
                 ft.DataRow(
                     cells=[
@@ -2084,17 +2121,15 @@ def main(page: ft.Page):
                     ),
                 )
             )
-            if include_archive_action:
-                actions = [
-                    ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
-                    ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)),
-                ]
-            else:
-                actions = [
-                    ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)),
-                    ft.PopupMenuItem(content=ft.Text("Restore Document"), on_click=lambda _, d=doc: show_document_notice("Restore not implemented.")),
-                    ft.PopupMenuItem(content=ft.Text("Delete Document"), on_click=lambda _, d=doc: show_document_notice("Permanent delete not implemented.")),
-                ]
+            actions = []
+            if has_permission("view_document_details"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)))
+            if include_archive_action and has_permission("archive_documents"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)))
+            if not include_archive_action and has_permission("restore_documents"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("Restore Document"), on_click=lambda _, d=doc: confirm_restore_archived_document(d)))
+            if not include_archive_action and has_permission("delete_documents"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("Delete Document"), on_click=lambda _, d=doc: confirm_permanent_delete_archived_document(d)))
             rows.append(
                 ft.DataRow(
                     cells=[
@@ -2155,8 +2190,9 @@ def main(page: ft.Page):
                                     icon=ft.Icons.MORE_VERT,
                                     tooltip="Archived document actions",
                                     items=[
-                                        ft.PopupMenuItem(content=ft.Text("Restore"), on_click=lambda _, d=doc: confirm_restore_archived_document(d)),
-                                        ft.PopupMenuItem(content=ft.Text("Delete Permanently"), on_click=lambda _, d=doc: confirm_permanent_delete_archived_document(d)),
+                                        *([ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d))] if has_permission("view_document_details") else []),
+                                        *([ft.PopupMenuItem(content=ft.Text("Restore"), on_click=lambda _, d=doc: confirm_restore_archived_document(d))] if has_permission("restore_documents") else []),
+                                        *([ft.PopupMenuItem(content=ft.Text("Delete Permanently"), on_click=lambda _, d=doc: confirm_permanent_delete_archived_document(d))] if has_permission("delete_documents") else []),
                                     ],
                                 ),
                                 width=90,
@@ -2179,8 +2215,7 @@ def main(page: ft.Page):
     def load_archived_documents_table():
         try:
             # Permission check to avoid unnecessary backend calls when user cannot view documents
-            normalized_permissions = {str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])}
-            if not ("view_documents" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator"):
+            if not has_permission("view_documents"):
                 archived_documents_data[:] = []
                 archived_documents_table.rows = []
                 archived_documents_empty_state.visible = True
@@ -2370,8 +2405,7 @@ def main(page: ft.Page):
     def load_documents_table():
         try:
             # Check permissions locally before requesting documents to avoid backend permission errors.
-            normalized_permissions = {str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])}
-            if not ("view_documents" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator"):
+            if not has_permission("view_documents"):
                 documents_data[:] = []
                 documents_table.rows = []
                 documents_empty_state.visible = True
@@ -2434,17 +2468,17 @@ def main(page: ft.Page):
             print("documents_view: building document controls")
             documents_controls = {
                 "summary_cards": build_document_summary_cards(),
-                "search_field": documents_search_field,
-                "status_filter": documents_status_filter,
-                "category_filter": documents_category_filter,
-                "type_filter": documents_type_filter,
-                "priority_filter": documents_filter_priority,
-                "assigned_filter": documents_assigned_filter,
-                "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_register_document_dialog()),
-                "bulk_register_button": ft.Button("Multiple Registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register_document_dialog()),
+                "search_field": documents_search_field if has_permission("search_documents") else None,
+                "status_filter": documents_status_filter if has_permission("filter_documents") else None,
+                "category_filter": documents_category_filter if has_permission("filter_documents") else None,
+                "type_filter": documents_type_filter if has_permission("filter_documents") else None,
+                "priority_filter": documents_filter_priority if has_permission("filter_documents") else None,
+                "assigned_filter": documents_assigned_filter if has_permission("filter_documents") else None,
+                "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_register_document_dialog()) if has_permission("register_documents") else None,
+                "bulk_register_button": ft.Button("Multiple Registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register_document_dialog()) if has_permission("import_documents") else None,
                 "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
-                "qr_monitor_button": ft.OutlinedButton("QR Monitor", icon=ft.Icons.QR_CODE_2, on_click=lambda _: open_qr_monitor()),
-                "qr_labels_button": ft.OutlinedButton("Download QR Labels", icon=ft.Icons.PRINT, on_click=lambda _: open_qr_label_download_dialog()),
+                "qr_monitor_button": ft.OutlinedButton("QR Monitor", icon=ft.Icons.QR_CODE_2, on_click=lambda _: open_qr_monitor()) if has_permission("view_qr_tracking") else None,
+                "qr_labels_button": ft.OutlinedButton("Download QR Labels", icon=ft.Icons.PRINT, on_click=lambda _: open_qr_label_download_dialog()) if has_permission("print_qr_codes") else None,
                 "export_button": None,
                 "print_button": None,
                 "import_button": None,
@@ -2478,18 +2512,18 @@ def main(page: ft.Page):
                         [
                             section_header(
                                 "Settings",
-                                "System configuration and operational preferences.",
+                                "Personal workspace preferences.",
                                 ft.Icons.SETTINGS,
                                 ft.Colors.BLUE_GREY_700,
                             ),
                             ft.Divider(height=1),
                             ft.Text(
-                                "This admin system provides operational monitoring, user management, and audit log visibility.",
+                                "Customize the appearance of your workspace without changing system configuration.",
                                 size=13,
                                 color=ft.Colors.BLUE_GREY_600,
                             ),
                             ft.Text(
-                                "Update backend deployment or environment settings to adjust service behavior.",
+                                "Use the appearance controls in the sidebar to switch between light and dark mode.",
                                 size=13,
                                 color=ft.Colors.BLUE_GREY_600,
                             ),
@@ -2499,6 +2533,71 @@ def main(page: ft.Page):
                 )
             ],
             expand=True,
+        )
+
+    def account_view():
+        refresh_runtime_token_if_needed(force=True)
+        refreshed_nav = build_nav_items()
+        if [item[1] for item in refreshed_nav] != [item[1] for item in nav_items]:
+            nav_items[:] = refreshed_nav
+            render_shell(
+                page,
+                current_user,
+                logout_user,
+                nav_items,
+                ft.Column([]),
+                initial_selected_index=next(
+                    (index for index, item in enumerate(nav_items) if item[1] == "My Account"),
+                    0,
+                ),
+            )
+            return ft.Column([])
+        visible_permissions = current_user_permissions or []
+        if isinstance(visible_permissions, str):
+            try:
+                visible_permissions = json.loads(visible_permissions)
+            except (TypeError, ValueError):
+                visible_permissions = [visible_permissions]
+        return ft.Column(
+            [
+                surface_card(
+                    ft.Column(
+                        [
+                            section_header(
+                                "My Account",
+                                "Your signed-in employee account information.",
+                                ft.Icons.PERSON_OUTLINE,
+                                ft.Colors.BLUE_GREY_700,
+                            ),
+                            ft.Divider(height=1),
+                            ft.Row([ft.Text("Username", weight=ft.FontWeight.BOLD, width=150), ft.Text(current_user or "-")]),
+                            ft.Row([ft.Text("Full Name", weight=ft.FontWeight.BOLD, width=150), ft.Text("Not provided by the current login response")]),
+                            ft.Row([ft.Text("Email", weight=ft.FontWeight.BOLD, width=150), ft.Text("Not provided by the current login response")]),
+                            ft.Row([ft.Text("Role", weight=ft.FontWeight.BOLD, width=150), ft.Text(current_user_role or "-")]),
+                            ft.Row([ft.Text("Account Status", weight=ft.FontWeight.BOLD, width=150), ft.Text("Active")]),
+                            ft.Text("Assigned Permissions", weight=ft.FontWeight.BOLD, size=14),
+                            ft.Text(", ".join(sorted(str(item) for item in visible_permissions)) or "None assigned", size=12),
+                        ],
+                        spacing=14,
+                    ),
+                )
+            ],
+            expand=False,
+        )
+
+    def qr_tracking_view():
+        open_qr_monitor()
+        return ft.Column(
+            [
+                section_header(
+                    "QR Tracking",
+                    "Monitor document QR activity authorized for this account.",
+                    ft.Icons.QR_CODE_2,
+                    ft.Colors.BLUE_GREY_700,
+                ),
+                ft.OutlinedButton("Refresh QR Monitor", icon=ft.Icons.REFRESH, on_click=open_qr_monitor),
+            ],
+            spacing=14,
         )
 
     def load_user_management_data():
@@ -2537,7 +2636,7 @@ def main(page: ft.Page):
             lambda item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
             lambda item=None: open_edit_user_dialog(item or visible_users[0] if visible_users else {}),
             lambda item=None: open_reset_password_dialog(item or visible_users[0] if visible_users else {}),
-            lambda item=None: toggle_user_status(item or visible_users[0] if visible_users else {}),
+            lambda item=None: delete_user(item or visible_users[0] if visible_users else {}),
         )
         user_no_users_notice.visible = len(visible_users) == 0
         page.update()
@@ -2689,7 +2788,7 @@ def main(page: ft.Page):
             lambda _, item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
             lambda _, item=None: open_edit_user_dialog(item or visible_users[0] if visible_users else {}),
             lambda _, item=None: open_reset_password_dialog(item or visible_users[0] if visible_users else {}),
-            lambda _, item=None: toggle_user_status(item or visible_users[0] if visible_users else {}),
+            lambda _, item=None: delete_user(item or visible_users[0] if visible_users else {}),
             page,
             surface_card,
             section_header,
@@ -2715,22 +2814,49 @@ def main(page: ft.Page):
         )
 
         permission_area = ft.Column([], spacing=8)
+        selected_create_permissions = set()
+        create_master_check = ft.Checkbox(label="Select All Permissions", tristate=True, scale=1.05)
+
+        def create_permission_key(label):
+            return label.strip().lower().replace(" ", "_")
+
+        def update_create_master():
+            total = sum(len(items) for items in EMPLOYEE_PERMISSION_GROUPS.values())
+            count = len(selected_create_permissions)
+            create_master_check.value = True if count == total else None if count else False
+
+        def set_all_create_permissions(event):
+            selected_create_permissions.clear()
+            if event.control.value:
+                selected_create_permissions.update(create_permission_key(label) for labels in EMPLOYEE_PERMISSION_GROUPS.values() for label in labels)
+            render_permission_section()
 
         def render_permission_section():
             permission_area.controls.clear()
             if role_choice.value == "Employee":
-                permission_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=13, color=ft.Colors.BLUE_GREY_800))
-                for section_name, perms in {
-                    "Dashboard": ["View Dashboard"],
-                    "Documents": ["Register Documents", "Edit Documents", "Delete Documents", "Archive Documents", "Restore Documents", "View Documents", "Import Documents", "Export Documents", "Download Documents", "Print Documents"],
-                    "QR Code": ["Generate QR Codes", "Print QR Codes", "View QR Tracking"],
-                    "Users & Roles": ["Create Users", "Edit Users", "Reset Passwords", "Activate Users", "Deactivate Users", "Delete Users", "Assign Roles", "Manage Permissions"],
-                    "Committees": ["Add Committee", "Edit Committee", "Delete Committee"],
-                    "Audit Logs": ["View Audit Logs", "Export Audit Logs"],
-                    "Settings": ["Modify System Settings"],
-                }.items():
-                    permission_area.controls.append(ft.Text(section_name, weight=ft.FontWeight.W_600, size=12, color=ft.Colors.BLUE_GREY_700))
-                    permission_area.controls.append(ft.Row([ft.Checkbox(label=perm, value=False, scale=0.9) for perm in perms], spacing=8, run_spacing=6, wrap=True))
+                permission_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=16, color=ft.Colors.BLUE_GREY_800))
+                permission_area.controls.append(ft.Text("Control access to the features available to this employee.", size=12, color=ft.Colors.BLUE_GREY_600))
+                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{len(selected_create_permissions)} of {sum(len(items) for items in EMPLOYEE_PERMISSION_GROUPS.values())} permissions selected", size=12)], spacing=12))
+                for section_name, perms in EMPLOYEE_PERMISSION_GROUPS.items():
+                    group_key = section_name
+                    group_count = sum(create_permission_key(perm) in selected_create_permissions for perm in perms)
+                    group_check = ft.Checkbox(label=f"Select All  •  {group_count} of {len(perms)} selected", tristate=True, value=True if group_count == len(perms) else None if group_count else False, on_change=lambda event, name=group_key: set_create_group(name, event))
+                    permission_area.controls.append(
+                        ft.Container(
+                            content=ft.ExpansionTile(
+                                title=ft.Text(section_name, weight=ft.FontWeight.BOLD, size=13),
+                                subtitle=ft.Text(f"{len(perms)} permissions", size=11),
+                                leading=ft.Icon(ft.Icons.FOLDER_OUTLINED, color=ft.Colors.BLUE_700),
+                                controls=[ft.Column([ft.Row([ft.Checkbox(label=perm, value=create_permission_key(perm) in selected_create_permissions, scale=0.9, on_change=lambda event, key=create_permission_key(perm): update_create_permission(key, event)),], spacing=0) for perm in perms], spacing=2), ft.Row([group_check], spacing=8)],
+                                initially_expanded=False,
+                                maintain_state=True,
+                                bgcolor=ft.Colors.BLUE_GREY_50,
+                                collapsed_bgcolor=ft.Colors.WHITE,
+                            ),
+                            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                            border_radius=10,
+                        )
+                    )
             else:
                 permission_area.controls.append(ft.Text("SB Member Access", weight=ft.FontWeight.BOLD, size=13, color=ft.Colors.BLUE_GREY_800))
                 permission_area.controls.append(ft.Column([
@@ -2744,18 +2870,27 @@ def main(page: ft.Page):
                 permission_area.controls.append(ft.Text("SB Members do not have QR Tracking, registration, editing, or user-management access.", size=11, color=ft.Colors.BLUE_GREY_600))
             page.update()
 
-        role_choice.on_change = lambda _: render_permission_section()
-        render_permission_section()
+        def update_create_permission(key, event):
+            if event.control.value:
+                selected_create_permissions.add(key)
+            else:
+                selected_create_permissions.discard(key)
+            update_create_master()
+            render_permission_section()
 
-        def collect_selected_permissions(control):
-            permissions = []
-            if isinstance(control, ft.Checkbox):
-                if control.value:
-                    permissions.append(control.label)
-            elif hasattr(control, "controls"):
-                for child in control.controls:
-                    permissions.extend(collect_selected_permissions(child))
-            return permissions
+        def set_create_group(group_name, event):
+            for label in EMPLOYEE_PERMISSION_GROUPS[group_name]:
+                key = create_permission_key(label)
+                if event.control.value:
+                    selected_create_permissions.add(key)
+                else:
+                    selected_create_permissions.discard(key)
+            update_create_master()
+            render_permission_section()
+
+        role_choice.on_change = lambda _: render_permission_section()
+        create_master_check.on_change = set_all_create_permissions
+        render_permission_section()
 
         def create_account(_):
             if not full_name.value or not username.value or not email.value:
@@ -2778,9 +2913,7 @@ def main(page: ft.Page):
                 page.update()
                 return
 
-            permissions = []
-            for control in permission_area.controls:
-                permissions.extend(collect_selected_permissions(control))
+            permissions = sorted(selected_create_permissions)
 
             payload = {
                 "username": username.value.strip(),
@@ -2841,7 +2974,7 @@ def main(page: ft.Page):
                     role_choice,
                     permission_area,
                     error_message,
-                ], width=560, scroll=ft.ScrollMode.AUTO, spacing=10),
+                ], width=560, scroll=ft.ScrollMode.ALWAYS, spacing=10),
                 width=580,
                 height=640,
             ),
@@ -2911,63 +3044,411 @@ def main(page: ft.Page):
             page.update()
             return
 
-        full_name = ft.TextField(label="Full Name", value=user.get("full_name", ""))
-        username = ft.TextField(label="Username", value=user.get("username", ""))
-        email = ft.TextField(label="Email", value=user.get("email", ""))
+        full_name = ft.TextField(label="Full Name", value=user.get("full_name", ""), width=270)
+        username = ft.TextField(label="Username", value=user.get("username", ""), width=270)
+        email = ft.TextField(label="Email", value=user.get("email", ""), width=270)
         role_choice = ft.Dropdown(
             label="Role",
             value=user.get("role", "Employee"),
             options=[ft.dropdown.Option("Employee"), ft.dropdown.Option("SB Member")],
+            width=270,
+            autofocus=False,
         )
         status_choice = ft.Dropdown(
             label="Account Status",
             value=user.get("status", "Active"),
             options=[ft.dropdown.Option("Active"), ft.dropdown.Option("Inactive")],
+            width=270,
+            autofocus=False,
         )
         permissions_area = ft.Column([], spacing=8)
+        error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
+        permission_groups = EMPLOYEE_PERMISSION_GROUPS
+        group_descriptions = {
+            "Dashboard": "Control access to dashboard information.",
+            "Documents": "Control actions employees can perform on legislative documents.",
+            "QR Code": "Control QR code generation, printing, and tracking access.",
+            "Document Requests": "Control access to document request processing.",
+            "Users & Roles": "Control employee access to user and role administration.",
+            "Committees": "Control committee management permissions.",
+            "Audit Logs": "Control access to system activity records.",
+            "Analytics": "Control access to analytics and reports.",
+            "Settings": "Control access to system configuration.",
+        }
+        permission_key = lambda label: label.strip().lower().replace(" ", "_")
+        raw_permissions = user.get("permissions") or []
+        if isinstance(raw_permissions, str):
+            try:
+                raw_permissions = json.loads(raw_permissions)
+            except (TypeError, ValueError):
+                try:
+                    raw_permissions = ast.literal_eval(raw_permissions)
+                except (SyntaxError, ValueError):
+                    raw_permissions = [raw_permissions]
+        selected_permissions = {permission_key(str(item)) for item in raw_permissions}
+        permission_checks = {}
+        group_checks = {}
+        permission_cards = ft.Column(spacing=8, expand=False)
+        permission_search = ft.TextField(label="Search permissions...", prefix_icon=ft.Icons.SEARCH, dense=True)
+        permission_summary = ft.Text(size=12, color=ft.Colors.BLUE_GREY_600)
+        master_check = ft.Checkbox(label="Select All Permissions", tristate=True, scale=1.05)
+        rendering_permissions = False
+        expanded_groups = set()
+        group_switchers = {}
+        group_arrows = {}
 
-        def render_edit_permissions():
-            permissions_area.controls.clear()
-            if role_choice.value == "SB Member":
-                permissions_area.controls.append(ft.Text("SB Member permissions are fixed and read-only.", size=12, color=ft.Colors.BLUE_GREY_700))
-                for item in ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "Download Documents", "Print Documents"]:
-                    permissions_area.controls.append(ft.Checkbox(label=item, value=True, disabled=True, scale=0.9))
-            else:
-                permissions_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=13))
-                for section_name, perms in {
-                    "Dashboard": ["View Dashboard"],
-                    "Documents": ["Register Documents", "Edit Documents", "Delete Documents", "Archive Documents", "Restore Documents", "View Documents", "Import Documents", "Export Documents", "Download Documents", "Print Documents"],
-                    "QR Code": ["Generate QR Codes", "Print QR Codes", "View QR Tracking"],
-                    "Users & Roles": ["Create Users", "Edit Users", "Reset Passwords", "Activate Users", "Deactivate Users", "Delete Users", "Assign Roles", "Manage Permissions"],
-                    "Committees": ["Add Committee", "Edit Committee", "Delete Committee"],
-                    "Audit Logs": ["View Audit Logs", "Export Audit Logs"],
-                    "Settings": ["Modify System Settings"],
-                }.items():
-                    permissions_area.controls.append(ft.Text(section_name, weight=ft.FontWeight.W_600, size=12, color=ft.Colors.BLUE_GREY_700))
-                    permissions_area.controls.append(ft.Row([ft.Checkbox(label=perm, value=(perm in (user.get("permissions") or [])), scale=0.9) for perm in perms], spacing=8, run_spacing=6, wrap=True))
+        def update_permission_state():
+            nonlocal rendering_permissions
+            if rendering_permissions:
+                return
+            rendering_permissions = True
+            selected_count = sum(1 for checkbox in permission_checks.values() if checkbox.value)
+            total_count = len(permission_checks)
+            permission_summary.value = f"{selected_count} of {total_count} permissions selected"
+            master_check.value = True if selected_count == total_count and total_count else None if selected_count else False
+            for group_name, labels in permission_groups.items():
+                count = sum(1 for label in labels if permission_checks[permission_key(label)].value)
+                group_checks[group_name].value = True if count == len(labels) else None if count else False
+                group_checks[group_name].label = f"Select All  •  {count} of {len(labels)} selected"
+            rendering_permissions = False
+
+        def set_group_permissions(group_name, value):
+            nonlocal rendering_permissions
+            rendering_permissions = True
+            for label in permission_groups[group_name]:
+                permission_checks[permission_key(label)].value = bool(value)
+            rendering_permissions = False
+            render_permission_cards()
+
+        def set_all_permissions(value):
+            nonlocal rendering_permissions
+            rendering_permissions = True
+            for checkbox in permission_checks.values():
+                checkbox.value = bool(value)
+            rendering_permissions = False
+            render_permission_cards()
+
+        def render_permission_cards(_=None):
+            permission_cards.controls.clear()
+            search_text = (permission_search.value or "").strip().lower()
+            for group_name, labels in permission_groups.items():
+                matching_labels = [label for label in labels if not search_text or search_text in label.lower() or search_text in group_name.lower()]
+                if not matching_labels:
+                    continue
+                permission_list = ft.Column(
+                    [
+                        ft.Checkbox(
+                            label=label,
+                            value=permission_checks[permission_key(label)].value,
+                            active_color=ft.Colors.BLUE_700,
+                            on_change=lambda event, key=permission_key(label): permission_changed(key, event),
+                        )
+                        for label in matching_labels
+                    ],
+                    spacing=2,
+                )
+                def toggle_group(_=None, name=group_name):
+                    if name in expanded_groups:
+                        expanded_groups.remove(name)
+                    else:
+                        expanded_groups.add(name)
+                    group_arrows[name].name = ft.Icons.KEYBOARD_ARROW_DOWN if name in expanded_groups else ft.Icons.KEYBOARD_ARROW_RIGHT
+                    group_switchers[name].content = group_body if name in expanded_groups else ft.Container(height=0)
+                    group_switchers[name].update()
+                    group_arrows[name].update()
+
+                group_header = ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN if group_name in expanded_groups else ft.Icons.KEYBOARD_ARROW_RIGHT, color=ft.Colors.BLUE_700),
+                            ft.Icon(ft.Icons.FOLDER_OUTLINED, color=ft.Colors.BLUE_700),
+                            ft.Column([
+                                ft.Text(group_name, weight=ft.FontWeight.BOLD, size=13),
+                                ft.Text(group_descriptions[group_name], size=11, color=ft.Colors.BLUE_GREY_600),
+                            ], spacing=2, expand=True),
+                            ft.Text(f"{sum(1 for label in labels if permission_checks[permission_key(label)].value)} / {len(labels)} selected", size=11, color=ft.Colors.BLUE_GREY_600),
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=ft.Padding(left=12, top=8, right=12, bottom=8),
+                    bgcolor=ft.Colors.BLUE_GREY_50,
+                    on_click=toggle_group,
+                )
+                group_body = ft.Column(
+                    [
+                        ft.Row([group_checks[group_name], ft.Text(f"{len(labels)} permissions", size=11, color=ft.Colors.BLUE_GREY_600)], spacing=8),
+                        permission_list,
+                    ],
+                    spacing=6,
+                )
+                group_switcher = ft.AnimatedSwitcher(
+                    content=group_body if group_name in expanded_groups else ft.Container(height=0),
+                    duration=220,
+                    reverse_duration=180,
+                    transition=ft.AnimatedSwitcherTransition.FADE,
+                )
+                group_arrows[group_name] = group_header.content.controls[0]
+                group_switchers[group_name] = group_switcher
+                permission_cards.controls.append(
+                    ft.Container(
+                        content=ft.Column([group_header, group_switcher], spacing=0),
+                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                        border_radius=10,
+                    )
+                )
+            update_permission_state()
+            page.update()
+            """
+                        group_body = ft.Column(
+                            [
+                                group_check,
+                                ft.Column([
+                                    ft.Checkbox(
+                                        label=perm,
+                                        value=create_permission_key(perm) in selected_create_permissions,
+                                        scale=0.9,
+                                        on_change=lambda event, key=create_permission_key(perm): update_create_permission(key, event),
+                                    )
+                                    for perm in perms
+                                ], spacing=2),
+                            ],
+                            spacing=6,
+                            visible=section_name in expanded_groups,
+                        )
+                        group_header = ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN if section_name in expanded_groups else ft.Icons.KEYBOARD_ARROW_RIGHT, color=ft.Colors.BLUE_700),
+                                ft.Icon(ft.Icons.FOLDER_OUTLINED, color=ft.Colors.BLUE_700),
+                                ft.Text(section_name, weight=ft.FontWeight.BOLD, size=13, expand=True),
+                                ft.Text(f"{group_count} / {len(perms)} selected", size=11, color=ft.Colors.BLUE_GREY_600),
+                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            padding=ft.Padding(left=12, top=8, right=12, bottom=8),
+                            bgcolor=ft.Colors.BLUE_GREY_50,
+                            on_click=lambda _, name=section_name: (expanded_groups.remove(name) if name in expanded_groups else expanded_groups.add(name), render_permission_section()),
+                        )
+
+        def permission_changed(key, event):
+                                content=ft.Column([group_header, group_body], spacing=0),
+                active_color=ft.Colors.BLUE_700,
+                on_change=lambda event, name=group_name: set_group_permissions(name, event.control.value),
+            )
+            for label in labels:
+                key = permission_key(label)
+                permission_checks[key] = ft.Checkbox(label=label, value=key in selected_permissions)
+
+        master_check.on_change = lambda event: set_all_permissions(event.control.value)
+                        ft.Checkbox(label="Search Documents", value=True, disabled=True),
+                        ft.Checkbox(label="Filter Documents", value=True, disabled=True),
+                        ft.Checkbox(label="View Document Details", value=True, disabled=True),
+                        ft.Checkbox(label="Download Documents", value=True, disabled=True),
+                        ft.Checkbox(label="Print Documents", value=True, disabled=True),
+                    ], spacing=6))
+                    permission_area.controls.append(ft.Text("SB Members do not have QR Tracking, registration, editing, or user-management access.", size=11, color=ft.Colors.BLUE_GREY_600))
+                page.update()
+
+            def update_create_permission(key, event):
+                if event.control.value:
+                    selected_create_permissions.add(key)
+                else:
+                    selected_create_permissions.discard(key)
+                update_create_master()
+                render_permission_section()
+
+            def set_create_group(group_name, event):
+                for label in EMPLOYEE_PERMISSION_GROUPS[group_name]:
+                    key = create_permission_key(label)
+                    if event.control.value:
+                        selected_create_permissions.add(key)
+                    else:
+                        selected_create_permissions.discard(key)
+                update_create_master()
+                render_permission_section()
+
+            role_choice.on_change = lambda _: render_permission_section()
+            create_master_check.on_change = set_all_create_permissions
+            render_permission_section()
+
+            def create_account(_):
+                if not full_name.value or not username.value or not email.value:
+                    error_message.value = "Full name, username, and email are required."
+                    page.update()
+                    return
+
+                if password.value != confirm_password.value:
+                    error_message.value = "Passwords do not match."
+                    page.update()
+                    return
+
+                if not password.value:
+                    error_message.value = "Password is required."
+                    page.update()
+                    return
+
+                if not runtime_token and not AUTH_TOKEN:
+                    error_message.value = "Unable to register user: no admin authentication available."
+                    page.update()
+                    return
+
+                permissions = sorted(selected_create_permissions)
+
+                payload = {
+                    "username": username.value.strip(),
+                    "password": password.value,
+                    "full_name": full_name.value.strip(),
+                    "email": email.value.strip(),
+                    "role": role_choice.value,
+                }
+                if permissions:
+                    payload["permissions"] = str(permissions)
+
+                try:
+                    response = requests.post(
+                        f"{BACKEND_URL}/auth/register",
+                        json=payload,
+                        headers=get_admin_headers(),
+                        verify=False,
+                        timeout=20,
+                    )
+                    if response.status_code != 200:
+                        detail = response.text
+                        try:
+                            detail = response.json().get("detail", detail)
+                        except Exception:
+                            pass
+                        raise Exception(detail)
+                    body = response.json()
+                    created_user = {
+                        "full_name": full_name.value,
+                        "username": body.get("username", username.value.strip()),
+                        "email": email.value,
+                        "role": body.get("role", role_choice.value),
+                        "status": "Active",
+                        "permissions": permissions,
+                        "last_login": "-",
+                        "created": date.today().strftime("%Y-%m-%d"),
+                    }
+                    user_management_data.append(created_user)
+                    close_dialog(dialog)
+                    update_users_role_view()
+                except Exception as exc:
+                    error_message.value = f"Account creation failed: {exc}"
+                    page.update()
+                    return
+
+            error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Create User Account"),
+                content=ft.Container(
+                    content=ft.Column([
+                        full_name,
+                        username,
+                        email,
+                        password,
+                        confirm_password,
+                        role_choice,
+                        permission_area,
+                        error_message,
+                    ], width=560, scroll=ft.ScrollMode.ALWAYS, spacing=10),
+                    width=580,
+                    height=640,
+                ),
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                    ft.Button("Create Account", on_click=create_account, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
+                ],
+            )
+            page.overlay.append(dialog)
+            dialog.open = True
             page.update()
 
-        role_choice.on_change = lambda _: render_edit_permissions()
-        render_edit_permissions()
+        def open_view_user_dialog(user):
+        permission_search.on_change = render_permission_cards
+        render_permission_cards()
+
+        """
+        def permission_changed(key, event):
+            permission_checks[key].value = event.control.value
+            render_permission_cards()
+
+        for group_name, labels in permission_groups.items():
+            group_checks[group_name] = ft.Checkbox(
+                label="Select All",
+                tristate=True,
+                active_color=ft.Colors.BLUE_700,
+                on_change=lambda event, name=group_name: set_group_permissions(name, event.control.value),
+            )
+            for label in labels:
+                key = permission_key(label)
+                permission_checks[key] = ft.Checkbox(label=label, value=key in selected_permissions)
+
+        master_check.on_change = lambda event: set_all_permissions(event.control.value)
+        permission_search.on_change = render_permission_cards
+        render_permission_cards()
+
+        def collect_permissions():
+            return [key for key, checkbox in permission_checks.items() if checkbox.value]
+
+        def save_user(_):
+            if not full_name.value.strip() or not username.value.strip() or not email.value.strip():
+                error_message.value = "Full name, email, and username are required."
+                page.update()
+                return
+            payload = {
+                "full_name": full_name.value.strip(),
+                "username": username.value.strip(),
+                "email": email.value.strip(),
+                "role": role_choice.value,
+                "status": status_choice.value,
+                "permissions": collect_permissions(),
+            }
+            try:
+                response = requests.put(
+                    f"{BACKEND_URL}/auth/users/{user.get('id')}",
+                    json=payload,
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=20,
+                )
+                if response.status_code != 200:
+                    detail = response.text
+                    try:
+                        detail = response.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    raise Exception(detail)
+                close_dialog(dialog)
+                load_user_management_data()
+            except Exception as exc:
+                error_message.value = f"Unable to save user: {exc}"
+                page.update()
 
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Edit User"),
             content=ft.Container(
                 content=ft.Column([
-                    full_name,
-                    username,
-                    email,
-                    role_choice,
+                    ft.Text("Manage account information and permissions", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ft.Text("Account Information", weight=ft.FontWeight.BOLD, size=14),
+                    ft.Row([full_name, username], spacing=10),
+                    ft.Row([email, role_choice], spacing=10),
                     status_choice,
-                    permissions_area,
-                ], width=560, spacing=10, scroll=ft.ScrollMode.AUTO),
+                    error_message,
+                    ft.Divider(height=1),
+                    ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=16),
+                    ft.Text("Control access to the features available to this employee.", size=12, color=ft.Colors.BLUE_GREY_600),
+                    permission_search,
+                    ft.Row([master_check, permission_summary], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    permission_cards,
+                ], width=560, spacing=10, scroll=ft.ScrollMode.ALWAYS),
                 width=580,
-                height=640,
+                height=650,
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
-                ft.Button("Save Changes", on_click=lambda _: close_dialog(dialog), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
+                ft.Button("Save Changes", on_click=save_user, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
             ],
         )
         page.overlay.append(dialog)
@@ -2991,12 +3472,12 @@ def main(page: ft.Page):
         dialog.open = True
         page.update()
 
-    def toggle_user_status(user):
+    def delete_user(user):
         if user.get("role") == "Super Administrator":
             dialog = ft.AlertDialog(
                 modal=True,
                 title=ft.Text("Protected Account"),
-                content=ft.Text("The Super Administrator account cannot be deactivated from this interface."),
+                content=ft.Text("The Super Administrator account cannot be deleted from this interface."),
                 actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
             )
             page.overlay.append(dialog)
@@ -3004,14 +3485,35 @@ def main(page: ft.Page):
             page.update()
             return
 
-        action = "Deactivate" if (user.get("status", "Active") == "Active") else "Activate"
+        def confirm_delete():
+            try:
+                response = requests.delete(
+                    f"{BACKEND_URL}/auth/users/{user.get('id')}",
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=15,
+                )
+                if response.status_code != 200:
+                    detail = response.text
+                    try:
+                        detail = response.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    raise Exception(detail)
+                close_dialog(dialog)
+                load_user_management_data()
+            except Exception as exc:
+                close_dialog(dialog)
+                page.snack_bar = ft.SnackBar(ft.Text(f"Unable to delete account: {exc}"), open=True)
+                page.update()
+
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(f"{action} Account"),
-            content=ft.Text(f"Are you sure you want to {action.lower()} this account?"),
+            title=ft.Text("Delete Account"),
+            content=ft.Text(f"Permanently delete {user.get('full_name', user.get('username', 'this user'))}? This cannot be undone."),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
-                ft.Button(action, on_click=lambda _: close_dialog(dialog), bgcolor=ft.Colors.RED_700 if action == "Deactivate" else ft.Colors.GREEN_700, color=ft.Colors.WHITE),
+                ft.Button("Delete", on_click=lambda _: confirm_delete(), bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
             ],
         )
         page.overlay.append(dialog)
@@ -3382,26 +3884,28 @@ def main(page: ft.Page):
         page.update()
 
     def build_nav_items():
-        normalized_permissions = {str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])}
         items = []
 
-        if "view_dashboard" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator":
+        if has_permission("view_dashboard"):
             items.append((ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view()))
-        if "view_analytics" in normalized_permissions or "*" in normalized_permissions or current_user_role == "Super Administrator":
+        if has_permission("view_analytics"):
             items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view()))
 
-        items.extend([
-            (ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()),
-            (ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()),
-            (ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()),
-        ])
+        if has_permission("view_documents"):
+            items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()))
+            items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()))
+        if not is_employee() or has_permission("view_documents"):
+            items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()))
+        if has_permission("view_qr_tracking"):
+            items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view))
         if current_user_role == "Super Administrator":
             items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view()))
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
-            items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
-        elif current_user_role == "Employee":
+        elif has_permission("view_audit_logs"):
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
-            items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
+
+        items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view()))
+        items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
         return items
 
     nav_items = build_nav_items()
@@ -3426,6 +3930,7 @@ def main(page: ft.Page):
                 current_user_permissions = json.loads(saved_permissions) if saved_permissions else []
             except Exception:
                 current_user_permissions = []
+            refresh_runtime_token_if_needed(force=True)
             nav_items[:] = build_nav_items()
             initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
             render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)
