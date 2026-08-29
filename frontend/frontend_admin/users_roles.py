@@ -114,6 +114,12 @@ def _permission_summary(user):
     return f"{len(perms)} permissions" if perms else "No permissions"
 
 
+def _format_timestamp(value):
+    if not value:
+        return "—"
+    return str(value).replace("T", " ").split(".", 1)[0]
+
+
 def _build_permission_checkboxes(selected_permissions=None):
     checked = set(selected_permissions or [])
     items = []
@@ -148,8 +154,8 @@ def build_users_roles_table(
         role = user.get("role", "Employee")
         status = user.get("status", "Active")
         permissions = user.get("permissions") or []
-        last_login = user.get("last_login", "—")
-        created = user.get("created", "—")
+        last_login = _format_timestamp(user.get("last_login"))
+        created = _format_timestamp(user.get("created"))
         action_buttons = ft.PopupMenuButton(
             icon=ft.Icons.MORE_VERT,
             tooltip="User actions",
@@ -254,8 +260,8 @@ def build_users_roles_view(
         role = user.get("role", "Employee")
         status = user.get("status", "Active")
         permissions = user.get("permissions") or []
-        last_login = user.get("last_login", "—")
-        created = user.get("created", "—")
+        last_login = _format_timestamp(user.get("last_login"))
+        created = _format_timestamp(user.get("created"))
         action_buttons = ft.PopupMenuButton(
             icon=ft.Icons.MORE_VERT,
             tooltip="User actions",

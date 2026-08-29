@@ -296,6 +296,9 @@ def refresh_access_token(
     if not user or not getattr(user, "is_active", True):
         raise HTTPException(status_code=401, detail="User no longer active")
 
+    user.last_login = datetime.now(timezone.utc)
+    db.commit()
+
     role = normalize_user_role(user.role)
     permissions = list(normalize_permissions(getattr(user, "permissions", None)))
     if not permissions:
