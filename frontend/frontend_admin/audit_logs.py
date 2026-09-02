@@ -1,12 +1,7 @@
 import flet as ft
 
 
-def build_audit_logs_view(
-    audit_logs_table,
-    load_audit_logs_view,
-    surface_card,
-    section_header,
-):
+def build_audit_logs_view(audit_logs_table, load_audit_logs_view, surface_card, section_header):
     load_audit_logs_view()
     return ft.Column(
         [

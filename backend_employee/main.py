@@ -5,12 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
+from sqlalchemy import inspect
 
 load_dotenv()
 
+from alembic import command
+from alembic.config import Config
+
 from backend.database import engine
 from backend import models
-from backend.core import ensure_schema_columns, ensure_user_role_column
 from backend.routes.status import router as status_router
 from backend.routes.documents import router as documents_router
 from backend.routes.analytics import router as analytics_router
@@ -32,9 +35,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app = FastAPI(title="LGU Tolosa - Employee Backend")
 
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,13 +56,27 @@ if force_https:
     app.add_middleware(HTTPSRedirectMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
-models.Base.metadata.create_all(bind=engine)
+
+def run_database_migrations() -> None:
+    table_names = inspect(engine).get_table_names()
+    alembic_cfg = Config(os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini"))
+
+    if not table_names:
+        models.Base.metadata.create_all(bind=engine)
+        command.stamp(alembic_cfg, "head")
+        return
+
+    if "alembic_version" not in table_names:
+        command.stamp(alembic_cfg, "head")
+        return
+
+    command.upgrade(alembic_cfg, "head")
+
 
 try:
-    ensure_user_role_column()
-    ensure_schema_columns()
-except Exception:
-    pass
+    run_database_migrations()
+except Exception as exc:
+    raise RuntimeError(f"Startup initialization failed: {exc}") from exc
 
 auth_router = APIRouter()
 auth_router.post("/auth/login")(login_user)

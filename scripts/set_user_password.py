@@ -6,8 +6,8 @@ from backend.database import SessionLocal
 from backend.core import get_password_hash
 from backend import models
 
-username = 'devadmin'
-new_pw = 'password123'
+username = 'a'
+new_pw = 'a'
 
 s = SessionLocal()
 user = s.query(models.User).filter(models.User.username == username).first()

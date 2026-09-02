@@ -3,14 +3,14 @@
 ## Run
 
 ### Using VS Code (Recommended)
-Use the `Run Full Stack` task to start both services with HTTPS enabled:
+Use the `Run Full Stack` task to start both services in the local development configuration:
 ```
 Ctrl+Shift+P → Tasks: Run Task → Run Full Stack
 ```
 
 ### Manual Startup
 
-**Backend (port 8001 with HTTPS):**
+**Backend (port 8001):**
 ```bash
 python run_backend.py
 ```
@@ -20,11 +20,11 @@ python run_backend.py
 python frontend/frontend_admin/app.py
 ```
 
-## HTTPS Setup
+## Local HTTP / HTTPS behavior
 
-The backend can run with HTTPS if valid certificates are available in the repository root as `server.crt` and `server.key`.
+This project is configured for local development over HTTP by default. The `.env` file can set `DEV_HTTP=1` to force HTTP even when certificate files are present.
 
-If certificate files are not present, the backend falls back to HTTP by default. Use `DEV_HTTP=1` in `.env` to force HTTP during local development.
+The repository currently contains certificate files named `scanner.crt` and `scanner.key`, and the startup script checks for those names. If they are missing, the backend starts on HTTP instead of HTTPS.
 
 ## Backend URL
 

@@ -43,6 +43,6 @@ def seed(username: str, password: str):
 
 
 if __name__ == '__main__':
-    uname = sys.argv[1] if len(sys.argv) > 1 else "devadmin"
-    pwd = sys.argv[2] if len(sys.argv) > 2 else "password123"
+    uname = sys.argv[1] if len(sys.argv) > 1 else "a"
+    pwd = sys.argv[2] if len(sys.argv) > 2 else "a"
     seed(uname, pwd)

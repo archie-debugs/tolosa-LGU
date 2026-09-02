@@ -17,11 +17,11 @@ load_dotenv()
 
 if __name__ == "__main__":
     from backend.main import app
-    
-    cert_file = project_root / "server.crt"
-    key_file = project_root / "server.key"
 
-    # Allow forcing HTTP for local/dev tools via DEV_HTTP=1 even if certs exist
+    cert_file = project_root / "scanner.crt"
+    key_file = project_root / "scanner.key"
+
+    # Allow forcing HTTP for local/dev tools via DEV_HTTP=1 even if certs exist.
     dev_http = os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes")
 
     ssl_kwargs = {}

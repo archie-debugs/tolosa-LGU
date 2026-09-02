@@ -132,6 +132,17 @@ from frontend.frontend_admin.analytics import build_analytics_view
 from frontend.frontend_admin.users_roles import build_users_roles_table, build_users_roles_view, EMPLOYEE_PERMISSION_GROUPS
 from frontend.frontend_admin.admin_shell import render_shell
 
+
+def clear_stale_session_state(state):
+    reset = dict(state or {})
+    reset["current_user"] = None
+    reset["current_user_role"] = None
+    reset["current_user_permissions"] = []
+    reset["runtime_token"] = None
+    reset["refresh_token"] = None
+    return reset
+
+
 def main(page: ft.Page):
     page.title = "LGU Tolosa — Legislative Document Tracking Management System"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -193,7 +204,7 @@ def main(page: ft.Page):
             pass
 
     def refresh_runtime_token_if_needed(force=False):
-        nonlocal current_user_role, current_user_permissions, runtime_token, refresh_token
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
         if force:
             should_refresh = True
         else:
@@ -228,8 +239,39 @@ def main(page: ft.Page):
                 if body.get("permissions") is not None:
                     current_user_permissions = body["permissions"]
                 save_session_state()
+                return
+
+            reset = clear_stale_session_state({
+                "current_user": current_user,
+                "current_user_role": current_user_role,
+                "current_user_permissions": current_user_permissions,
+                "runtime_token": runtime_token,
+                "refresh_token": refresh_token,
+            })
+            current_user = reset["current_user"]
+            current_user_role = reset["current_user_role"]
+            current_user_permissions = reset["current_user_permissions"]
+            runtime_token = reset["runtime_token"]
+            refresh_token = reset["refresh_token"]
+            clear_session_state()
+            show_login()
+            return
         except Exception:
-            pass
+            reset = clear_stale_session_state({
+                "current_user": current_user,
+                "current_user_role": current_user_role,
+                "current_user_permissions": current_user_permissions,
+                "runtime_token": runtime_token,
+                "refresh_token": refresh_token,
+            })
+            current_user = reset["current_user"]
+            current_user_role = reset["current_user_role"]
+            current_user_permissions = reset["current_user_permissions"]
+            runtime_token = reset["runtime_token"]
+            refresh_token = reset["refresh_token"]
+            clear_session_state()
+            show_login()
+            return
 
     def get_admin_headers():
         refresh_runtime_token_if_needed()

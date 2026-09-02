@@ -1,13 +1,18 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=False)
 
-# Use DATABASE_URL from environment for PostgreSQL or other SQLAlchemy backends.
-# Fall back to local SQLite for development if DATABASE_URL is not set.
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sb_tolosa.db")
+# Prefer the active environment, but do not silently hide a bad DB configuration.
+# If the env file is present and still does not define DATABASE_URL, fail loudly instead
+# of silently switching to a development SQLite database that can mismatch credentials.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    DATABASE_URL = "sqlite:///./sb_tolosa.db"
 
 engine_kwargs = {}
 if DATABASE_URL.startswith("sqlite://"):

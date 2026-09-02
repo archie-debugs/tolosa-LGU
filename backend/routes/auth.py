@@ -257,6 +257,10 @@ def login_user(
         target_id=user.username,
         details="Successful login",
     )
+    # This represents the user's most recent authenticated activity.
+    # We intentionally update it on both credentialed login and refresh so it tracks
+    # the latest time the user successfully re-established trust, not merely the
+    # first time they ever signed in.
     user.last_login = datetime.now(timezone.utc)
     db.commit()
 
@@ -296,6 +300,9 @@ def refresh_access_token(
     if not user or not getattr(user, "is_active", True):
         raise HTTPException(status_code=401, detail="User no longer active")
 
+    # Refresh is treated as a successful authenticated activity event. This keeps the
+    # field aligned with the current rule: last authenticated activity, including
+    # re-validating a persisted session.
     user.last_login = datetime.now(timezone.utc)
     db.commit()
 
