@@ -2976,38 +2976,402 @@ def main(page: ft.Page):
                 ),
             )
             return ft.Column([])
-        visible_permissions = current_user_permissions or []
-        if isinstance(visible_permissions, str):
+
+        is_dark = page.theme_mode == ft.ThemeMode.DARK
+        profile_user = {"full_name": None, "username": current_user, "email": None, "role": current_user_role or "Employee", "status": "Active", "created_at": None, "updated_at": None, "last_login": None, "id": None, "permissions": current_user_permissions or []}
+
+        try:
+            resp = requests.get(f"{BACKEND_URL}/auth/users", headers=get_admin_headers(), verify=False, timeout=15)
+            if resp.status_code == 200:
+                users = resp.json() or []
+                for user in users:
+                    username = (user.get("username") or "").strip()
+                    if username and current_user and username.lower() == str(current_user).lower():
+                        profile_user.update({
+                            "id": user.get("id"),
+                            "full_name": user.get("full_name") or user.get("username") or "Not provided",
+                            "username": user.get("username") or current_user or "Not provided",
+                            "email": user.get("email") or None,
+                            "role": user.get("role") or (current_user_role or "Employee"),
+                            "status": user.get("status") or "Active",
+                            "created_at": user.get("created") or user.get("created_at") or None,
+                            "updated_at": user.get("updated_at") or user.get("updated") or None,
+                            "last_login": user.get("last_login") or None,
+                            "permissions": user.get("permissions") or current_user_permissions or [],
+                        })
+                        break
+        except Exception:
+            pass
+
+        def normalize_display(value, fallback="Not provided"):
+            if value is None or str(value).strip() == "":
+                return fallback
+            return str(value).strip()
+
+        def format_date(value):
+            if not value:
+                return "Not provided"
             try:
-                visible_permissions = json.loads(visible_permissions)
-            except (TypeError, ValueError):
-                visible_permissions = [visible_permissions]
-        return ft.Column(
-            [
-                surface_card(
-                    ft.Column(
-                        [
-                            section_header(
-                                "My Account",
-                                "Your signed-in employee account information.",
-                                ft.Icons.PERSON_OUTLINE,
-                                ft.Colors.BLUE_GREY_700,
-                            ),
-                            ft.Divider(height=1),
-                            ft.Row([ft.Text("Username", weight=ft.FontWeight.BOLD, width=150), ft.Text(current_user or "-")]),
-                            ft.Row([ft.Text("Full Name", weight=ft.FontWeight.BOLD, width=150), ft.Text("Not provided by the current login response")]),
-                            ft.Row([ft.Text("Email", weight=ft.FontWeight.BOLD, width=150), ft.Text("Not provided by the current login response")]),
-                            ft.Row([ft.Text("Role", weight=ft.FontWeight.BOLD, width=150), ft.Text(current_user_role or "-")]),
-                            ft.Row([ft.Text("Account Status", weight=ft.FontWeight.BOLD, width=150), ft.Text("Active")]),
-                            ft.Text("Assigned Permissions", weight=ft.FontWeight.BOLD, size=14),
-                            ft.Text(", ".join(sorted(str(item) for item in visible_permissions)) or "None assigned", size=12),
-                        ],
-                        spacing=14,
-                    ),
-                )
-            ],
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                return dt.strftime("%B %d, %Y")
+            except Exception:
+                return str(value)
+
+        def format_datetime(value):
+            if not value:
+                return "Not provided"
+            try:
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                return dt.strftime("%b %d, %Y %I:%M %p")
+            except Exception:
+                return str(value)
+
+        def permission_label(value):
+            raw = str(value or "").strip()
+            if not raw:
+                return "Permission"
+            return raw.replace("_", " ").title()
+
+        normalized_permissions = []
+        raw_permissions = profile_user["permissions"] or []
+        if isinstance(raw_permissions, str):
+            try:
+                raw_permissions = json.loads(raw_permissions)
+            except Exception:
+                raw_permissions = [raw_permissions]
+        if isinstance(raw_permissions, dict):
+            raw_permissions = list(raw_permissions.keys())
+        for item in raw_permissions:
+            if item is None:
+                continue
+            normalized_permissions.append(str(item).strip())
+        normalized_permissions = sorted({item for item in normalized_permissions if item})
+
+        if current_user_role == "Super Administrator" or profile_user["role"] == "Super Administrator":
+            permission_summary = ft.Text("Full System Access", weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_400)
+            permission_groups = []
+        else:
+            permission_summary = None
+            permission_groups = [
+                ("Dashboard", ["view_dashboard", "view_analytics"]),
+                ("Documents", ["view_documents", "search_documents", "filter_documents", "view_document_details", "register_documents", "edit_documents", "archive_documents", "restore_documents", "download_documents", "print_documents"]),
+                ("QR Code", ["generate_qr_codes", "print_qr_codes", "view_qr_tracking"]),
+                ("Document Requests", ["view_document_requests", "approve_document_requests", "reject_document_requests", "fulfill_document_requests"]),
+                ("Audit Logs", ["view_audit_logs", "export_audit_logs"]),
+                ("Analytics", ["view_analytics", "export_analytics"]),
+            ]
+
+        status_color = ft.Colors.GREEN_700 if (profile_user["status"] or "Active").lower() == "active" else ft.Colors.AMBER_700 if (profile_user["status"] or "Active").lower() == "pending" else ft.Colors.RED_700
+        status_bg = ft.Colors.GREEN_50 if not is_dark else ft.Colors.with_opacity(0.18, ft.Colors.GREEN_700)
+        if (profile_user["status"] or "Active").lower() not in {"active", "pending"}:
+            status_bg = ft.Colors.RED_50 if not is_dark else ft.Colors.with_opacity(0.18, ft.Colors.RED_700)
+
+        def build_permission_chips(group_name, permitted_values):
+            chips = []
+            if not permitted_values:
+                return ft.Column([ft.Text("No assigned permissions", size=12, color=ft.Colors.BLUE_GREY_500)], spacing=6)
+            for value in permitted_values:
+                key = str(value).strip().lower().replace(" ", "_")
+                if key in {str(p).strip().lower().replace(" ", "_") for p in normalized_permissions}:
+                    chips.append(
+                        ft.Container(
+                            content=ft.Text(permission_label(value), size=11),
+                            padding=ft.Padding(8, 4, 8, 4),
+                            border_radius=999,
+                            bgcolor=ft.Colors.GREEN_50 if not is_dark else ft.Colors.with_opacity(0.18, ft.Colors.GREEN_700),
+                            border=ft.border.all(1, ft.Colors.GREEN_200 if not is_dark else ft.Colors.with_opacity(0.3, ft.Colors.GREEN_400)),
+                        )
+                    )
+            if not chips:
+                return ft.Text("No permissions assigned in this category.", size=12, color=ft.Colors.BLUE_GREY_500)
+            return ft.Wrap(chips, spacing=8, run_spacing=8)
+
+        def open_edit_profile_dialog():
+            user_id = profile_user.get("id")
+            full_name_field = ft.TextField(label="Full Name", value=profile_user.get("full_name") or "", width=260)
+            email_field = ft.TextField(label="Email", value=profile_user.get("email") or "", width=260)
+            note_text = ft.Text("You can update your profile details here. Username, role, and permissions remain read-only.", size=12, color=ft.Colors.BLUE_GREY_600)
+            error_text = ft.Text("", size=12, color=ft.Colors.RED_700)
+
+            def save_profile(_):
+                name = (full_name_field.value or "").strip()
+                email = (email_field.value or "").strip()
+                if not name or not email:
+                    error_text.value = "Full name and email are required."
+                    page.update()
+                    return
+                payload = {
+                    "full_name": name,
+                    "username": profile_user.get("username") or current_user,
+                    "email": email,
+                    "role": profile_user.get("role") or current_user_role or "Employee",
+                    "status": profile_user.get("status") or "Active",
+                    "permissions": normalized_permissions,
+                }
+                if user_id is None:
+                    profile_user["full_name"] = name
+                    profile_user["email"] = email
+                    page.snack_bar = ft.SnackBar(ft.Text("Profile updated locally for this session."), open=True)
+                    page.update()
+                    return
+                try:
+                    response = requests.put(
+                        f"{BACKEND_URL}/auth/users/{user_id}",
+                        json=payload,
+                        headers=get_admin_headers(),
+                        verify=False,
+                        timeout=20,
+                    )
+                    if response.status_code != 200:
+                        detail = response.text
+                        try:
+                            detail = response.json().get("detail", detail)
+                        except Exception:
+                            pass
+                        raise ValueError(detail)
+                    body = response.json()
+                    profile_user["full_name"] = body.get("full_name") or name
+                    profile_user["email"] = body.get("email") or email
+                    page.snack_bar = ft.SnackBar(ft.Text("Profile updated successfully."), open=True)
+                    page.update()
+                except Exception as exc:
+                    error_text.value = f"Unable to save profile: {exc}"
+                    page.update()
+                    return
+                dialog.open = False
+                page.update()
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Edit Profile"),
+                content=ft.Container(
+                    content=ft.Column([
+                        note_text,
+                        full_name_field,
+                        email_field,
+                        error_text,
+                    ], width=420, spacing=12),
+                    padding=ft.Padding(0, 0, 0, 0),
+                ),
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                    ft.Button("Save Changes", on_click=save_profile, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+                ],
+            )
+
+            def close_dialog(dialog_ref):
+                dialog_ref.open = False
+                page.update()
+
+            if dialog not in page.overlay:
+                page.overlay.append(dialog)
+            dialog.open = True
+            page.update()
+
+        avatar_text = (profile_user["full_name"] or profile_user["username"] or "User").split()
+        initials = "".join(part[0].upper() for part in avatar_text[:2]) if avatar_text else "U"
+        avatar_initials = initials[:2]
+
+        profile_header = surface_card(
+            ft.Row([
+                ft.Container(
+                    content=ft.Text(avatar_initials, size=30, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_700),
+                    width=84,
+                    height=84,
+                    border_radius=42,
+                    bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.BLUE_700) if not is_dark else ft.Colors.with_opacity(0.2, ft.Colors.BLUE_700),
+                    alignment=ft.alignment.center,
+                ),
+                ft.Column([
+                    ft.Row([
+                        ft.Text(normalize_display(profile_user["full_name"], "Not provided"), size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                    ], spacing=8),
+                    ft.Row([
+                        ft.Container(
+                            content=ft.Text(normalize_display(profile_user["role"], "Employee"), size=11, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_700),
+                            padding=ft.Padding(10, 4, 10, 4),
+                            bgcolor=ft.Colors.BLUE_50 if not is_dark else ft.Colors.with_opacity(0.2, ft.Colors.BLUE_700),
+                            border_radius=999,
+                        ),
+                        ft.Container(
+                            content=ft.Text((profile_user["status"] or "Active").title(), size=11, weight=ft.FontWeight.W_500, color=ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_300),
+                            padding=ft.Padding(10, 4, 10, 4),
+                            bgcolor=ft.Colors.GREEN_50 if not is_dark else ft.Colors.with_opacity(0.2, ft.Colors.GREEN_700),
+                            border_radius=999,
+                        ),
+                    ], spacing=8, wrap=True),
+                    ft.Text(normalize_display(profile_user["email"], "Not provided"), size=13, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                    ft.Text(f"Username: {normalize_display(profile_user['username'], 'Not provided')}", size=13, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                ], spacing=8, expand=True),
+                ft.Column([
+                    ft.Text("Account Details", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_300),
+                    ft.Text(f"Role: {normalize_display(profile_user['role'], 'Employee')}", size=12, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Text(f"Status: {(profile_user['status'] or 'Active').title()}", size=12, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Text(f"Created: {format_date(profile_user['created_at'])}", size=12, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Text(f"Updated: {format_date(profile_user['updated_at'])}", size=12, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                ], spacing=6, alignment=ft.MainAxisAlignment.CENTER),
+            ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=22,
             expand=False,
         )
+
+        personal_information_card = surface_card(
+            ft.Column([
+                ft.Row([
+                    ft.Text("Personal Information", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                    ft.IconButton(ft.Icons.EDIT_OUTLINED, tooltip="Edit profile", on_click=lambda _: open_edit_profile_dialog()),
+                ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Text("Update your personal account information.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                ft.Divider(height=1),
+                ft.Row([
+                    ft.Column([
+                        ft.Text("Full Name", size=11, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400),
+                        ft.Text(normalize_display(profile_user["full_name"], "Not provided"), size=14, weight=ft.FontWeight.W_500),
+                    ], expand=True),
+                    ft.Column([
+                        ft.Text("Username", size=11, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400),
+                        ft.Text(normalize_display(profile_user["username"], "Not provided"), size=14, weight=ft.FontWeight.W_500),
+                    ], expand=True),
+                ], spacing=16),
+                ft.Column([
+                    ft.Text("Email", size=11, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400),
+                    ft.Text(normalize_display(profile_user["email"], "Not provided"), size=14, weight=ft.FontWeight.W_500),
+                ], spacing=4),
+            ], spacing=14),
+            padding=18,
+            expand=False,
+        )
+
+        account_information_card = surface_card(
+            ft.Column([
+                ft.Text("Account Information", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                ft.Text("View your account details and metadata.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                ft.Divider(height=1),
+                ft.Row([
+                    ft.Text("Account ID", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text(f"#{profile_user.get('id') or 'N/A'}", size=13, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Row([
+                    ft.Text("Role", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text(normalize_display(profile_user["role"], "Employee"), size=13, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Row([
+                    ft.Text("Account Status", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text((profile_user["status"] or "Active").title(), size=13, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Row([
+                    ft.Text("Account Created", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text(format_date(profile_user["created_at"]), size=13, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Row([
+                    ft.Text("Last Updated", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text(format_datetime(profile_user["updated_at"]), size=13, weight=ft.FontWeight.W_500),
+                ]),
+            ], spacing=12),
+            padding=18,
+            expand=False,
+        )
+
+        permission_group_controls = []
+        if permission_groups:
+            permission_group_controls = [
+                ft.Column([
+                    ft.Text(group_name, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    build_permission_chips(group_name, permitted_values),
+                ], spacing=6)
+                for group_name, permitted_values in permission_groups if permitted_values
+            ]
+
+        access_permissions_card = surface_card(
+            ft.Column([
+                ft.Text("Access & Permissions", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                ft.Text("Your current system role and assigned permissions.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                ft.Divider(height=1),
+                ft.Row([
+                    ft.Container(content=ft.Text("Role", size=11, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300), padding=ft.Padding(8, 4, 8, 4), bgcolor=ft.Colors.BLUE_GREY_50 if not is_dark else ft.Colors.with_opacity(0.12, ft.Colors.BLUE_GREY_700), border_radius=999),
+                    ft.Container(content=ft.Text(normalize_display(profile_user["role"], "Employee"), size=11, weight=ft.FontWeight.W_500), padding=ft.Padding(8, 4, 8, 4), bgcolor=ft.Colors.BLUE_50 if not is_dark else ft.Colors.with_opacity(0.14, ft.Colors.BLUE_700), border_radius=999),
+                    ft.Container(content=ft.Text("Account Status", size=11, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300), padding=ft.Padding(8, 4, 8, 4), bgcolor=ft.Colors.BLUE_GREY_50 if not is_dark else ft.Colors.with_opacity(0.12, ft.Colors.BLUE_GREY_700), border_radius=999),
+                    ft.Container(content=ft.Text((profile_user["status"] or "Active").title(), size=11, weight=ft.FontWeight.W_500, color=status_color), padding=ft.Padding(8, 4, 8, 4), bgcolor=status_bg, border_radius=999),
+                ], spacing=8, wrap=True),
+                ft.Column([
+                    ft.Text("Assigned Permissions", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                    permission_summary if permission_summary is not None else ft.Text("", size=0),
+                ], spacing=8),
+                *permission_group_controls,
+            ], spacing=12),
+            padding=18,
+            expand=False,
+        )
+
+        security_card = surface_card(
+            ft.Column([
+                ft.Text("Security", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                ft.Text("Manage your account security settings.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                ft.Divider(height=1),
+                ft.Row([
+                    ft.Text("Password", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=120),
+                    ft.Text("••••••••", size=14, weight=ft.FontWeight.W_500),
+                    ft.Container(content=ft.OutlinedButton("Change Password", icon=ft.Icons.LOCK_RESET), padding=0),
+                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([
+                    ft.Text("Last Login", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=120),
+                    ft.Text(format_datetime(profile_user["last_login"]), size=13, weight=ft.FontWeight.W_500),
+                ]),
+            ], spacing=12),
+            padding=18,
+            expand=False,
+        )
+
+        account_activity_card = surface_card(
+            ft.Column([
+                ft.Row([
+                    ft.Text("Account Activity", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Divider(height=1),
+                ft.Row([
+                    ft.Text("Account Created", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text(format_date(profile_user["created_at"]), size=13, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Row([
+                    ft.Text("Last Updated", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text(format_datetime(profile_user["updated_at"]), size=13, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Row([
+                    ft.Text("Last Login", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text(format_datetime(profile_user["last_login"]), size=13, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Row([
+                    ft.Text("Account Status", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=150),
+                    ft.Text((profile_user["status"] or "Active").title(), size=13, weight=ft.FontWeight.W_500),
+                ]),
+            ], spacing=12),
+            padding=18,
+            expand=False,
+        )
+
+        top_row = ft.Row([
+            ft.Icon(ft.Icons.PERSON_OUTLINE, size=20, color=ft.Colors.BLUE_700),
+            ft.Column([
+                ft.Text("My Account", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
+                ft.Text("Manage your profile, account information, and security settings.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+            ], spacing=2, expand=True),
+            ft.ElevatedButton("Edit Profile", icon=ft.Icons.EDIT, on_click=lambda _: open_edit_profile_dialog()),
+        ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        content = ft.Column([
+            ft.Row([
+                ft.Text("My Account", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400),
+            ], spacing=4),
+            top_row,
+            profile_header,
+            ft.ResponsiveRow([
+                ft.Column([personal_information_card, security_card], col=6, spacing=16),
+                ft.Column([account_information_card, access_permissions_card], col=6, spacing=16),
+            ], run_spacing=16, spacing=16),
+            account_activity_card,
+        ], spacing=16, expand=False)
+
+        return ft.Column([content], expand=False)
 
     def qr_tracking_view():
         open_qr_monitor()
