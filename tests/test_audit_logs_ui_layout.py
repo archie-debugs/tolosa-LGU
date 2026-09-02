@@ -27,18 +27,40 @@ def section_header(title, subtitle, icon, accent_color):
     )
 
 
-def test_audit_logs_scroll_area_does_not_expand_into_blank_gray_region():
+def test_audit_logs_view_uses_compact_non_expanding_layout():
     page = DummyPage()
-    view = build_audit_logs_view(page, 'http://127.0.0.1:8001', lambda: {'Authorization': 'x'}, surface_card, section_header)
-
-    outer_column = view.content
-    scroll_container = next(
-        control for control in outer_column.controls if isinstance(control, ft.Container)
-        and isinstance(getattr(control, 'content', None), ft.ListView)
+    table = ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("Date & Time")),
+            ft.DataColumn(ft.Text("User")),
+            ft.DataColumn(ft.Text("Status")),
+        ],
+        rows=[],
+        column_spacing=12,
     )
-    list_view = scroll_container.content
 
-    assert list_view.auto_scroll is False
-    assert list_view.expand is None
-    assert list_view.height == 420
-    assert all(getattr(control, 'expand', None) is None for control in list_view.controls)
+    view = build_audit_logs_view(table, lambda: None, surface_card, section_header)
+
+    assert getattr(view, "expand", False) is False
+    assert getattr(view, "tight", False) is True
+    assert len(view.controls) >= 3
+    assert not any(getattr(control, "expand", None) is True for control in view.controls)
+    def find_datatable(control):
+        if isinstance(control, ft.DataTable):
+            return control
+        if hasattr(control, "controls"):
+            for child in control.controls:
+                found = find_datatable(child)
+                if found is not None:
+                    return found
+        if hasattr(control, "content") and control.content is not None:
+            return find_datatable(control.content)
+        return None
+
+    table_host = next(
+        control for control in view.controls
+        if isinstance(control, ft.Container)
+        and find_datatable(control) is not None
+    )
+    assert table_host.padding == 12
+    assert table_host.expand is False
