@@ -2929,35 +2929,201 @@ def main(page: ft.Page):
             return ft.Column([ft.Text("Error building Documents view"), ft.Text(str(e)), ft.Text(tb)])
 
     def settings_view():
-        return ft.Column(
-            [
-                surface_card(
-                    ft.Column(
-                        [
-                            section_header(
-                                "Settings",
-                                "Personal workspace preferences.",
-                                ft.Icons.SETTINGS,
-                                ft.Colors.BLUE_GREY_700,
-                            ),
-                            ft.Divider(height=1),
-                            ft.Text(
-                                "Customize the appearance of your workspace without changing system configuration.",
-                                size=13,
-                                color=ft.Colors.BLUE_GREY_600,
-                            ),
-                            ft.Text(
-                                "Use the appearance controls in the sidebar to switch between light and dark mode.",
-                                size=13,
-                                color=ft.Colors.BLUE_GREY_600,
-                            ),
-                        ],
-                        spacing=14,
-                    ),
-                )
+        is_dark = page.theme_mode == ft.ThemeMode.DARK
+        default_settings = {
+            "appearance": {"theme": "Dark" if is_dark else "Light", "accent": "LGU Tolosa Blue"},
+            "notifications": {"document_updates": True, "qr_tracking_updates": True, "document_requests": True, "account_notifications": True, "system_announcements": False},
+            "document_preferences": {"default_view": "Table", "records_per_page": "25", "remember_filters": True, "confirm_destructive": True},
+            "qr_tracking": {"confirm_receipt": True, "show_tracking_history": True, "scanner_sound": False, "scanner_feedback": True},
+            "security": {"remember_device": True, "login_notifications": True},
+        }
+
+        try:
+            saved_settings_raw = page.client_storage.get("sb_settings")
+            if saved_settings_raw:
+                saved_settings = json.loads(saved_settings_raw)
+                for key, value in saved_settings.items():
+                    if isinstance(value, dict):
+                        default_settings.setdefault(key, {})
+                        for nested_key, nested_value in value.items():
+                            default_settings[key][nested_key] = nested_value
+        except Exception:
+            pass
+
+        settings_state = default_settings
+
+        def save_settings():
+            try:
+                page.client_storage.set("sb_settings", json.dumps(settings_state))
+                page.snack_bar = ft.SnackBar(ft.Text("Settings saved successfully."), open=True)
+                page.update()
+            except Exception:
+                page.snack_bar = ft.SnackBar(ft.Text("Unable to save local settings in this browser session."), open=True)
+                page.update()
+
+        def make_row(label, control, note=None):
+            row_controls = [
+                ft.Text(label, size=12, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200, width=220),
+                control,
+            ]
+            if note:
+                row_controls.append(ft.Text(note, size=11, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400))
+            return ft.Row(row_controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True)
+
+        def save_button_row():
+            return ft.Row([
+                ft.ElevatedButton("Save Changes", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: save_settings()),
+            ], alignment=ft.MainAxisAlignment.END)
+
+        theme_dropdown = ft.Dropdown(
+            value=settings_state["appearance"]["theme"],
+            width=180,
+            options=[
+                ft.dropdown.Option("Light", "Light"),
+                ft.dropdown.Option("Dark", "Dark"),
+                ft.dropdown.Option("System Default", "System Default"),
             ],
-            expand=True,
         )
+
+        def on_theme_change(_):
+            selected_theme = theme_dropdown.value or "Light"
+            settings_state["appearance"] = {**settings_state.get("appearance", {}), "theme": selected_theme}
+            if hasattr(page, "client_storage"):
+                page.client_storage.set("sb_night_mode", selected_theme == "Dark")
+            page.theme_mode = ft.ThemeMode.DARK if selected_theme == "Dark" else ft.ThemeMode.LIGHT
+            page.update()
+
+        theme_dropdown.on_change = on_theme_change
+
+        default_view_dropdown = ft.Dropdown(
+            value=settings_state["document_preferences"]["default_view"],
+            width=170,
+            options=[ft.dropdown.Option("Table", "Table"), ft.dropdown.Option("Compact Table", "Compact Table")],
+        )
+        default_view_dropdown.on_change = lambda e: settings_state.__setitem__("document_preferences", {**settings_state.get("document_preferences", {}), "default_view": default_view_dropdown.value or "Table"})
+
+        records_per_page_dropdown = ft.Dropdown(
+            value=str(settings_state["document_preferences"]["records_per_page"]),
+            width=120,
+            options=[ft.dropdown.Option("10", "10"), ft.dropdown.Option("25", "25"), ft.dropdown.Option("50", "50")],
+        )
+        records_per_page_dropdown.on_change = lambda e: settings_state.__setitem__("document_preferences", {**settings_state.get("document_preferences", {}), "records_per_page": records_per_page_dropdown.value or "25"})
+
+        appearance_card = surface_card(
+            ft.Column([
+                section_header("Appearance", "Customize the application's visual appearance.", ft.Icons.PALETTE_OUTLINED, ft.Colors.BLUE_700),
+                ft.Divider(height=1),
+                make_row("Theme", theme_dropdown),
+            ], spacing=12),
+            padding=18,
+            expand=False,
+        )
+
+        def switch_row(label, key, section_name):
+            value = settings_state.get(section_name, {}).get(key, False)
+
+            def on_switch_change(e):
+                section_state = settings_state.get(section_name, {})
+                settings_state[section_name] = {**section_state, key: bool(e.control.value)}
+
+            switch = ft.Switch(value=value, active_color=ft.Colors.BLUE_700, on_change=on_switch_change)
+            return make_row(label, switch)
+
+        notifications_card = surface_card(
+            ft.Column([
+                section_header("Notifications", "Control application notifications.", ft.Icons.NOTIFICATIONS_OUTLINED, ft.Colors.BLUE_700),
+                ft.Divider(height=1),
+                switch_row("Document Updates", "document_updates", "notifications"),
+                switch_row("QR Tracking Updates", "qr_tracking_updates", "notifications"),
+                switch_row("Document Requests", "document_requests", "notifications"),
+                switch_row("Account Notifications", "account_notifications", "notifications"),
+                switch_row("System Announcements", "system_announcements", "notifications"),
+            ], spacing=10),
+            padding=18,
+            expand=False,
+        )
+
+        document_preferences_card = surface_card(
+            ft.Column([
+                section_header("Document Preferences", "Customize how documents are displayed.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700),
+                ft.Divider(height=1),
+                make_row("Default Document View", default_view_dropdown),
+                make_row("Records Per Page", records_per_page_dropdown),
+                switch_row("Remember Last Used Filters", "remember_filters", "document_preferences"),
+                switch_row("Confirmation Before Destructive Actions", "confirm_destructive", "document_preferences"),
+            ], spacing=10),
+            padding=18,
+            expand=False,
+        )
+
+        qr_tracking_card = surface_card(
+            ft.Column([
+                section_header("QR & Tracking", "Customize QR scanning and tracking behavior.", ft.Icons.QR_CODE_2, ft.Colors.BLUE_700),
+                ft.Divider(height=1),
+                switch_row("Confirm Receipt After Scanning", "confirm_receipt", "qr_tracking"),
+                switch_row("Show Tracking History After Scan", "show_tracking_history", "qr_tracking"),
+                switch_row("Scanner Sound", "scanner_sound", "qr_tracking"),
+                switch_row("Scanner Feedback", "scanner_feedback", "qr_tracking"),
+            ], spacing=10),
+            padding=18,
+            expand=False,
+        )
+
+        def open_password_notice(_):
+            page.snack_bar = ft.SnackBar(ft.Text("Password change is handled through My Account."), open=True)
+            page.update()
+
+        security_card = surface_card(
+            ft.Column([
+                section_header("Security", "Manage account security preferences.", ft.Icons.SECURITY, ft.Colors.BLUE_700),
+                ft.Divider(height=1),
+                switch_row("Remember This Device", "remember_device", "security"),
+                switch_row("Login Notifications", "login_notifications", "security"),
+                ft.Row([
+                    ft.Text("Password", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200, width=220),
+                    ft.OutlinedButton("Change Password", icon=ft.Icons.LOCK_RESET, on_click=open_password_notice),
+                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
+            ], spacing=10),
+            padding=18,
+            expand=False,
+        )
+
+        system_config_visible = has_permission("modify_system_settings") or current_user_role == "Super Administrator"
+        system_configuration_card = None
+        if system_config_visible:
+            system_configuration_card = surface_card(
+                ft.Column([
+                    section_header("System Configuration", "Authorized administration settings for the application.", ft.Icons.SETTINGS_APPLICATIONS_OUTLINED, ft.Colors.BLUE_700),
+                    ft.Divider(height=1),
+                    ft.Text("Organization Information", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Text("LGU Tolosa Legislative Document Tracking System", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                    ft.Text("Document Configuration", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Text("Default document status, filing preferences, and office configuration remain managed by the existing system setup.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                    ft.Text("QR Configuration", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Text("QR tracking preferences are controlled through the QR & Tracking settings card and the current tracking workflow.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                    ft.Text("Notification Configuration", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Text("System-wide announcements and application notifications are configured from the Notifications card.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                ], spacing=10),
+                padding=18,
+                expand=False,
+            )
+
+        cards = [appearance_card, notifications_card, document_preferences_card, qr_tracking_card, security_card]
+        if system_configuration_card is not None:
+            cards.append(system_configuration_card)
+        cards.append(save_button_row())
+
+        return ft.Column([
+            surface_card(
+                ft.Column([
+                    section_header("Settings", "Manage your application preferences and system configuration.", ft.Icons.SETTINGS_OUTLINED, ft.Colors.BLUE_700),
+                    ft.Divider(height=1),
+                ], spacing=12),
+                padding=18,
+                expand=False,
+            ),
+            *cards,
+        ], spacing=16, expand=False)
 
     def account_view():
         refresh_runtime_token_if_needed(force=True)
