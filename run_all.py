@@ -24,6 +24,7 @@ PY = sys.executable
 load_dotenv(override=True)
 
 FRONTEND = str(REPO_ROOT / "frontend" / "app.py")
+SB_MEMBER_BACKEND = str(REPO_ROOT / "SBmem_backend" / "main.py")
 
 children = []
 
@@ -86,6 +87,13 @@ def main():
         time.sleep(0.6)
 
         if children and children[0][1].poll() is None:
+            sb_backend_port = int(os.getenv("SBMEM_BACKEND_PORT", "8002"))
+            if check_port_available("127.0.0.1", sb_backend_port):
+                start_process("SB Member backend", SB_MEMBER_BACKEND, env={"SBMEM_BACKEND_PORT": str(sb_backend_port)})
+                time.sleep(0.4)
+            else:
+                print(f"Port {sb_backend_port} is already in use. SB Member backend was not launched.")
+
             frontend_port = int(os.getenv("FRONTEND_PORT", "8550"))
             frontend_host = "127.0.0.1"
             if not check_port_available(frontend_host, frontend_port):
