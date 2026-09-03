@@ -2,8 +2,8 @@ import sys
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-from backend.database import SessionLocal
-from backend import models
+from Backends.backend.database import SessionLocal
+from Backends.backend import models
 s=SessionLocal()
 emp=s.query(models.User).filter(models.User.username=='testuser_1786063076').first()
 print('before', emp.permissions)

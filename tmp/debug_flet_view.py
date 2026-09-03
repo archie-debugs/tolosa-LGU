@@ -5,7 +5,7 @@ import traceback
 sys.path.insert(0, os.getcwd())
 
 import flet as ft
-from frontend.frontend_admin.registration_requests import build_registration_requests_view
+from frontend.admin.registration_requests import build_registration_requests_view
 
 class DummyPage:
     def __init__(self):

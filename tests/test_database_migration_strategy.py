@@ -1,6 +1,6 @@
 import os
 
-import backend.main as main
+import Backends.backend.main as main
 
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 os.environ["DATABASE_URL"] = "sqlite:///./test_migration_strategy.sqlite"

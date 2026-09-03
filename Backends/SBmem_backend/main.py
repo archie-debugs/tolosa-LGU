@@ -13,10 +13,10 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from backend import models
-from backend.auth_jwt import ALGORITHM, SECRET_KEY
-from backend.core import normalize_permissions, normalize_user_role
-from backend.database import get_db
+from Backends.backend import models
+from Backends.backend.auth_jwt import ALGORITHM, SECRET_KEY
+from Backends.backend.core import normalize_permissions, normalize_user_role
+from Backends.backend.database import get_db
 
 
 SB_ROLE = "SB Member"
@@ -197,4 +197,5 @@ def dashboard(db: Session = Depends(get_db), current_user: models.User = Depends
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("SBmem_backend.main:app", host="127.0.0.1", port=int(os.getenv("SBMEM_BACKEND_PORT", "8002")), reload=False)
+    uvicorn.run("Backends.SBmem_backend.main:app", host="127.0.0.1", port=int(os.getenv("SBMEM_BACKEND_PORT", "8002")), reload=False)
+

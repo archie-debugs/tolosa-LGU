@@ -1,6 +1,6 @@
 import os
 
-import backend.main as main
+import Backends.backend.main as main
 
 
 def test_cors_allows_only_trusted_origins():

@@ -9,7 +9,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 # Use the app's models
-from backend import models
+from Backends.backend import models
 
 url = os.getenv('DATABASE_URL')
 if not url:

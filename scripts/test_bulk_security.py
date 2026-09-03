@@ -2,9 +2,9 @@ import requests, os, sys, time
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-from backend.database import SessionLocal
-from backend import models
-from backend.core import get_password_hash
+from Backends.backend.database import SessionLocal
+from Backends.backend import models
+from Backends.backend.core import get_password_hash
 
 BACKEND = os.getenv('BACKEND_URL', 'http://127.0.0.1:8001')
 

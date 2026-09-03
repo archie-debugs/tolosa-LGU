@@ -3,8 +3,8 @@ import os
 import time
 from pathlib import Path
 import requests
-from backend.database import SessionLocal
-from backend import models
+from Backends.backend.database import SessionLocal
+from Backends.backend import models
 
 BACKEND = os.getenv('BACKEND_URL', 'http://127.0.0.1:8001')
 requests.packages.urllib3.disable_warnings()

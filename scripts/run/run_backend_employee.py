@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 if __name__ == "__main__":
-    from backend_employee.main import app
+    from Backends.backend_employee.main import app
 
     cert_file = project_root / "server.crt"
     key_file = project_root / "server.key"

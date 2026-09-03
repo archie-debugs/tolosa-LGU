@@ -13,10 +13,10 @@ for db_path in ["test_last_login.sqlite"]:
 
 from fastapi.testclient import TestClient
 
-from backend import models
-from backend.core import get_password_hash
-from backend.database import SessionLocal, engine
-from backend.main import app
+from Backends.backend import models
+from Backends.backend.core import get_password_hash
+from Backends.backend.database import SessionLocal, engine
+from Backends.backend.main import app
 
 models.Base.metadata.create_all(bind=engine)
 

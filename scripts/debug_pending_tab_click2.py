@@ -3,7 +3,7 @@ from pathlib import Path
 proj = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(proj))
 import flet as ft
-from frontend.frontend_admin.registration_requests import build_registration_requests_view
+from frontend.admin.registration_requests import build_registration_requests_view
 
 class DummyPage:
     def __init__(self):

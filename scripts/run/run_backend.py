@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 if __name__ == "__main__":
-    from backend.main import app
+    from Backends.backend.main import app
 
     cert_file = project_root / "scanner.crt"
     key_file = project_root / "scanner.key"

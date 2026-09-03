@@ -2,8 +2,8 @@ import sys
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-from backend.database import SessionLocal, DATABASE_URL
-from backend import models
+from Backends.backend.database import SessionLocal, DATABASE_URL
+from Backends.backend import models
 s=SessionLocal()
 users=s.query(models.User).all()
 print('DB:', DATABASE_URL)

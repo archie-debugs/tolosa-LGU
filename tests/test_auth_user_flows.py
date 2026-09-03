@@ -3,10 +3,10 @@ import time
 
 from fastapi.testclient import TestClient
 
-import backend.main as main
-from backend import models
-from backend.core import get_password_hash
-from backend.database import SessionLocal, engine
+import Backends.backend.main as main
+from Backends.backend import models
+from Backends.backend.core import get_password_hash
+from Backends.backend.database import SessionLocal, engine
 
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 os.environ["DATABASE_URL"] = "sqlite:///./test_auth_user_flows.sqlite"

@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from random import choice, randint
 
-from backend.database import SessionLocal
-from backend.models import AuditLog
+from Backends.backend.database import SessionLocal
+from Backends.backend.models import AuditLog
 
 
 USERS = ["admin", "joel", "beth", "rhea", "maria", "marla", "staff1", "staff2"]

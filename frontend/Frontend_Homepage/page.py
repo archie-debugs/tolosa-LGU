@@ -1,5 +1,5 @@
 import flet as ft
-from frontend.frontend_admin.app import main as admin_main
+from frontend.admin.app import main as admin_main
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors

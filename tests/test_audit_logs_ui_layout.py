@@ -1,6 +1,6 @@
 import flet as ft
 
-from frontend.frontend_admin.audit_logs import build_audit_logs_view
+from frontend.admin.audit_logs import build_audit_logs_view
 
 
 class DummyPage:

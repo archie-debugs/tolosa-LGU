@@ -14,8 +14,8 @@ config = context.config
 fileConfig(config.config_file_name)
 
 # add your model's MetaData object here
-import backend.database as _database
-from backend.models import Base as ModelsBase
+import Backends.backend.database as _database
+from Backends.backend.models import Base as ModelsBase
 
 target_metadata = ModelsBase.metadata
 

@@ -2,7 +2,7 @@ import flet as ft
 import traceback
 import sys
 
-from frontend.frontend_admin import app as admin_app
+from frontend.admin import app as admin_app
 
 try:
     # Use run to start the app; exceptions during startup will be printed

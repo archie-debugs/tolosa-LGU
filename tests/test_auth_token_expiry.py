@@ -5,7 +5,7 @@ import os
 def test_default_access_token_expiration_is_reasonable():
     os.environ.pop("JWT_EXP_MINUTES", None)
     os.environ["JWT_SECRET_KEY"] = "test-secret-key"
-    import backend.auth_jwt as auth_jwt
+    import Backends.backend.auth_jwt as auth_jwt
 
     importlib.reload(auth_jwt)
 

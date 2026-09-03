@@ -17,15 +17,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.main import app
-from backend.database import engine
-from backend import models
+from Backends.backend.main import app
+from Backends.backend.database import engine
+from Backends.backend import models
 
 # Create tables in the in-memory DB
 models.Base.metadata.create_all(bind=engine)
 
 # Create a test admin user so header-based admin auth succeeds
-from backend.database import SessionLocal
+from Backends.backend.database import SessionLocal
 db = SessionLocal()
 try:
     admin_user = models.User(username="testadmin", hashed_password="testpass", role="Admin", is_active=True)

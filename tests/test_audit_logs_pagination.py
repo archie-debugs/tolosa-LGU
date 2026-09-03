@@ -3,10 +3,10 @@ from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 
-from backend import models
-from backend.core import get_password_hash
-from backend.database import SessionLocal, engine
-from backend.main import app
+from Backends.backend import models
+from Backends.backend.core import get_password_hash
+from Backends.backend.database import SessionLocal, engine
+from Backends.backend.main import app
 
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key")

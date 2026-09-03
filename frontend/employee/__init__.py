@@ -1,0 +1,1 @@
+"""Employee frontend package."""

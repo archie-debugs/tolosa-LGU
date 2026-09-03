@@ -1,6 +1,6 @@
 """Ensure FK columns exist on `documents` table when alembic migration couldn't add them."""
-from backend.database import engine
-from backend.core import _column_exists, _add_column_if_missing
+from Backends.backend.database import engine
+from Backends.backend.core import _column_exists, _add_column_if_missing
 from sqlalchemy import text
 
 def ensure():

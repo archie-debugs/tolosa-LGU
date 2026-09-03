@@ -14,9 +14,9 @@ project_root = Path(__file__).resolve().parents[1]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from backend.database import SessionLocal, engine
-from backend import models
-from backend.core import get_password_hash
+from Backends.backend.database import SessionLocal, engine
+from Backends.backend import models
+from Backends.backend.core import get_password_hash
 
 
 def seed(username: str, password: str):

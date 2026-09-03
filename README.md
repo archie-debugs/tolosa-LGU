@@ -15,10 +15,22 @@ Ctrl+Shift+P → Tasks: Run Task → Run Full Stack
 python run_backend.py
 ```
 
-**Admin frontend:**
+**Public/login frontend:**
 ```bash
-python frontend/frontend_admin/app.py
+python frontend/app.py
 ```
+
+**Administrator frontend:**
+```bash
+python frontend/admin/app.py
+```
+
+**Employee frontend:**
+```bash
+python run_flet_employee.py
+```
+
+Frontend roles are physically organized under `frontend/admin`, `frontend/employee`, and `frontend/sb_member`. Administrators and employees share the permission-aware document workspace so they see the same records, while each role has its own entrypoint and launcher.
 
 ## Local HTTP / HTTPS behavior
 
@@ -29,3 +41,13 @@ The repository currently contains certificate files named `scanner.crt` and `sca
 ## Backend URL
 
 - Backend: `http://127.0.0.1:8001` (or your machine IP address if you need network access)
+
+## Backend layout
+
+All backend services are grouped under `Backends/`:
+
+- `Backends/backend`: main API service
+- `Backends/backend_employee`: employee API service
+- `Backends/SBmem_backend`: SB Member API service
+
+The root launch scripts remain as convenient entrypoints and now import from these packages.

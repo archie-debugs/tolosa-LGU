@@ -24,7 +24,7 @@ PY = sys.executable
 load_dotenv(override=True)
 
 FRONTEND = str(REPO_ROOT / "frontend" / "app.py")
-SB_MEMBER_BACKEND = str(REPO_ROOT / "SBmem_backend" / "main.py")
+SB_MEMBER_BACKEND = str(REPO_ROOT / "Backends" / "SBmem_backend" / "main.py")
 
 children = []
 

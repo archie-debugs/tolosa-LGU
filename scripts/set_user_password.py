@@ -2,9 +2,9 @@ import sys
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-from backend.database import SessionLocal
-from backend.core import get_password_hash
-from backend import models
+from Backends.backend.database import SessionLocal
+from Backends.backend.core import get_password_hash
+from Backends.backend import models
 
 username = 'a'
 new_pw = 'a'

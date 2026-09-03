@@ -2,7 +2,7 @@ import importlib.util
 from pathlib import Path
 
 
-APP_PATH = Path(__file__).resolve().parents[1] / "frontend" / "frontend_admin" / "app.py"
+APP_PATH = Path(__file__).resolve().parents[1] / "frontend" / "admin" / "app.py"
 SPEC = importlib.util.spec_from_file_location("frontend_admin_app", APP_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
