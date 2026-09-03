@@ -9,10 +9,17 @@ def build_documents_view(
     section_header,
     documents_controls=None,
 ):
-    """Build the document browser with the public-facing workspace layout."""
+    """
+    Compact Documents workspace.
+
+    This UI intentionally does NOT create a large empty/gray
+    dashboard area above the document table.
+
+    Existing controls are preserved so the current frontend
+    integration can continue to use them.
+    """
 
     documents_controls = documents_controls or {}
-    document_count = documents_controls.get("document_count", 0)
 
     # =========================================================
     # CONTROLS
@@ -23,7 +30,6 @@ def build_documents_view(
     status_filter = documents_controls.get("status_filter")
     category_filter = documents_controls.get("category_filter")
     type_filter = documents_controls.get("type_filter")
-    year_filter = documents_controls.get("year_filter")
     priority_filter = documents_controls.get("priority_filter")
     assigned_filter = documents_controls.get("assigned_filter")
 
@@ -48,66 +54,25 @@ def build_documents_view(
 
     documents_empty_state = documents_controls.get("empty_state")
 
-    page_title = ft.Column(
-        [
-            ft.Text("Documents", size=30, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-            ft.Text("Browse legislative documents available to you.", size=14, color=ft.Colors.BLUE_GREY_600),
-        ],
-        spacing=2,
-    )
-
-    count_card = ft.Container(
-        content=ft.Row(
-            [
-                ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=24, color=ft.Colors.BLUE_700),
-                ft.Column([ft.Text(str(document_count), size=16, weight=ft.FontWeight.BOLD), ft.Text("documents", size=11, color=ft.Colors.BLUE_GREY_600)], spacing=0),
-            ],
-            spacing=10,
-        ),
-        padding=ft.Padding(left=16, top=10, right=22, bottom=10),
-        bgcolor=ft.Colors.WHITE,
-        border=ft.Border(top=ft.BorderSide(1, ft.Colors.BLUE_GREY_100), right=ft.BorderSide(1, ft.Colors.BLUE_GREY_100), bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_100), left=ft.BorderSide(1, ft.Colors.BLUE_GREY_100)),
-        border_radius=10,
-    )
-
-    search_controls = [search_field, type_filter, year_filter]
-    search_controls = [control for control in search_controls if control is not None]
-    if search_controls:
-        search_controls[0].hint_text = "Search documents by title or number..."
-        search_controls[0].label = None
-    if type_filter is not None:
-        type_filter.label = "Document Type"
-        type_filter.width = 220
-    if year_filter is not None:
-        year_filter.label = "Year"
-        year_filter.width = 220
-    if search_field is not None:
-        search_field.width = 380
-
-    filter_panel = ft.Container(
-        content=ft.Column(
-            [
-                ft.Row(search_controls, spacing=14, wrap=True),
-                ft.Row(
-                    [
-                        ft.Row([ft.Container(width=8, height=8, bgcolor=ft.Colors.GREEN_600, border_radius=4), ft.Text("Status: Current / Active", size=12, color=ft.Colors.GREEN_700, weight=ft.FontWeight.BOLD)], spacing=8),
-                        reset_filter_button or ft.Container(),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
-            ],
-            spacing=16,
-        ),
-        padding=20,
-        bgcolor=ft.Colors.WHITE,
-        border_radius=12,
-    )
+    header = section_header("Documents", "Manage legislative documents and record history.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700)
+    action_controls = [register_button, bulk_register_button, refresh_button, qr_monitor_button, qr_labels_button, export_button, print_button, import_button, filter_button]
+    action_row = ft.Row(controls=[control for control in action_controls if control is not None], spacing=8, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    search_row = ft.Row([ft.Container(content=search_field, expand=True)], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER) if search_field is not None else None
+    filter_controls = [status_filter, category_filter, type_filter, priority_filter, assigned_filter, sort_filter, start_date_filter, end_date_filter]
+    filters_row = ft.Row(controls=[control for control in filter_controls if control is not None], spacing=8, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER) if any(filter_controls) else None
+    top_controls = [header, ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100), action_row]
+    if search_row is not None:
+        top_controls.append(search_row)
+    if filters_row is not None:
+        top_controls.append(filters_row)
+    documents_header_card = surface_card(ft.Column(controls=top_controls, spacing=12), padding=18, expand=False)
+    table_title = ft.Row([ft.Row([ft.Icon(ft.Icons.TABLE_ROWS_OUTLINED, size=20, color=ft.Colors.BLUE_700), ft.Text("Document Records", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)], vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     # =========================================================
     # TABLE CONTENT
     # =========================================================
 
-    fixed_table_width = 1120
+    fixed_table_width = 1600
     has_rows = bool(getattr(documents_table, "rows", None) and len(documents_table.rows) > 0)
 
     table_scroll = ft.Container(
@@ -140,7 +105,8 @@ def build_documents_view(
             padding=ft.Padding(left=0, top=8, right=0, bottom=8),
         )
 
-    table_card = ft.Container(content=ft.Column([table_scroll, empty_state], spacing=0), bgcolor=ft.Colors.WHITE, border_radius=12, padding=10, width="100%")
+    table_container = ft.Container(content=ft.Column(controls=[table_scroll, empty_state], spacing=0, width="100%", alignment=ft.MainAxisAlignment.START, horizontal_alignment=ft.CrossAxisAlignment.STRETCH), width="100%", bgcolor=ft.Colors.BLUE_GREY_50, border_radius=18, padding=12, expand=False, alignment=ft.Alignment(-1, 0))
+    table_card = surface_card(ft.Column(controls=[table_title, table_container], spacing=10, width="100%", horizontal_alignment=ft.CrossAxisAlignment.START, alignment=ft.MainAxisAlignment.START), padding=14, expand=False)
 
     # =========================================================
     # NOTICE
@@ -164,10 +130,7 @@ def build_documents_view(
     # FINAL VIEW
     # =========================================================
 
-    final_controls = [
-        ft.Row([page_title, count_card], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        filter_panel,
-    ]
+    final_controls = [documents_header_card]
     if notice_container is not None:
         final_controls.append(notice_container)
     final_controls.append(table_card)

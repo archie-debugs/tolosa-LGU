@@ -977,12 +977,6 @@ def main(page: ft.Page):
         options=[ft.dropdown.Option("All"), ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")],
         value="All",
     )
-    documents_filter_year = ft.Dropdown(
-        label="Year",
-        width=160,
-        options=[ft.dropdown.Option("All Years"), ft.dropdown.Option("2026"), ft.dropdown.Option("2025"), ft.dropdown.Option("2024")],
-        value="All Years",
-    )
     documents_filter_category = ft.Dropdown(
         label="Category",
         width=140,
@@ -1828,15 +1822,22 @@ def main(page: ft.Page):
 
     documents_table = ft.DataTable(
         columns=[
-            ft.DataColumn(label=make_document_header("Document No.", 120)),
-            ft.DataColumn(label=make_document_header("Title", 360)),
-            ft.DataColumn(label=make_document_header("Type", 140)),
-            ft.DataColumn(label=make_document_header("Date", 150)),
-            ft.DataColumn(label=make_document_header("Status", 130)),
-            ft.DataColumn(label=make_document_header("Actions", 180)),
+            ft.DataColumn(label=make_document_header("Select", 78)),
+            ft.DataColumn(label=make_document_header("Actions", 90)),
+            ft.DataColumn(label=make_document_header("Tracking No.", 120)),
+            ft.DataColumn(label=make_document_header("Title", 280)),
+            ft.DataColumn(label=make_document_header("Document Type", 120)),
+            ft.DataColumn(label=make_document_header("Category", 100)),
+            ft.DataColumn(label=make_document_header("Originating Office", 150)),
+            ft.DataColumn(label=make_document_header("Current Office", 140)),
+            ft.DataColumn(label=make_document_header("Assigned To", 110)),
+            ft.DataColumn(label=make_document_header("Status", 120)),
+            ft.DataColumn(label=make_document_header("Priority", 80)),
+            ft.DataColumn(label=make_document_header("Date Received", 100)),
+            ft.DataColumn(label=make_document_header("Last Updated", 100)),
         ],
         rows=[],
-        width=1120,
+        width=1600,
         expand=False,
         column_spacing=10,
         horizontal_margin=0,
@@ -2476,10 +2477,29 @@ def main(page: ft.Page):
             rows.append(
                 ft.DataRow(
                     cells=[
+                        ft.DataCell(
+                            ft.Checkbox(
+                                value=doc_id in selected_qr_document_ids,
+                                on_change=lambda e, doc_id_value=doc_id: (
+                                    selected_qr_document_ids.add(doc_id_value) if e.control.value else selected_qr_document_ids.discard(doc_id_value),
+                                    refresh_qr_selection_badge(),
+                                ),
+                            )
+                        ),
+                        ft.DataCell(
+                            ft.Container(
+                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
+                                width=90,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ),
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
                         title_cell,
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("date_received", "-")), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
+                            ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
+                            ft.DataCell(ft.Container(content=ft.Text(doc.get("originating_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=150, alignment=ft.Alignment.CENTER_LEFT)),
+                            ft.DataCell(ft.Container(content=ft.Text(doc.get("current_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=140, alignment=ft.Alignment.CENTER_LEFT)),
+                            ft.DataCell(ft.Container(content=ft.Text(doc.get("assigned_to", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=110, alignment=ft.Alignment.CENTER_LEFT)),
                         ft.DataCell(
                             ft.Container(
                                 content=ft.Text(status, size=12, color=status_color),
@@ -2487,19 +2507,12 @@ def main(page: ft.Page):
                                 padding=6,
                                 border_radius=12,
                                 alignment=ft.Alignment.CENTER,
-                                width=110,
+                                width=120,
                             )
                         ),
-                        ft.DataCell(
-                            ft.Row(
-                                [
-                                    ft.TextButton("View", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=doc: show_document_details(d)) if has_permission("view_document_details") else ft.Container(),
-                                    ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download", on_click=lambda _: show_document_notice("Download action preview enabled.")) if has_permission("download_documents") else ft.Container(),
-                                    ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="More actions", items=actions),
-                                ],
-                                spacing=0,
-                            )
-                        ),
+                        ft.DataCell(ft.Container(content=ft.Text(doc.get("priority", "-"), size=13), width=80, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("date_received", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("last_updated", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
                     ],
                 )
             )
@@ -2798,9 +2811,6 @@ def main(page: ft.Page):
                 params["start_date"] = documents_filter_start_date.value
             if documents_filter_end_date.value:
                 params["end_date"] = documents_filter_end_date.value
-            if documents_filter_year.value and documents_filter_year.value != "All Years":
-                params["start_date"] = f"{documents_filter_year.value}-01-01"
-                params["end_date"] = f"{documents_filter_year.value}-12-31"
             response = requests.get(f"{BACKEND_URL}/documents", params=params, headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
@@ -2844,9 +2854,6 @@ def main(page: ft.Page):
                 params["start_date"] = documents_filter_start_date.value
             if documents_filter_end_date.value:
                 params["end_date"] = documents_filter_end_date.value
-            if documents_filter_year.value and documents_filter_year.value != "All Years":
-                params["start_date"] = f"{documents_filter_year.value}-01-01"
-                params["end_date"] = f"{documents_filter_year.value}-12-31"
             response = requests.get(f"{BACKEND_URL}/documents", params=params, headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
@@ -2872,7 +2879,6 @@ def main(page: ft.Page):
         documents_sort_filter.value = "Newest"
         documents_filter_start_date.value = ""
         documents_filter_end_date.value = ""
-        documents_filter_year.value = "All Years"
         load_documents_table()
         page.update()
 
@@ -2890,7 +2896,6 @@ def main(page: ft.Page):
                 "status_filter": documents_status_filter if has_permission("filter_documents") else None,
                 "category_filter": documents_category_filter if has_permission("filter_documents") else None,
                 "type_filter": documents_type_filter if has_permission("filter_documents") else None,
-                "year_filter": documents_filter_year if has_permission("filter_documents") else None,
                 "priority_filter": documents_filter_priority if has_permission("filter_documents") else None,
                 "assigned_filter": documents_assigned_filter if has_permission("filter_documents") else None,
                 "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_register_document_dialog()) if has_permission("register_documents") else None,
@@ -2903,7 +2908,6 @@ def main(page: ft.Page):
                 "import_button": None,
                 "filter_button": ft.OutlinedButton("Apply", icon=ft.Icons.FILTER_LIST, on_click=lambda _: load_documents_table()),
                 "reset_filter_button": ft.TextButton("Clear Filters", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
-                "document_count": len(documents_data),
                 "sort_filter": documents_sort_filter,
                 "start_date_filter": documents_filter_start_date,
                 "end_date_filter": documents_filter_end_date,
