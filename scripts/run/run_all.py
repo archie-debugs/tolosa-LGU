@@ -2,7 +2,7 @@
 r"""Run the backend and frontends together for development.
 
 Usage:
-    .venv\Scripts\python.exe run_all.py
+    .venv\Scripts\python.exe scripts/run/run_all.py
 
 Options:
         --no-frontend     Don't start the frontend
@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 
 # Load development environment settings before starting child processes
@@ -83,7 +83,7 @@ def main():
             return
 
         # Start backend first
-        start_process("backend", str(REPO_ROOT / "run_backend.py"))
+        start_process("backend", str(REPO_ROOT / "scripts" / "run" / "run_backend.py"))
         time.sleep(0.6)
 
         if children and children[0][1].poll() is None:

@@ -14,7 +14,7 @@ def test_employee_frontend_has_dedicated_entrypoint():
 
 
 def test_employee_launcher_targets_employee_package():
-    launcher = (ROOT / "run_flet_employee.py").read_text(encoding="utf-8")
+    launcher = (ROOT / "scripts" / "run" / "run_flet_employee.py").read_text(encoding="utf-8")
     assert "frontend.employee" in launcher
     assert "frontend.frontend_admin" not in launcher
 

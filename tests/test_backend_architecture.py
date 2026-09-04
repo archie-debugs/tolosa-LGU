@@ -15,6 +15,6 @@ def test_backend_services_live_under_backends_directory():
 
 
 def test_backend_launchers_use_backends_paths():
-    assert "from Backends.backend.main import app" in (ROOT / "run_backend.py").read_text(encoding="utf-8")
-    assert "from Backends.backend_employee.main import app" in (ROOT / "run_backend_employee.py").read_text(encoding="utf-8")
-    assert "Backends" in (ROOT / "run_all.py").read_text(encoding="utf-8")
+    assert "from Backends.backend.main import app" in (ROOT / "scripts" / "run" / "run_backend.py").read_text(encoding="utf-8")
+    assert "from Backends.backend_employee.main import app" in (ROOT / "scripts" / "run" / "run_backend_employee.py").read_text(encoding="utf-8")
+    assert "Backends" in (ROOT / "scripts" / "run" / "run_all.py").read_text(encoding="utf-8")

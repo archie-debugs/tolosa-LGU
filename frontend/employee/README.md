@@ -7,7 +7,7 @@ Employee document records and actions intentionally use the shared permission-aw
 Run independently with:
 
 ```text
-.venv\Scripts\python.exe run_flet_employee.py
+.venv\Scripts\python.exe scripts/run/run_flet_employee.py
 ```
 
 The default browser port is `8552` (`EMPLOYEE_FRONTEND_PORT` can override it).

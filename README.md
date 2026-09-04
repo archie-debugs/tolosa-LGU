@@ -12,7 +12,7 @@ Ctrl+Shift+P → Tasks: Run Task → Run Full Stack
 
 **Backend (port 8001):**
 ```bash
-python run_backend.py
+python scripts/run/run_backend.py
 ```
 
 **Public/login frontend:**
@@ -27,7 +27,7 @@ python frontend/admin/app.py
 
 **Employee frontend:**
 ```bash
-python run_flet_employee.py
+python scripts/run/run_flet_employee.py
 ```
 
 Frontend roles are physically organized under `frontend/admin`, `frontend/employee`, and `frontend/sb_member`. Administrators and employees share the permission-aware document workspace so they see the same records, while each role has its own entrypoint and launcher.
