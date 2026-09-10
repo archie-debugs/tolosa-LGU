@@ -11,6 +11,7 @@ if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
 
 from frontend.Frontend_Homepage.page import build_homepage_view
+from frontend.frontend_public.public_portal import build_public_portal
 
 
 def main(page: ft.Page):

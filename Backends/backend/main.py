@@ -23,6 +23,7 @@ from .routes.audit import router as audit_router
 from .routes.registration import router as registration_router
 from .routes.documents import router as documents_router
 from .routes.analytics import router as analytics_router
+from .routes.public_documents import router as public_documents_router
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -90,6 +91,7 @@ app.include_router(registration_router)
 app.include_router(audit_router)
 app.include_router(documents_router)
 app.include_router(analytics_router)
+app.include_router(public_documents_router)
 
 
 @app.on_event("startup")

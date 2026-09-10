@@ -45,6 +45,16 @@ def build_homepage_view(page=None):
         if page is not None:
             admin_main(page)
 
+    def open_public_documents(_):
+        if page is not None:
+            try:
+                from frontend.frontend_public.public_portal import build_public_portal
+                page.clean()
+                page.add(build_public_portal(page))
+                page.update()
+            except Exception:
+                pass
+
     def toggle_night_mode(_):
         nonlocal is_dark
         is_dark = not is_dark
@@ -149,6 +159,7 @@ def build_homepage_view(page=None):
                                 color=navy,
                                 bgcolor=gold,
                                 style=ft.ButtonStyle(padding=ft.Padding(15, 11, 15, 11)),
+                                on_click=open_public_documents,
                             ),
                         ],
                         alignment=ft.MainAxisAlignment.END,
