@@ -35,6 +35,7 @@ def build_documents_view(
 
     register_button = documents_controls.get("register_button")
     bulk_register_button = documents_controls.get("bulk_register_button")
+    archive_selected_button = documents_controls.get("archive_selected_button")
     refresh_button = documents_controls.get("refresh_button")
     qr_monitor_button = documents_controls.get("qr_monitor_button")
     qr_labels_button = documents_controls.get("qr_labels_button")
@@ -55,7 +56,7 @@ def build_documents_view(
     documents_empty_state = documents_controls.get("empty_state")
 
     header = section_header("Documents", "Manage legislative documents and record history.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700)
-    action_controls = [register_button, bulk_register_button, refresh_button, qr_monitor_button, qr_labels_button, export_button, print_button, import_button, filter_button]
+    action_controls = [register_button, bulk_register_button, archive_selected_button, refresh_button, qr_monitor_button, qr_labels_button, export_button, print_button, import_button, filter_button]
     action_row = ft.Row(controls=[control for control in action_controls if control is not None], spacing=8, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
     search_row = ft.Row([ft.Container(content=search_field, expand=True)], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER) if search_field is not None else None
     filter_controls = [status_filter, category_filter, type_filter, priority_filter, assigned_filter, sort_filter, start_date_filter, end_date_filter]

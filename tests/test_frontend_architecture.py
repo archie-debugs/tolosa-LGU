@@ -5,6 +5,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_archived_documents_delete_selected_button_and_handler_exist():
+    admin_app = ROOT / "frontend" / "admin" / "app.py"
+    text = admin_app.read_text(encoding="utf-8")
+    assert 'archived_documents_delete_selected_button = ft.Button(' in text
+    assert 'def open_archived_delete_selected_dialog():' in text
+    assert 'def run_delete_selected_archived_documents_action():' in text
+
+
+def test_archived_delete_selected_flow_uses_real_permanent_delete_requests():
+    admin_app = ROOT / "frontend" / "admin" / "app.py"
+    text = admin_app.read_text(encoding="utf-8")
+    assert 'requests.delete(' in text
+    assert 'f"{BACKEND_URL}/documents/{doc_id}/permanent"' in text
+    assert 'Delete Selected action prepared' not in text
+
+
 def test_employee_frontend_has_dedicated_entrypoint():
     employee_app = ROOT / "frontend" / "employee" / "app.py"
     assert employee_app.exists()

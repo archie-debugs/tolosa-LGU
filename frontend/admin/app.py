@@ -943,6 +943,16 @@ def main(page: ft.Page, session=None):
 
     documents_data = []
     archived_documents_data = []
+    selected_archived_document_ids = set()
+
+    archived_documents_select_all_checkbox = ft.Checkbox(value=False, on_change=lambda e: archived_documents_select_all_toggle(e.control.value))
+    archived_documents_delete_selected_button = ft.Button(
+        "Delete Selected",
+        icon=ft.Icons.DELETE_FOREVER,
+        bgcolor=ft.Colors.RED_700,
+        color=ft.Colors.WHITE,
+        on_click=lambda _: open_archived_delete_selected_dialog(),
+    )
 
     def get_document_status_style(status):
         normalized = (status or "").strip().lower()
@@ -1032,6 +1042,16 @@ def main(page: ft.Page, session=None):
     )
     page.overlay.append(documents_delete_dialog)
 
+    documents_bulk_archive_dialog = ft.AlertDialog(
+        title=ft.Text("Archive Selected Documents?"),
+        content=ft.Text(""),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_documents_bulk_archive_dialog()),
+            ft.Button("Archive", bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: run_bulk_archive_selected_documents()),
+        ],
+    )
+    page.overlay.append(documents_bulk_archive_dialog)
+
     pending_restore_document = None
     archived_restore_dialog = ft.AlertDialog(
         title=ft.Text("Restore Document"),
@@ -1053,6 +1073,16 @@ def main(page: ft.Page, session=None):
         ],
     )
     page.overlay.append(archived_delete_dialog)
+
+    archived_delete_selected_dialog = ft.AlertDialog(
+        title=ft.Text("Delete Selected Archived Documents"),
+        content=ft.Text("This action permanently deletes the selected archived documents and cannot be undone. Are you sure you want to continue?"),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_archived_delete_selected_dialog()),
+            ft.Button("Delete Permanently", bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE, on_click=lambda _: run_delete_selected_archived_documents_action()),
+        ],
+    )
+    page.overlay.append(archived_delete_selected_dialog)
 
     scan_input_field = ft.TextField(label="Scan QR / Tracking", width=280, hint_text="Scan code or enter tracking number")
     scan_destination_field = ft.TextField(label="Destination Office", width=280)
@@ -1820,6 +1850,14 @@ def main(page: ft.Page, session=None):
             documents_notice.value = ""
         page.update()
 
+    documents_archive_selected_button = ft.Button(
+        "Archive Selected",
+        icon=ft.Icons.ARCHIVE,
+        bgcolor=ft.Colors.BLUE_GREY_700,
+        color=ft.Colors.WHITE,
+        on_click=lambda _: open_documents_bulk_archive_dialog(),
+    )
+
     documents_table = ft.DataTable(
         columns=[
             ft.DataColumn(label=make_document_header("Select", 78)),
@@ -1869,6 +1907,7 @@ def main(page: ft.Page, session=None):
 
     archived_documents_table = ft.DataTable(
         columns=[
+            ft.DataColumn(label=ft.Container(content=archived_documents_select_all_checkbox, width=50, alignment=ft.Alignment.CENTER)),
             ft.DataColumn(label=make_document_header("Actions", 90)),
             ft.DataColumn(label=make_document_header("Tracking No.", 140)),
             ft.DataColumn(label=make_document_header("Title", 320)),
@@ -2095,11 +2134,60 @@ def main(page: ft.Page, session=None):
         documents_details_dialog.open = False
         page.update()
 
+    def update_document_selection_button_state():
+        documents_archive_selected_button.disabled = len(selected_qr_document_ids) == 0
+
     def close_documents_delete_dialog():
         nonlocal pending_delete_document
         pending_delete_document = None
         documents_delete_dialog.open = False
         page.update()
+
+    def close_documents_bulk_archive_dialog():
+        documents_bulk_archive_dialog.open = False
+        page.update()
+
+    def open_documents_bulk_archive_dialog():
+        if not selected_qr_document_ids:
+            documents_archive_selected_button.disabled = True
+            return
+        count = len(selected_qr_document_ids)
+        documents_bulk_archive_dialog.title = ft.Text("Archive Selected Documents?")
+        documents_bulk_archive_dialog.content = ft.Text(
+            f"You are about to archive {count} document(s).\nThese documents will be moved from active Documents to Archived Documents."
+        )
+        documents_bulk_archive_dialog.open = True
+        page.update()
+
+    def run_bulk_archive_selected_documents():
+        close_documents_bulk_archive_dialog()
+        if not selected_qr_document_ids:
+            update_document_selection_button_state()
+            return
+        selected_ids = list(selected_qr_document_ids)
+        failed = []
+        archived_count = 0
+        try:
+            for doc_id in selected_ids:
+                try:
+                    response = requests.delete(f"{BACKEND_URL}/documents/{doc_id}", headers=get_admin_headers(), verify=False, timeout=10)
+                    if response.status_code != 200:
+                        raise Exception(response.text)
+                    archived_count += 1
+                except Exception as exc:
+                    failed.append((doc_id, str(exc)))
+            if failed:
+                selected_qr_document_ids.clear()
+                load_documents_table()
+                show_document_notice(f"Archive failed for {len(failed)} document(s): {failed[0][1]}")
+            else:
+                selected_qr_document_ids.clear()
+                load_documents_table()
+                show_document_notice(f"{archived_count} documents archived successfully.")
+            update_document_selection_button_state()
+            apply_document_search_to_current_view()
+        except Exception as exc:
+            show_document_notice(f"Bulk archive failed: {exc}")
 
     def confirm_delete_document(doc):
         nonlocal pending_delete_document
@@ -2155,6 +2243,38 @@ def main(page: ft.Page, session=None):
         pending_permanent_delete_document = None
         archived_delete_dialog.open = False
         page.update()
+
+    def close_archived_delete_selected_dialog():
+        archived_delete_selected_dialog.open = False
+        page.update()
+
+    def open_archived_delete_selected_dialog():
+        if not selected_archived_document_ids:
+            return
+        archived_delete_selected_dialog.open = True
+        page.update()
+
+    def run_delete_selected_archived_documents_action():
+        close_archived_delete_selected_dialog()
+        if not selected_archived_document_ids:
+            return
+        try:
+            selected_ids = list(selected_archived_document_ids)
+            for doc_id in selected_ids:
+                response = requests.delete(
+                    f"{BACKEND_URL}/documents/{doc_id}/permanent",
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=10,
+                )
+                if response.status_code != 200:
+                    raise Exception(response.text)
+            selected_archived_document_ids.clear()
+            clear_archived_selection_state()
+            load_archived_documents_table()
+            show_document_notice(f"Permanently deleted {len(selected_ids)} archived document(s).")
+        except Exception as exc:
+            show_document_notice(f"Delete selected archived documents failed: {exc}")
 
     def confirm_permanent_delete_archived_document(doc):
         nonlocal pending_permanent_delete_document
@@ -2483,6 +2603,7 @@ def main(page: ft.Page, session=None):
                                 on_change=lambda e, doc_id_value=doc_id: (
                                     selected_qr_document_ids.add(doc_id_value) if e.control.value else selected_qr_document_ids.discard(doc_id_value),
                                     refresh_qr_selection_badge(),
+                                    update_document_selection_button_state(),
                                 ),
                             )
                         ),
@@ -2589,25 +2710,74 @@ def main(page: ft.Page, session=None):
             )
         return rows
 
+    def sync_archived_document_delete_selected_button_state():
+        archived_documents_delete_selected_button.disabled = len(selected_archived_document_ids) == 0
+        archived_documents_delete_selected_button.text = (
+            f"Delete Selected ({len(selected_archived_document_ids)})" if selected_archived_document_ids else "Delete Selected"
+        )
+
+    def sync_archived_header_checkbox_from_rows(visible_docs):
+        visible_ids = {doc.get("id") for doc in visible_docs if doc.get("id") is not None}
+        archived_documents_select_all_checkbox.value = bool(visible_ids) and visible_ids.issubset(selected_archived_document_ids)
+        sync_archived_document_delete_selected_button_state()
+
+    def archived_documents_select_all_toggle(checked):
+        visible_docs = get_visible_archived_documents()
+        visible_docs = apply_document_search(visible_docs, archived_documents_search_field.value)
+        if archived_documents_sort_filter.value == "Oldest":
+            visible_docs = sorted(visible_docs, key=lambda doc: str(doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or ""), reverse=False)
+        elif archived_documents_sort_filter.value == "Title":
+            visible_docs = sorted(visible_docs, key=lambda doc: str(doc.get("title", "")).lower(), reverse=False)
+        else:
+            visible_docs = sorted(visible_docs, key=lambda doc: str(doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or ""), reverse=True)
+
+        visible_ids = [doc.get("id") for doc in visible_docs if doc.get("id") is not None]
+        if checked:
+            selected_archived_document_ids.update(visible_ids)
+        else:
+            selected_archived_document_ids.difference_update(visible_ids)
+        sync_archived_header_checkbox_from_rows(visible_docs)
+        sync_archived_document_delete_selected_button_state()
+        apply_archived_document_search_to_current_view()
+
+    def clear_archived_selection_state():
+        selected_archived_document_ids.clear()
+        archived_documents_select_all_checkbox.value = False
+        sync_archived_document_delete_selected_button_state()
+
     def apply_archived_document_search_to_current_view():
         visible_documents = get_visible_archived_documents()
         visible_documents = apply_document_search(visible_documents, archived_documents_search_field.value)
 
-        if documents_sort_filter.value == "Oldest":
+        if archived_documents_sort_filter.value == "Oldest":
             visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or ""), reverse=False)
-        elif documents_sort_filter.value == "Title":
+        elif archived_documents_sort_filter.value == "Title":
             visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("title", "")).lower(), reverse=False)
         else:
             visible_documents = sorted(visible_documents, key=lambda doc: str(doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or ""), reverse=True)
 
+        sync_archived_header_checkbox_from_rows(visible_documents)
+
         rows = []
         for doc in visible_documents:
+            doc_id = doc.get("id")
             archive_title = str(doc.get("title", "-") or "-")
             date_archived = doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or "-"
             archived_by = doc.get("archived_by") or "-"
             rows.append(
                 ft.DataRow(
                     cells=[
+                        ft.DataCell(
+                            ft.Checkbox(
+                                value=doc_id in selected_archived_document_ids,
+                                on_change=lambda e, doc_id_value=doc_id: (
+                                    selected_archived_document_ids.add(doc_id_value) if e.control.value else selected_archived_document_ids.discard(doc_id_value),
+                                    sync_archived_header_checkbox_from_rows(visible_documents),
+                                    sync_archived_document_delete_selected_button_state(),
+                                    apply_archived_document_search_to_current_view(),
+                                ),
+                            )
+                        ),
                         ft.DataCell(
                             ft.Container(
                                 content=ft.PopupMenuButton(
@@ -2694,6 +2864,7 @@ def main(page: ft.Page, session=None):
 
     def build_archived_documents_view():
         load_archived_documents_table()
+        sync_archived_document_delete_selected_button_state()
 
         header_card = surface_card(
             ft.Column(
@@ -2709,6 +2880,7 @@ def main(page: ft.Page, session=None):
                         [
                             archived_documents_search_field,
                             archived_documents_refresh_button,
+                            archived_documents_delete_selected_button,
                         ],
                         spacing=12,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -2900,6 +3072,7 @@ def main(page: ft.Page, session=None):
                 "assigned_filter": documents_assigned_filter if has_permission("filter_documents") else None,
                 "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_register_document_dialog()) if has_permission("register_documents") else None,
                 "bulk_register_button": ft.Button("Multiple Registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register_document_dialog()) if has_permission("import_documents") else None,
+                "archive_selected_button": documents_archive_selected_button if has_permission("archive_documents") else None,
                 "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
                 "qr_monitor_button": ft.OutlinedButton("QR Monitor", icon=ft.Icons.QR_CODE_2, on_click=lambda _: open_qr_monitor()) if has_permission("view_qr_tracking") else None,
                 "qr_labels_button": ft.OutlinedButton("Download QR Labels", icon=ft.Icons.PRINT, on_click=lambda _: open_qr_label_download_dialog()) if has_permission("print_qr_codes") else None,
