@@ -60,6 +60,7 @@ class Document(Base):
 
     status = Column(String, nullable=False, default="Pending", index=True)
     priority = Column(String, nullable=False, default="Medium", index=True)
+    is_public = Column(Boolean, nullable=False, default=False, index=True)
     remarks = Column(Text, nullable=True)
     author = Column(String, nullable=True, index=True)
     session = Column(String, nullable=True, index=True)

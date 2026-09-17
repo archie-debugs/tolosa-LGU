@@ -7,12 +7,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi import Query
-from sqlalchemy import or_, exc
+from sqlalchemy import Integer, cast, exc, func, or_
 from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, record_audit_log, require_permission, user_has_permission
-from ..auth_jwt import get_current_user, decode_access_token
+from ..auth_jwt import create_preview_token, decode_access_token, decode_preview_token, get_current_user
 import uuid
 import time
 from urllib.parse import quote
@@ -28,6 +28,7 @@ from reportlab.lib.utils import ImageReader
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 QR_IMAGE_DIR = os.path.join(UPLOAD_DIR, "qr")
+TITLE_YEAR_PATTERN = r"(?i)series[[:space:]]*:?[[:space:]]*((19|20)[0-9]{2})"
 
 # bulk registration settings
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -297,6 +298,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
 
     created = []
     failed = []
+    duplicates = []
 
     _ensure_upload_dirs()
 
@@ -307,6 +309,14 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             failed.append({"index": idx, "filename": safe_name, "reason": "Temporary file not found"})
             continue
         try:
+            original_filename = safe_name
+            meta_path = os.path.join(TEMP_UPLOAD_DIR, f"{safe_name}.meta.json")
+            try:
+                with open(meta_path, "r", encoding="utf-8") as mf:
+                    original_filename = os.path.basename(json.load(mf).get("original_filename") or safe_name)
+            except Exception:
+                pass
+
             with open(tmp_path, "rb") as fh:
                 content = fh.read()
             size = len(content)
@@ -314,8 +324,14 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 raise Exception("Empty file")
             if size > MAX_FILE_SIZE:
                 raise Exception("File exceeds maximum allowed size")
+            checksum = hashlib.sha256(content).hexdigest()
+            duplicate_documents = _documents_with_checksum(db, checksum)
+            if duplicate_documents:
+                duplicates.append({"index": idx, "filename": original_filename, "checksum": checksum, "documents": [doc.tracking_number for doc in duplicate_documents]})
+                failed.append({"index": idx, "filename": original_filename, "reason": _duplicate_reason(duplicate_documents), "duplicate": True, "checksum": checksum})
+                continue
 
-            base_title = os.path.splitext(os.path.basename(safe_name))[0]
+            base_title = os.path.splitext(original_filename)[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
 
             # generate unique tracking number
@@ -340,6 +356,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 author=(author or None),
                 status="Pending",
                 priority=(priority or "Medium") or "Medium",
+                is_public=False,
                 date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 qr_code_value=None,
                 created_by=getattr(current_user, "username", None),
@@ -361,11 +378,11 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
 
             att = models.Attachment(
                 document_id=doc.id,
-                original_filename=safe_name,
+                original_filename=original_filename,
                 stored_path=dest_path,
-                mime_type=mimetypes.guess_type(safe_name)[0],
+                mime_type=mimetypes.guess_type(original_filename)[0],
                 size=size,
-                checksum=hashlib.sha256(content).hexdigest(),
+                checksum=checksum,
             )
             db.add(att)
             doc.attachment_name = safe_stored
@@ -378,7 +395,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             db.refresh(att)
             db.refresh(doc)
 
-            created.append({"index": idx, "id": doc.id, "tracking_number": doc.tracking_number, "filename": safe_name})
+            created.append({"index": idx, "id": doc.id, "tracking_number": doc.tracking_number, "filename": original_filename})
 
             # remove tmp file
             try:
@@ -405,7 +422,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
     except Exception:
         pass
 
-    return {"success": len(failed) == 0, "total": len(tmp_names), "registered": len(created), "failed": len(failed), "documents": created, "errors": failed}
+    return {"success": len(failed) == 0, "total": len(tmp_names), "registered": len(created), "failed": len(failed), "documents": created, "errors": failed, "duplicates": duplicates}
 
 
 @router.post("/bulk-register/validate")
@@ -477,6 +494,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
 
     created = []
     failed = []
+    duplicates = []
 
     for idx, f in enumerate(files, start=1):
         filename = getattr(f, "filename", None) or ""
@@ -491,6 +509,12 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                 errors.append("File exceeds maximum allowed size")
             if not is_allowed or errors:
                 raise Exception("; ".join(errors))
+            checksum = hashlib.sha256(content).hexdigest()
+            duplicate_documents = _documents_with_checksum(db, checksum)
+            if duplicate_documents:
+                duplicates.append({"index": idx, "filename": filename, "checksum": checksum, "documents": [doc.tracking_number for doc in duplicate_documents]})
+                failed.append({"index": idx, "filename": filename, "reason": _duplicate_reason(duplicate_documents), "duplicate": True, "checksum": checksum})
+                continue
 
             # attempt to create document record
             base_title = os.path.splitext(os.path.basename(filename))[0]
@@ -518,6 +542,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                 author=(author or None),
                 status="Pending",
                 priority=(priority or "Medium") or "Medium",
+                is_public=False,
                 date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 qr_code_value=tracking_number,
                 created_by=getattr(current_user, "username", None),
@@ -539,7 +564,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                 stored_path=dest_path,
                 mime_type=content_type or mimetypes.guess_type(filename)[0],
                 size=size,
-                checksum=hashlib.sha256(content).hexdigest(),
+                checksum=checksum,
             )
             db.add(att)
             doc.attachment_name = safe_name
@@ -578,7 +603,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     except Exception:
         pass
 
-    return {"success": len(failed) == 0, "total": len(files), "registered": len(created), "failed": len(failed), "documents": created, "errors": failed}
+    return {"success": len(failed) == 0, "total": len(files), "registered": len(created), "failed": len(failed), "documents": created, "errors": failed, "duplicates": duplicates}
 
 
 def _next_tracking_number(db: Session) -> str:
@@ -597,6 +622,44 @@ def _next_tracking_number(db: Session) -> str:
     return f"DOC-{candidate}"
 
 
+def _documents_with_checksum(db: Session, checksum: str):
+    return (
+        db.query(models.Document)
+        .join(models.Attachment, models.Attachment.document_id == models.Document.id)
+        .filter(models.Attachment.checksum == checksum)
+        .order_by(models.Document.tracking_number.asc())
+        .all()
+    )
+
+
+def _duplicate_reason(documents: list[models.Document]) -> str:
+    references = ", ".join(doc.tracking_number for doc in documents)
+    return f"Duplicate PDF content detected; identical file already exists in document(s): {references}"
+
+
+@router.get("/attachments/duplicates")
+def list_duplicate_attachments(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_documents")
+    duplicate_rows = (
+        db.query(models.Attachment.checksum)
+        .filter(models.Attachment.checksum.isnot(None))
+        .group_by(models.Attachment.checksum)
+        .having(func.count(models.Attachment.id) > 1)
+        .all()
+    )
+    groups = []
+    for (checksum,) in duplicate_rows:
+        attachments = db.query(models.Attachment).filter(models.Attachment.checksum == checksum).all()
+        groups.append({
+            "checksum": checksum,
+            "attachments": [
+                {"attachment_id": attachment.id, "document_id": attachment.document_id, "original_filename": attachment.original_filename}
+                for attachment in attachments
+            ],
+        })
+    return {"groups": groups, "total_groups": len(groups)}
+
+
 def _serialize_document(doc: models.Document):
     payload = {
         "id": doc.id,
@@ -610,6 +673,7 @@ def _serialize_document(doc: models.Document):
         "assigned_to": doc.assigned_to,
         "status": doc.status,
         "priority": doc.priority,
+        "is_public": bool(doc.is_public),
         "remarks": doc.remarks,
         "author": doc.author,
         "session": doc.session,
@@ -849,7 +913,38 @@ def _normalize_tracking_query(search: str | None) -> str | None:
     return None
 
 
-@router.get("", response_model=list[schemas.DocumentResponse])
+def _parse_document_date_filter(value: str, is_end: bool = False) -> str:
+    """Normalize a document-date filter to an ISO date for date_registered."""
+    text = str(value).strip()
+    if re.fullmatch(r"\d{4}", text):
+        year = int(text)
+        if year < 1 or year > 9999:
+            raise HTTPException(status_code=400, detail=f"Invalid document date: {value}. Use YYYY or YYYY-MM-DD.")
+        return f"{year:04d}-{'12-31' if is_end else '01-01'}"
+
+    for date_format in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, date_format).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
+    raise HTTPException(status_code=400, detail=f"Invalid document date: {value}. Use YYYY or YYYY-MM-DD.")
+
+
+def _document_title_year_expression():
+    """Extract a valid historical year only from a Series title pattern."""
+    return cast(func.substring(models.Document.title, TITLE_YEAR_PATTERN), Integer)
+
+
+def _is_year_only_filter(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{4}", str(value).strip()))
+
+
+def _is_current_date_filter(value: str) -> bool:
+    return str(value).strip().lower() == "current_date"
+
+
+@router.get("", response_model=schemas.PaginatedDocumentResponse)
 def list_documents(
     search: str | None = Query(default=None),
     status: str | None = None,
@@ -861,6 +956,10 @@ def list_documents(
     end_date: str | None = None,
     priority: str | None = None,
     archived: bool | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    sort_by: str = Query(default="created_at"),
+    sort_order: str = Query(default="desc"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -870,6 +969,14 @@ def list_documents(
         query = query.filter(models.Document.archived.is_(archived))
     else:
         query = query.filter(models.Document.archived.is_(False))
+    available_year_query = db.query(func.min(_document_title_year_expression()))
+    if archived is not None:
+        available_year_query = available_year_query.filter(models.Document.archived.is_(archived))
+    else:
+        available_year_query = available_year_query.filter(models.Document.archived.is_(False))
+    oldest_year = available_year_query.scalar()
+    current_year = datetime.now(timezone.utc).year
+    available_years = list(range(oldest_year, current_year + 1)) if oldest_year else [current_year]
     if search:
         normalized_tracking = _normalize_tracking_query(search)
         if normalized_tracking is not None and re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([1-9][0-9]*|0)", str(search).strip()):
@@ -911,17 +1018,53 @@ def list_documents(
         query = query.filter(models.Document.priority == priority)
     if year:
         year_text = str(year).strip()
-        if year_text.isdigit() and len(year_text) == 4:
-            start_year = datetime(int(year_text), 1, 1, tzinfo=timezone.utc)
-            end_year = datetime(int(year_text) + 1, 1, 1, tzinfo=timezone.utc)
-            query = query.filter(models.Document.created_at >= start_year, models.Document.created_at < end_year)
+        if not re.fullmatch(r"\d{4}", year_text):
+            raise HTTPException(status_code=400, detail="Invalid year: use a 4-digit year.")
+        title_year = _document_title_year_expression()
+        query = query.filter(title_year == int(year_text))
     if start_date:
-        query = query.filter(models.Document.created_at >= start_date)
+        if _is_year_only_filter(start_date):
+            query = query.filter(_document_title_year_expression() >= int(str(start_date).strip()))
+        else:
+            query = query.filter(models.Document.date_registered >= _parse_document_date_filter(start_date))
     if end_date:
-        query = query.filter(models.Document.created_at <= end_date)
+        if _is_current_date_filter(end_date):
+            query = query.filter(_document_title_year_expression() <= datetime.now(timezone.utc).year)
+        elif _is_year_only_filter(end_date):
+            query = query.filter(_document_title_year_expression() <= int(str(end_date).strip()))
+        else:
+            query = query.filter(models.Document.date_registered <= _parse_document_date_filter(end_date, is_end=True))
 
-    docs = query.order_by(models.Document.created_at.desc()).all()
-    return [_serialize_document(doc) for doc in docs]
+    sort_columns = {
+        "created_at": models.Document.created_at,
+        "updated_at": models.Document.updated_at,
+        "title": models.Document.title,
+        "tracking_number": models.Document.tracking_number,
+        "status": models.Document.status,
+        "priority": models.Document.priority,
+    }
+    sort_column = sort_columns.get(sort_by, models.Document.created_at)
+    if sort_by == "tracking_number":
+        sequence_expression = cast(func.substring(models.Document.tracking_number, r"([0-9]+)$"), Integer)
+        sort_expression = sequence_expression.asc() if sort_order.lower() == "asc" else sequence_expression.desc()
+    else:
+        sort_expression = sort_column.asc() if sort_order.lower() == "asc" else sort_column.desc()
+    total = query.count()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    docs = (
+        query.order_by(sort_expression, models.Document.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "items": [_serialize_document(doc) for doc in docs],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "available_years": available_years,
+    }
 
 
 
@@ -1009,6 +1152,16 @@ def register_document(
     assigned_to = (assigned_to or None)
     author = (author or None)
     priority = (priority or "Medium") or "Medium"
+    uploaded_content = None
+    uploaded_checksum = None
+    if file is not None:
+        uploaded_content = file.file.read(MAX_FILE_SIZE + 1)
+        if len(uploaded_content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
+        uploaded_checksum = hashlib.sha256(uploaded_content).hexdigest()
+        duplicate_documents = _documents_with_checksum(db, uploaded_checksum)
+        if duplicate_documents:
+            raise HTTPException(status_code=409, detail=_duplicate_reason(duplicate_documents))
 
     doc = models.Document(
         tracking_number=tracking_number,
@@ -1021,6 +1174,7 @@ def register_document(
         author=author,
         status="Pending",
         priority=priority,
+        is_public=False,
         date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         qr_code_value=None,
         created_by=getattr(current_user, "username", None),
@@ -1038,8 +1192,8 @@ def register_document(
     if file is not None:
         try:
             os.makedirs(UPLOAD_DIR, exist_ok=True)
-            content = file.file.read()
-            checksum = hashlib.sha256(content).hexdigest()
+            content = uploaded_content or b""
+            checksum = uploaded_checksum or hashlib.sha256(content).hexdigest()
             safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(file.filename)}"
             dest_path = os.path.join(UPLOAD_DIR, safe_name)
             with open(dest_path, "wb") as fh:
@@ -1335,6 +1489,48 @@ def download_attachment(document_id: int, attachment_id: int, db: Session = Depe
         attachment.stored_path,
         filename=attachment.original_filename,
         media_type=attachment.mime_type or "application/octet-stream",
+    )
+
+
+@router.post("/{document_id:int}/attachments/{attachment_id:int}/preview-token")
+def create_attachment_preview_token(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "download_documents")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    attachment = db.query(models.Attachment).filter(models.Attachment.id == attachment_id, models.Attachment.document_id == document_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    if (attachment.mime_type or "").lower() != "application/pdf" and not (attachment.original_filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF preview is only available for PDF attachments")
+    if not attachment.stored_path or not os.path.isabs(attachment.stored_path) or not os.path.exists(attachment.stored_path):
+        raise HTTPException(status_code=404, detail="Attachment file not found")
+    token = create_preview_token({"sub": current_user.username, "document_id": document_id, "attachment_id": attachment_id})
+    backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
+    return {"preview_url": f"{backend_url}/documents/{document_id}/attachments/{attachment_id}/preview?preview_token={quote(token, safe='')}"}
+
+
+@router.get("/{document_id:int}/attachments/{attachment_id:int}/preview")
+def preview_attachment(document_id: int, attachment_id: int, preview_token: str = Query(...), db: Session = Depends(get_db)):
+    payload = decode_preview_token(preview_token)
+    if payload.get("document_id") != document_id or payload.get("attachment_id") != attachment_id:
+        raise HTTPException(status_code=403, detail="Preview token does not match attachment")
+    user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Preview user not found")
+    require_permission(user, "download_documents")
+    attachment = db.query(models.Attachment).filter(models.Attachment.id == attachment_id, models.Attachment.document_id == document_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    if (attachment.mime_type or "").lower() != "application/pdf" and not (attachment.original_filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF preview is only available for PDF attachments")
+    if not attachment.stored_path or not os.path.isabs(attachment.stored_path) or not os.path.exists(attachment.stored_path):
+        raise HTTPException(status_code=404, detail="Attachment file not found")
+    return FileResponse(
+        attachment.stored_path,
+        filename=attachment.original_filename,
+        media_type="application/pdf",
+        content_disposition_type="inline",
     )
 
 

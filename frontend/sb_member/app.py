@@ -139,6 +139,8 @@ def main(page: ft.Page, session=None):
         page_size = 10
         current_page_number = 1
         all_items = []
+        total_items = 0
+        total_page_count = 1
         search = ft.TextField(hint_text="Search documents by title or number...", prefix_icon=ft.Icons.SEARCH, width=330, height=44, content_padding=ft.padding.symmetric(horizontal=12, vertical=4), disabled=not can("search_documents"), border_color="#dbe4ef", focused_border_color="#2563eb", bgcolor="#ffffff")
         type_filter = ft.Dropdown(label="Document Type", width=195, height=44, options=[ft.dropdown.Option("All Types"), ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution")], value="All Types", content_padding=ft.padding.symmetric(horizontal=12, vertical=4), border_color="#dbe4ef", focused_border_color="#2563eb", bgcolor="#ffffff")
         year_filter = ft.Dropdown(label="Year", width=195, height=44, options=[ft.dropdown.Option("All Years")], value="All Years", content_padding=ft.padding.symmetric(horizontal=12, vertical=4), border_color="#dbe4ef", focused_border_color="#2563eb", bgcolor="#ffffff")
@@ -159,13 +161,11 @@ def main(page: ft.Page, session=None):
 
         def render_page():
             nonlocal current_page_number
-            total = len(all_items)
-            page_count = max(1, (total + page_size - 1) // page_size)
-            current_page_number = min(current_page_number, page_count)
+            current_page_number = min(current_page_number, total_page_count)
+            visible_items = all_items
             start = (current_page_number - 1) * page_size
-            visible_items = all_items[start:start + page_size]
-            count_text.value = f"{total} document{'s' if total != 1 else ''}"
-            range_text.value = f"Showing {start + 1 if total else 0}-{min(start + page_size, total)} of {total} documents"
+            count_text.value = f"{total_items} document{'s' if total_items != 1 else ''}"
+            range_text.value = f"Showing {start + 1 if total_items else 0}-{min(start + len(visible_items), total_items)} of {total_items} documents"
 
             if not visible_items:
                 table_holder.controls = [ft.Container(ft.Column([
@@ -199,9 +199,11 @@ def main(page: ft.Page, session=None):
                 )]
 
             pagination_nav.controls = []
-            if page_count > 1:
+            if total_page_count > 1:
                 pagination_nav.controls.append(ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous", disabled=current_page_number == 1, icon_color="#94a3b8", on_click=lambda _: change_page(-1)))
-                for number in range(1, page_count + 1):
+                start_page = max(1, current_page_number - 2)
+                end_page = min(total_page_count, current_page_number + 2)
+                for number in range(start_page, end_page + 1):
                     selected = number == current_page_number
                     pagination_nav.controls.append(ft.Container(
                         content=ft.TextButton(str(number), on_click=lambda _, n=number: go_to_page(n), style=ft.ButtonStyle(color="#ffffff" if selected else "#64748b", padding=ft.padding.all(0))),
@@ -211,13 +213,12 @@ def main(page: ft.Page, session=None):
                         border_radius=6,
                         alignment=ft.alignment.center,
                     ))
-                pagination_nav.controls.append(ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next", disabled=current_page_number == page_count, icon_color="#0875c9", on_click=lambda _: change_page(1)))
+                pagination_nav.controls.append(ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next", disabled=current_page_number == total_page_count, icon_color="#0875c9", on_click=lambda _: change_page(1)))
 
         def go_to_page(number):
             nonlocal current_page_number
             current_page_number = number
-            render_page()
-            page.update()
+            load()
 
         def change_page(delta):
             go_to_page(current_page_number + delta)
@@ -226,7 +227,7 @@ def main(page: ft.Page, session=None):
             search.value = ""
             type_filter.value = "All Types"
             year_filter.value = "All Years"
-            load()
+            load(reset_page=True)
 
         clear_filters_button = ft.TextButton(
             "Clear Filters",
@@ -235,8 +236,10 @@ def main(page: ft.Page, session=None):
             style=ft.ButtonStyle(color="#2563eb", padding=ft.padding.symmetric(horizontal=4, vertical=1)),
         )
 
-        def load(_=None, update_page=True):
-            nonlocal all_items, current_page_number
+        def load(_=None, update_page=True, reset_page=False):
+            nonlocal all_items, current_page_number, total_items, total_page_count
+            if reset_page:
+                current_page_number = 1
             table_holder.controls = [ft.Container(ft.Row([ft.ProgressRing(width=22, height=22), ft.Text("Loading documents...", size=12, color="#64748b")], alignment=ft.MainAxisAlignment.CENTER), padding=30)]
             try:
                 query = {}
@@ -246,9 +249,13 @@ def main(page: ft.Page, session=None):
                     query["document_type"] = type_filter.value
                 if year_filter.value and year_filter.value != "All Years":
                     query["year"] = year_filter.value
+                query["page"] = current_page_number
+                query["page_size"] = page_size
                 payload = api("GET", "/documents", params=query)
                 all_items = payload.get("items", [])
-                current_page_number = 1
+                total_items = payload.get("total", len(all_items))
+                total_page_count = max(1, payload.get("total_pages", 1))
+                current_page_number = min(current_page_number, total_page_count)
                 years = sorted({str(item.get("date", ""))[:4] for item in all_items if str(item.get("date", ""))[:4].isdigit()}, reverse=True)
                 year_filter.options = [ft.dropdown.Option("All Years")] + [ft.dropdown.Option(year) for year in years]
                 render_page()
@@ -258,12 +265,12 @@ def main(page: ft.Page, session=None):
             if update_page:
                 page.update()
 
-        search.on_submit = load
+        search.on_submit = lambda event: load(event, reset_page=True)
         filter_row = ft.Row([
             ft.Container(search, width=330),
             type_filter,
             year_filter,
-            ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=load, width=120, height=40, style=ft.ButtonStyle(bgcolor="#155eef", color=ft.Colors.WHITE, padding=ft.padding.symmetric(horizontal=12), shape=ft.RoundedRectangleBorder(radius=7))),
+            ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=lambda event: load(event, reset_page=True), width=120, height=40, style=ft.ButtonStyle(bgcolor="#155eef", color=ft.Colors.WHITE, padding=ft.padding.symmetric(horizontal=12), shape=ft.RoundedRectangleBorder(radius=7))),
             clear_filters_button,
         ], spacing=12, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         filters = ft.Container(content=ft.Column([

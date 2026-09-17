@@ -34,16 +34,30 @@ DOCUMENTS = [
 ]
 
 
-def load_public_documents():
+def load_public_documents(page=1, page_size=10, search="", document_type="All Types", year="All Years"):
     try:
-        response = requests.get(f"{BACKEND_URL}/public/documents", timeout=5)
+        params = {"page": page, "page_size": page_size}
+        if search:
+            params["search"] = search
+        if document_type and document_type != "All Types":
+            params["document_type"] = document_type
+        if year and year != "All Years":
+            params["year"] = year
+        response = requests.get(f"{BACKEND_URL}/public/documents", params=params, timeout=5)
         response.raise_for_status()
-        documents = response.json()
-        if isinstance(documents, list):
-            return documents
+        payload = response.json()
+        if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+            return payload
     except requests.RequestException:
         pass
-    return list(DOCUMENTS)
+    total = len(DOCUMENTS)
+    return {
+        "items": list(DOCUMENTS[(page - 1) * page_size:page * page_size]),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (total + page_size - 1) // page_size),
+    }
 
 
 def normalize_search_text(value):
@@ -253,16 +267,6 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
     type_filter = search_card.content.controls[1].controls[1].content.controls[1]
     year_filter = search_card.content.controls[1].controls[2].content.controls[1]
 
-    def filtered_documents():
-        documents = apply_public_document_search(load_public_documents(), search_field.value)
-        selected_type = type_filter.value or "All Types"
-        selected_year = year_filter.value or "All Years"
-        if selected_type != "All Types":
-            documents = [document for document in documents if document.get("type") == selected_type]
-        if selected_year != "All Years":
-            documents = [document for document in documents if selected_year in str(document.get("date", ""))]
-        return documents
-
     result_count = ft.Text(size=12, color=muted)
     data_table = ft.DataTable(
         columns=[ft.DataColumn(ft.Text(label, size=13, weight=ft.FontWeight.W_700, color=ink)) for label in ("Document No.", "Title", "Type", "Date", "Status", "Action")],
@@ -280,12 +284,18 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
         nonlocal current_page
         if reset_page:
             current_page = 1
-        documents = filtered_documents()
-        total_documents = len(documents)
-        total_pages = max(1, (total_documents + page_size - 1) // page_size)
+        payload = load_public_documents(
+            page=current_page,
+            page_size=page_size,
+            search=search_field.value or "",
+            document_type=type_filter.value or "All Types",
+            year=year_filter.value or "All Years",
+        )
+        visible_documents = payload.get("items", [])
+        total_documents = payload.get("total", len(visible_documents))
+        total_pages = max(1, payload.get("total_pages", 1))
         current_page = min(current_page, total_pages)
-        start_index = (current_page - 1) * page_size
-        visible_documents = documents[start_index:start_index + page_size]
+        first_document = ((current_page - 1) * page_size + 1) if total_documents else 0
         data_table.rows = [
             ft.DataRow(cells=[
                 ft.DataCell(ft.Text(document["number"], size=13, weight=ft.FontWeight.W_700, color=navy)),
@@ -309,8 +319,7 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
                 ft.DataCell(_status()), ft.DataCell(_button("View", ft.Icons.VISIBILITY_OUTLINED, outlined=True)),
             ]) for document in visible_documents
         ]
-        first_document = start_index + 1 if total_documents else 0
-        last_document = min(start_index + page_size, total_documents)
+        last_document = min(first_document + len(visible_documents) - 1, total_documents) if total_documents else 0
         result_count.value = f"Showing {first_document}-{last_document} of {total_documents} documents"
         page_indicator.value = f"Page {current_page} of {total_pages}"
         previous_button.disabled = current_page <= 1

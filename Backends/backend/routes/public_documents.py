@@ -23,9 +23,14 @@ def list_public_documents(
     search: str | None = Query(default=None),
     document_type: str | None = Query(default=None),
     year: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    query = db.query(models.Document).filter(models.Document.archived.is_(False))
+    query = db.query(models.Document).filter(
+        models.Document.archived.is_(False),
+        models.Document.is_public.is_(True),
+    )
 
     if search and search.strip():
         tracking_value = _tracking_value(search)
@@ -55,8 +60,16 @@ def list_public_documents(
     if year and year != "All Years" and year.isdigit() and len(year) == 4:
         query = query.filter(models.Document.created_at >= f"{year}-01-01", models.Document.created_at < f"{int(year) + 1}-01-01")
 
-    documents = query.order_by(models.Document.created_at.desc(), models.Document.id.desc()).all()
-    return [
+    total = query.count()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    documents = (
+        query.order_by(models.Document.created_at.desc(), models.Document.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "items": [
         {
             "id": document.id,
             "number": document.tracking_number,
@@ -74,4 +87,9 @@ def list_public_documents(
             "originating_office": document.originating_office,
         }
         for document in documents
-    ]
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }

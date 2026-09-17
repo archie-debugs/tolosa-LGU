@@ -31,13 +31,11 @@ def build_documents_view(
     category_filter = documents_controls.get("category_filter")
     type_filter = documents_controls.get("type_filter")
     priority_filter = documents_controls.get("priority_filter")
-    assigned_filter = documents_controls.get("assigned_filter")
 
     register_button = documents_controls.get("register_button")
     bulk_register_button = documents_controls.get("bulk_register_button")
     archive_selected_button = documents_controls.get("archive_selected_button")
     refresh_button = documents_controls.get("refresh_button")
-    qr_monitor_button = documents_controls.get("qr_monitor_button")
     qr_labels_button = documents_controls.get("qr_labels_button")
     export_button = documents_controls.get("export_button")
     print_button = documents_controls.get("print_button")
@@ -54,12 +52,25 @@ def build_documents_view(
     end_date_filter = documents_controls.get("end_date_filter")
 
     documents_empty_state = documents_controls.get("empty_state")
+    pagination_bar = documents_controls.get("pagination_bar")
 
     header = section_header("Documents", "Manage legislative documents and record history.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700)
-    action_controls = [register_button, bulk_register_button, archive_selected_button, refresh_button, qr_monitor_button, qr_labels_button, export_button, print_button, import_button, filter_button]
-    action_row = ft.Row(controls=[control for control in action_controls if control is not None], spacing=8, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def refresh_action_row(show_bulk_actions):
+        action_controls = [register_button, bulk_register_button]
+        if show_bulk_actions:
+            action_controls.append(archive_selected_button)
+        action_controls.append(refresh_button)
+        if show_bulk_actions:
+            action_controls.append(qr_labels_button)
+        action_controls.extend([export_button, print_button, import_button, filter_button])
+        action_row.controls = [control for control in action_controls if control is not None]
+
+    documents_controls["refresh_action_row"] = refresh_action_row
+    action_row = ft.Row(controls=[], spacing=8, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    refresh_action_row(documents_controls.get("bulk_actions_visible", False))
     search_row = ft.Row([ft.Container(content=search_field, expand=True)], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER) if search_field is not None else None
-    filter_controls = [status_filter, category_filter, type_filter, priority_filter, assigned_filter, sort_filter, start_date_filter, end_date_filter]
+    filter_controls = [status_filter, category_filter, type_filter, priority_filter, sort_filter, start_date_filter, end_date_filter]
     filters_row = ft.Row(controls=[control for control in filter_controls if control is not None], spacing=8, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER) if any(filter_controls) else None
     top_controls = [header, ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100), action_row]
     if search_row is not None:
@@ -135,6 +146,8 @@ def build_documents_view(
     if notice_container is not None:
         final_controls.append(notice_container)
     final_controls.append(table_card)
+    if pagination_bar is not None:
+        final_controls.append(pagination_bar)
 
     return ft.Column(
         controls=final_controls,

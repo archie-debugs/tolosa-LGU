@@ -14,6 +14,7 @@ class DocumentCreate(BaseModel):
     assigned_to: Optional[str] = None
     status: Optional[str] = "Pending"
     priority: Optional[str] = "Medium"
+    is_public: bool = False
     remarks: Optional[str] = None
     author: Optional[str] = None
     session: Optional[str] = None
@@ -44,6 +45,7 @@ class DocumentUpdate(BaseModel):
     assigned_to: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[str] = None
+    is_public: Optional[bool] = None
     remarks: Optional[str] = None
     author: Optional[str] = None
     session: Optional[str] = None
@@ -66,6 +68,7 @@ class DocumentResponse(BaseModel):
     assigned_to: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[str] = None
+    is_public: bool = False
     remarks: Optional[str] = None
     author: Optional[str] = None
     session: Optional[str] = None
@@ -88,3 +91,12 @@ class DocumentResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedDocumentResponse(BaseModel):
+    items: list[DocumentResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    available_years: list[int] = Field(default_factory=list)

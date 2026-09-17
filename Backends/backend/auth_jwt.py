@@ -53,6 +53,21 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) 
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+def create_preview_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    now = datetime.utcnow()
+    expire = now + (expires_delta or timedelta(minutes=2))
+    to_encode = {
+        "sub": data.get("sub"),
+        "exp": expire,
+        "iat": now,
+        "nbf": now,
+        "jti": str(uuid.uuid4()),
+        "type": "preview",
+    }
+    to_encode.update(data)
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
 def decode_access_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -75,6 +90,18 @@ def decode_refresh_token(token: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired") from exc
     except JWTError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token invalid") from exc
+
+
+def decode_preview_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "preview":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid preview token type")
+        return payload
+    except ExpiredSignatureError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token expired") from exc
+    except JWTError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token invalid") from exc
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):

@@ -145,14 +145,25 @@ def list_documents(
     document_type: str | None = Query(default=None),
     year: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_sb_member),
 ):
     require_sb_permission(current_user, "view_documents")
     if search and search.strip():
         require_sb_permission(current_user, "search_documents")
-    docs = _document_query(db, search=search, document_type=document_type, year=year, status=status).all()
-    return {"items": [_safe_document(doc, db) for doc in docs], "total": len(docs)}
+    query = _document_query(db, search=search, document_type=document_type, year=year, status=status)
+    total = query.count()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    docs = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        "items": [_safe_document(doc, db) for doc in docs],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 @app.get("/documents/{document_id}")
