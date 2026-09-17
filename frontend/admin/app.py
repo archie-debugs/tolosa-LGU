@@ -4734,23 +4734,50 @@ def main(page: ft.Page, session=None):
         render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=target_index)
 
     def dashboard_view():
+        analytics_payload = {}
+        try:
+            analytics_response = requests.get(
+                f"{BACKEND_URL}/analytics",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=10,
+            )
+            if analytics_response.status_code == 200 and analytics_response.content:
+                analytics_payload = analytics_response.json() or {}
+        except Exception:
+            analytics_payload = {}
+
         try:
             load_documents_table()
             load_archived_documents_table()
         except Exception:
             pass
 
-        total_docs = len(documents_data) + len(archived_documents_data)
-        active_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() not in {"approved", "completed", "archived"})
-        pending_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "pending")
-        completed_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"approved", "completed"})
-        archived_docs = len(archived_documents_data)
-        users_total = len(user_management_data)
-        users_active = sum(1 for user in user_management_data if (user.get("status") or "").lower() == "active")
+        fallback_total_docs = len(documents_data) + len(archived_documents_data)
+        fallback_active_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() not in {"approved", "completed", "archived"})
+        fallback_pending_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "pending")
+        fallback_completed_docs = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"approved", "completed"})
+        fallback_archived_docs = len(archived_documents_data)
+        fallback_users_total = len(user_management_data)
+        fallback_users_active = sum(1 for user in user_management_data if (user.get("status") or "").lower() == "active")
+        fallback_users_inactive = sum(1 for user in user_management_data if (user.get("status") or "").lower() != "active")
+
+        overview = analytics_payload.get("overview") or {}
+        user_metrics = analytics_payload.get("users") or {}
+        registration_metrics = analytics_payload.get("registration_requests") or {}
+
+        total_docs = overview.get("total_documents", fallback_total_docs)
+        active_docs = overview.get("active_documents", fallback_active_docs)
+        pending_docs = overview.get("pending_documents", fallback_pending_docs)
+        completed_docs = overview.get("completed_documents", fallback_completed_docs)
+        archived_docs = overview.get("archived_documents", fallback_archived_docs)
+        users_total = user_metrics.get("total", fallback_users_total)
+        users_active = user_metrics.get("active", fallback_users_active)
+        users_inactive = user_metrics.get("inactive", fallback_users_inactive)
         users_employees = sum(1 for user in user_management_data if user.get("role") == "Employee")
         users_sb_members = sum(1 for user in user_management_data if user.get("role") == "SB Member")
         summary_items = [
-            {"title": "Total Records", "value": str(total_docs), "detail": "Active + archived documents", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
+            {"title": "Total Documents", "value": str(total_docs), "detail": "Active + archived documents", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
             {"title": "Active Documents", "value": str(active_docs), "detail": "Currently in process", "icon": ft.Icons.LIBRARY_ADD_CHECK_OUTLINED, "accent": ft.Colors.GREEN_700},
             {"title": "Pending", "value": str(pending_docs), "detail": "Awaiting action", "icon": ft.Icons.SCHEDULE_OUTLINED, "accent": ft.Colors.ORANGE_700},
             {"title": "Completed", "value": str(completed_docs), "detail": "Finished workflows", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.TEAL_700},
@@ -4762,7 +4789,281 @@ def main(page: ft.Page, session=None):
             {"title": "Active Users", "value": str(users_active), "detail": "Currently enabled accounts", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.GREEN_700},
             {"title": "Employees", "value": str(users_employees), "detail": "Employee accounts", "icon": ft.Icons.WORK_OUTLINED, "accent": ft.Colors.INDIGO_700},
             {"title": "SB Members", "value": str(users_sb_members), "detail": "Read-only members", "icon": ft.Icons.GROUP_OUTLINED, "accent": ft.Colors.PURPLE_700},
+            {"title": "Inactive Users", "value": str(users_inactive), "detail": "Disabled accounts", "icon": ft.Icons.PERSON_OFF_OUTLINED, "accent": ft.Colors.RED_700},
         ]
+
+        registration_cards = [
+            {"title": "Pending Requests", "value": str(registration_metrics.get("pending", 0)), "detail": "Awaiting review", "icon": ft.Icons.HOURGLASS_TOP, "accent": ft.Colors.AMBER_700},
+            {"title": "Approved Requests", "value": str(registration_metrics.get("approved", 0)), "detail": "Approved registrations", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.GREEN_700},
+            {"title": "Rejected Requests", "value": str(registration_metrics.get("rejected", 0)), "detail": "Rejected registrations", "icon": ft.Icons.CANCEL_OUTLINED, "accent": ft.Colors.RED_700},
+        ]
+
+        recent_activity = analytics_payload.get("recent_activity") or []
+        activity_rows = []
+        for item in recent_activity[:5]:
+            activity = str(item.get("activity") or "Activity")
+            actor = str(item.get("actor") or "System")
+            target = str(item.get("tracking_number") or "-")
+            timestamp = str(item.get("created_at") or "-").replace("T", " ").replace("Z", "")
+            if "." in timestamp:
+                timestamp = timestamp.split(".", 1)[0]
+            target_text = f"Target: {target}" if target != "-" else "System event"
+            activity_rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.Icons.HISTORY_OUTLINED, size=18, color=ft.Colors.BLUE_700),
+                            ft.Column(
+                                [
+                                    ft.Text(activity, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                                    ft.Text(f"{actor} - {target_text}", size=11, color=ft.Colors.BLUE_GREY_600),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            ft.Text(timestamp, size=10, color=ft.Colors.BLUE_GREY_500),
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=8,
+                    bgcolor=ft.Colors.WHITE,
+                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                    border_radius=8,
+                )
+            )
+        if not activity_rows:
+            activity_rows.append(ft.Text("No recent system activity", size=12, color=ft.Colors.BLUE_GREY_600))
+
+        recent_activity_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.HISTORY_OUTLINED, color=ft.Colors.BLUE_700, size=21),
+                            ft.Text("Recent System Activity", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ],
+                        spacing=8,
+                    ),
+                    *activity_rows,
+                ],
+                spacing=8,
+            ),
+            padding=12,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=10,
+        )
+
+        recent_security_events = analytics_payload.get("recent_security_events") or []
+        security_rows = []
+        for event in recent_security_events[:5]:
+            status = str(event.get("status") or "Success")
+            action = str(event.get("action") or "Security event")
+            actor = str(event.get("actor") or "System")
+            target = str(event.get("target_id") or "-")
+            details = str(event.get("details") or "")
+            timestamp = str(event.get("created_at") or "-").replace("T", " ").replace("Z", "")
+            if "." in timestamp:
+                timestamp = timestamp.split(".", 1)[0]
+            security_rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(
+                                ft.Icons.SECURITY_OUTLINED,
+                                size=18,
+                                color=ft.Colors.RED_700 if status == "Failed" else ft.Colors.BLUE_700,
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text(action, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                                    ft.Text(f"{actor} - {target}", size=11, color=ft.Colors.BLUE_GREY_600),
+                                    ft.Text(details, size=10, color=ft.Colors.BLUE_GREY_500, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS) if details else ft.Text(status, size=10, color=ft.Colors.BLUE_GREY_500),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            ft.Text(timestamp, size=10, color=ft.Colors.BLUE_GREY_500),
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=8,
+                    bgcolor=ft.Colors.WHITE,
+                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                    border_radius=8,
+                )
+            )
+        if not security_rows:
+            security_rows.append(ft.Text("No recent security events", size=12, color=ft.Colors.BLUE_GREY_600))
+
+        recent_security_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.SECURITY_OUTLINED, color=ft.Colors.RED_700, size=21),
+                            ft.Text("Recent Security Events", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ],
+                        spacing=8,
+                    ),
+                    *security_rows,
+                ],
+                spacing=8,
+            ),
+            padding=12,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=10,
+        )
+
+        def format_storage_size(value):
+            try:
+                amount = float(value or 0)
+            except (TypeError, ValueError):
+                return "Unavailable"
+            units = ("B", "KB", "MB", "GB", "TB")
+            unit_index = 0
+            while amount >= 1024 and unit_index < len(units) - 1:
+                amount /= 1024
+                unit_index += 1
+            return f"{amount:.1f} {units[unit_index]}"
+
+        storage_data = analytics_payload.get("storage") or {}
+        storage_status = str(storage_data.get("status") or "unavailable").capitalize()
+        storage_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.STORAGE_OUTLINED, color=ft.Colors.BLUE_700, size=21),
+                            ft.Text("Storage Usage", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Text(f"Status: {storage_status}", size=11, color=ft.Colors.BLUE_GREY_700),
+                    ft.Text(
+                        f"Document storage: {format_storage_size(storage_data.get('document_storage_bytes'))} ({storage_data.get('stored_document_files', 0)} files)",
+                        size=11,
+                        color=ft.Colors.BLUE_GREY_700,
+                    ),
+                    ft.Text(
+                        f"Temporary uploads: {format_storage_size(storage_data.get('temporary_upload_storage_bytes'))} ({storage_data.get('temporary_upload_files', 0)} files)",
+                        size=11,
+                        color=ft.Colors.BLUE_GREY_700,
+                    ),
+                    ft.Text(
+                        f"Available disk: {format_storage_size(storage_data.get('available_disk_bytes'))}",
+                        size=11,
+                        color=ft.Colors.BLUE_GREY_700,
+                    ),
+                ],
+                spacing=7,
+            ),
+            padding=12,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=10,
+        )
+
+        health_payload = {}
+        try:
+            health_response = requests.get(
+                f"{BACKEND_URL}/health",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=10,
+            )
+            if health_response.status_code == 200 and health_response.content:
+                health_payload = health_response.json() or {}
+        except Exception:
+            health_payload = {}
+
+        health_components = [
+            ("Backend", health_payload.get("backend") or {}),
+            ("Database", health_payload.get("database") or {}),
+            ("Document Storage", health_payload.get("document_storage") or {}),
+            ("Temporary Upload Storage", health_payload.get("temporary_upload_storage") or {}),
+        ]
+        health_rows = []
+        for label, component in health_components:
+            status = str(component.get("status") or "unavailable").capitalize()
+            status_color = ft.Colors.GREEN_700 if status == "Operational" else ft.Colors.ORANGE_700 if status == "Warning" else ft.Colors.RED_700
+            health_rows.append(
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.CIRCLE, size=10, color=status_color),
+                        ft.Text(label, size=11, color=ft.Colors.BLUE_GREY_700, expand=True),
+                        ft.Text(status, size=11, weight=ft.FontWeight.BOLD, color=status_color),
+                    ],
+                    spacing=7,
+                )
+            )
+
+        system_health_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.MONITOR_HEART_OUTLINED, color=ft.Colors.GREEN_700, size=21),
+                            ft.Text("System Health", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ],
+                        spacing=8,
+                    ),
+                    *health_rows,
+                ],
+                spacing=8,
+            ),
+            padding=12,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=10,
+        )
+
+        def analytics_summary(title, values):
+            rows = [ft.Text(title, size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900)]
+            if values:
+                for label, count in list(values.items())[:6]:
+                    rows.append(ft.Text(f"{label}: {count}", size=11, color=ft.Colors.BLUE_GREY_700))
+            else:
+                rows.append(ft.Text("No data available", size=11, color=ft.Colors.BLUE_GREY_600))
+            return ft.Container(
+                content=ft.Column(rows, spacing=5),
+                padding=10,
+                bgcolor=ft.Colors.WHITE,
+                border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                border_radius=8,
+                width=250,
+            )
+
+        monthly_values = {
+            str(item.get("label") or item.get("month") or "-"): item.get("count", 0)
+            for item in (analytics_payload.get("monthly_activity") or [])
+        }
+        document_analytics_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.ANALYTICS_OUTLINED, color=ft.Colors.BLUE_700, size=21),
+                            ft.Text("Document Analytics", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Row(
+                        [
+                            analytics_summary("By Status", analytics_payload.get("status_breakdown") or {}),
+                            analytics_summary("By Document Type", analytics_payload.get("document_types") or {}),
+                            analytics_summary("By Category", analytics_payload.get("document_categories") or {}),
+                            analytics_summary("Monthly Activity", monthly_values),
+                        ],
+                        spacing=10,
+                        wrap=True,
+                    ),
+                ],
+                spacing=8,
+            ),
+            padding=12,
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=10,
+        )
 
         def metric_card(item):
             return ft.Container(
@@ -4904,6 +5205,25 @@ def main(page: ft.Page, session=None):
                         spacing=8,
                     ),
                     ft.Row([metric_card(item) for item in user_cards], spacing=10, run_spacing=10, wrap=True),
+                    ft.Text("Registration Requests", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                    ft.Row([metric_card(item) for item in registration_cards], spacing=10, run_spacing=10, wrap=True),
+                    document_analytics_section,
+                    ft.Row(
+                        [
+                            ft.Container(content=recent_activity_section, width=520),
+                            ft.Container(content=recent_security_section, width=520),
+                        ],
+                        spacing=12,
+                        wrap=True,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Container(content=storage_section, width=520),
+                            ft.Container(content=system_health_section, width=520),
+                        ],
+                        spacing=12,
+                        wrap=True,
+                    ),
                     ft.Container(
                         content=ft.Row(
                             [

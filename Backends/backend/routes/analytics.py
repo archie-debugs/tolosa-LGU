@@ -1,5 +1,7 @@
 import csv
 import io
+import os
+import shutil
 from calendar import monthrange
 from datetime import datetime, timezone
 
@@ -10,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..auth_jwt import get_current_user
-from ..core import require_permission
+from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, require_permission
 from ..database import get_db
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -56,6 +58,81 @@ def _norm_status(value: str | None) -> str:
     if text in {"archived", "archive", "closed"}:
         return "Archived"
     return str(value).strip() or "Unknown"
+
+
+def _storage_stats(directory: str, excluded_directories: set[str] | None = None) -> dict:
+    excluded = {name.lower() for name in (excluded_directories or set())}
+    stats = {"status": "operational", "files": 0, "bytes": 0}
+    if not os.path.isdir(directory):
+        stats["status"] = "warning"
+        return stats
+    try:
+        for root, directories, filenames in os.walk(directory):
+            directories[:] = [name for name in directories if name.lower() not in excluded]
+            for filename in filenames:
+                try:
+                    stats["files"] += 1
+                    stats["bytes"] += os.path.getsize(os.path.join(root, filename))
+                except OSError:
+                    stats["status"] = "warning"
+    except OSError:
+        stats["status"] = "unavailable"
+    return stats
+
+
+def _storage_information() -> dict:
+    document_stats = _storage_stats(UPLOAD_DIR, {"tmp", "qr"})
+    temporary_stats = _storage_stats(TEMP_UPLOAD_DIR)
+    available_bytes = None
+    try:
+        usage_path = UPLOAD_DIR if os.path.isdir(UPLOAD_DIR) else os.path.dirname(UPLOAD_DIR)
+        available_bytes = shutil.disk_usage(usage_path).free
+    except OSError:
+        pass
+    statuses = {document_stats["status"], temporary_stats["status"]}
+    overall_status = "unavailable" if "unavailable" in statuses else "warning" if "warning" in statuses else "operational"
+    return {
+        "status": overall_status,
+        "document_storage_bytes": document_stats["bytes"],
+        "stored_document_files": document_stats["files"],
+        "temporary_upload_storage_bytes": temporary_stats["bytes"],
+        "temporary_upload_files": temporary_stats["files"],
+        "available_disk_bytes": available_bytes,
+        "document_storage": document_stats,
+        "temporary_upload_storage": temporary_stats,
+    }
+
+
+def _recent_security_events(db: Session) -> list[dict]:
+    security_patterns = [
+        models.AuditLog.action.ilike("%LOGIN%"),
+        models.AuditLog.action.ilike("%PASSWORD%"),
+        models.AuditLog.action.ilike("%PERMISSION%"),
+        models.AuditLog.action.ilike("%ROLE%"),
+        models.AuditLog.action.ilike("%USER_%"),
+        models.AuditLog.action.ilike("%AUTH%"),
+        models.AuditLog.action.ilike("%ACCESS%"),
+    ]
+    events = (
+        db.query(models.AuditLog)
+        .filter(or_(*security_patterns))
+        .order_by(models.AuditLog.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    return [
+        {
+            "id": event.id,
+            "created_at": event.created_at.isoformat() if event.created_at else None,
+            "actor": event.actor or "System",
+            "action": event.action,
+            "target_type": event.target_type,
+            "target_id": event.target_id,
+            "details": event.details,
+            "status": "Failed" if any(token in (event.action or "").upper() for token in ("FAIL", "ERROR", "DENY", "REJECT", "BLOCK", "EXPIRED")) else "Success",
+        }
+        for event in events
+    ]
 
 
 @router.get("")
@@ -129,6 +206,32 @@ def get_analytics_overview(
     for doc in documents:
         key = doc.current_office or "Unassigned"
         offices[key] = offices.get(key, 0) + 1
+
+    document_categories = {}
+    for doc in documents:
+        key = doc.category or "Unspecified"
+        document_categories[key] = document_categories.get(key, 0) + 1
+
+    user_metrics = {
+        "total": db.query(func.count(models.User.id)).scalar() or 0,
+        "active": db.query(func.count(models.User.id)).filter(
+            models.User.is_active.is_(True), models.User.status == "Active"
+        ).scalar() or 0,
+        "inactive": db.query(func.count(models.User.id)).filter(
+            or_(models.User.is_active.is_(False), models.User.status != "Active")
+        ).scalar() or 0,
+    }
+
+    registration_rows = (
+        db.query(models.RegistrationRequest.status, func.count(models.RegistrationRequest.id))
+        .group_by(models.RegistrationRequest.status)
+        .all()
+    )
+    registration_metrics = {"pending": 0, "approved": 0, "rejected": 0}
+    for request_status, count in registration_rows:
+        normalized_status = str(request_status or "pending").strip().lower()
+        if normalized_status in registration_metrics:
+            registration_metrics[normalized_status] += count
 
     processing_days = []
     for doc in documents:
@@ -240,7 +343,10 @@ def get_analytics_overview(
         },
         "status_breakdown": status_breakdown,
         "document_types": document_types,
+        "document_categories": document_categories,
         "offices": offices,
+        "users": user_metrics,
+        "registration_requests": registration_metrics,
         "processing": {
             "average_processing_days": average_processing_days,
             "awaiting_action": awaiting_action,
@@ -250,6 +356,8 @@ def get_analytics_overview(
         },
         "monthly_activity": monthly_activity,
         "recent_activity": recent_activity,
+        "recent_security_events": _recent_security_events(db),
+        "storage": _storage_information(),
         "recent_documents": recent_documents,
     }
 

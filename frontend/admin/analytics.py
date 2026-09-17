@@ -25,6 +25,7 @@ def build_analytics_view(
     metric_cards = ft.Row([], spacing=12, wrap=True)
     status_chart = ft.Column([], spacing=8)
     type_distribution = ft.Column([], spacing=8)
+    category_distribution = ft.Column([], spacing=8)
     office_distribution = ft.Column([], spacing=8)
     processing_panel = ft.Column([], spacing=8)
     monthly_panel = ft.Column([], spacing=8)
@@ -142,6 +143,14 @@ def build_analytics_view(
             else:
                 type_distribution.controls = [ft.Text("Documents by Document Type", size=13, weight=ft.FontWeight.BOLD), ft.Text("No document types found", size=11)]
 
+            category_data = payload.get("document_categories") or {}
+            if category_data:
+                category_distribution.controls = [ft.Text("Documents by Category", size=13, weight=ft.FontWeight.BOLD)]
+                for label, count in category_data.items():
+                    category_distribution.controls.append(ft.Text(f"{label}: {count}", size=11))
+            else:
+                category_distribution.controls = [ft.Text("Documents by Category", size=13, weight=ft.FontWeight.BOLD), ft.Text("No categories found", size=11)]
+
             office_data = payload.get("offices") or {}
             if office_data:
                 office_distribution.controls = [ft.Text("Documents by Current Office", size=13, weight=ft.FontWeight.BOLD)]
@@ -248,6 +257,13 @@ def build_analytics_view(
                 content=ft.Row([
                     ft.Container(
                         content=ft.Column([type_distribution], spacing=8),
+                        expand=True,
+                        padding=12,
+                        border=ft.border.all(1, border_color),
+                        bgcolor=panel_color,
+                    ),
+                    ft.Container(
+                        content=ft.Column([category_distribution], spacing=8),
                         expand=True,
                         padding=12,
                         border=ft.border.all(1, border_color),

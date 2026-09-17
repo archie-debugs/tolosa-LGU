@@ -6,7 +6,7 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from dotenv import load_dotenv
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 # Load .env early so core.py picks up environment overrides
 load_dotenv()
@@ -22,7 +22,7 @@ from .routes.status import router as status_router
 from .routes.audit import router as audit_router
 from .routes.registration import router as registration_router
 from .routes.documents import router as documents_router
-from .routes.analytics import router as analytics_router
+from .routes.analytics import _storage_information, router as analytics_router
 from .routes.public_documents import router as public_documents_router
 
 
@@ -107,4 +107,23 @@ def log_database_info():
 @app.get("/health")
 def health():
     info = get_database_info()
-    return {"status": "ok", "database": {"dialect": info['dialect'], "url": info['url']}}
+    database_status = "operational"
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        database_status = "unavailable"
+
+    storage = _storage_information()
+    return {
+        "status": "ok",
+        "backend": {"status": "operational"},
+        "database": {
+            "status": database_status,
+            "dialect": info["dialect"],
+            "url": info["url"],
+        },
+        "document_storage": storage["document_storage"],
+        "temporary_upload_storage": storage["temporary_upload_storage"],
+        "storage": storage,
+    }
