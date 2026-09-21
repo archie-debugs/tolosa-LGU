@@ -276,10 +276,6 @@ def main(page: ft.Page, session=None):
     def get_admin_headers():
         refresh_runtime_token_if_needed()
         hdrs = {}
-        if current_user:
-            hdrs["X-Admin-Username"] = current_user
-        if current_user_role:
-            hdrs["X-Admin-Role"] = current_user_role
         # prefer runtime token if present, else env token
         token_to_use = runtime_token or AUTH_TOKEN
         if token_to_use:

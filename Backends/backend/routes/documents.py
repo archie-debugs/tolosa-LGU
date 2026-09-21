@@ -1091,6 +1091,7 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
             raise HTTPException(status_code=409, detail="Tracking number already exists")
 
     data = payload.model_dump(exclude_unset=True)
+    previous_visibility = bool(doc.is_public)
     # apply simple fields
     for field, value in data.items():
         if field in ("document_type", "category", "originating_office", "current_office"):
@@ -1114,6 +1115,15 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
 
     db.commit()
     db.refresh(doc)
+    if "is_public" in data and bool(doc.is_public) != previous_visibility:
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="DOCUMENT_VISIBILITY_CHANGED",
+            target_type="document",
+            target_id=str(doc.id),
+            details=f"Set {doc.tracking_number} public visibility to {'public' if doc.is_public else 'private'}",
+        )
     return _serialize_document(doc)
 
 
@@ -1492,9 +1502,103 @@ def download_attachment(document_id: int, attachment_id: int, db: Session = Depe
     )
 
 
+@router.post("/{document_id:int}/attachments/{attachment_id:int}/replace")
+def replace_attachment(
+    document_id: int,
+    attachment_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "edit_documents")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    attachment = (
+        db.query(models.Attachment)
+        .filter(models.Attachment.id == attachment_id, models.Attachment.document_id == document_id)
+        .first()
+    )
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    filename = os.path.basename(file.filename or "")
+    content_type = getattr(file, "content_type", None)
+    valid, validation_errors = _is_allowed_file(filename, content_type)
+    if not valid:
+        raise HTTPException(status_code=400, detail="; ".join(validation_errors))
+
+    content = file.file.read(MAX_FILE_SIZE + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
+
+    checksum = hashlib.sha256(content).hexdigest()
+    duplicate = (
+        db.query(models.Attachment)
+        .filter(models.Attachment.checksum == checksum, models.Attachment.id != attachment_id)
+        .first()
+    )
+    if duplicate:
+        duplicate_doc = db.query(models.Document).filter(models.Document.id == duplicate.document_id).first()
+        reference = duplicate_doc.tracking_number if duplicate_doc else str(duplicate.document_id)
+        raise HTTPException(status_code=409, detail=f"Duplicate file content detected in document {reference}")
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    stored_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{filename}"
+    new_path = os.path.join(UPLOAD_DIR, stored_name)
+    old_path = attachment.stored_path
+    try:
+        with open(new_path, "wb") as handle:
+            handle.write(content)
+
+        attachment.original_filename = filename
+        attachment.stored_path = new_path
+        attachment.mime_type = content_type or mimetypes.guess_type(filename)[0]
+        attachment.size = len(content)
+        attachment.checksum = checksum
+        doc.attachment_name = stored_name
+        db.commit()
+        db.refresh(attachment)
+        db.refresh(doc)
+    except Exception as exc:
+        db.rollback()
+        try:
+            if os.path.exists(new_path):
+                os.remove(new_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"Failed to replace attachment: {exc}") from exc
+
+    if old_path and old_path != new_path:
+        try:
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        except OSError:
+            pass
+
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="REPLACE_DOCUMENT_ATTACHMENT",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Replaced attachment for {doc.tracking_number}: {filename}",
+    )
+    return {
+        "message": "Attachment replaced successfully",
+        "document_id": doc.id,
+        "attachment_id": attachment.id,
+        "original_filename": attachment.original_filename,
+        "checksum": attachment.checksum,
+    }
+
+
 @router.post("/{document_id:int}/attachments/{attachment_id:int}/preview-token")
 def create_attachment_preview_token(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    require_permission(current_user, "download_documents")
+    if not (user_has_permission(current_user, "download_documents") or user_has_permission(current_user, "print_documents")):
+        raise HTTPException(status_code=403, detail="Permission denied")
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -1518,7 +1622,8 @@ def preview_attachment(document_id: int, attachment_id: int, preview_token: str 
     user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
     if not user:
         raise HTTPException(status_code=401, detail="Preview user not found")
-    require_permission(user, "download_documents")
+    if not (user_has_permission(user, "download_documents") or user_has_permission(user, "print_documents")):
+        raise HTTPException(status_code=403, detail="Permission denied")
     attachment = db.query(models.Attachment).filter(models.Attachment.id == attachment_id, models.Attachment.document_id == document_id).first()
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")

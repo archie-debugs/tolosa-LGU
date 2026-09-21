@@ -252,6 +252,31 @@ DEFAULT_ROLE_PERMISSIONS = {
     ],
 }
 
+USER_MANAGEMENT_PERMISSIONS = {
+    "view_users",
+    "create_users",
+    "edit_users",
+    "reset_passwords",
+    "activate_users",
+    "deactivate_users",
+    "delete_users",
+    "assign_roles",
+    "manage_permissions",
+}
+UI_PERMISSIONS = {
+    "delete_documents",
+    "add_committee",
+    "edit_committee",
+    "delete_committee",
+    "modify_system_settings",
+}
+VALID_PERMISSIONS = {
+    permission
+    for permissions in DEFAULT_ROLE_PERMISSIONS.values()
+    for permission in permissions
+    if permission != "*"
+} | USER_MANAGEMENT_PERMISSIONS | UI_PERMISSIONS
+
 
 def normalize_user_role(role: str | None) -> str:
     if role is None:
@@ -306,6 +331,14 @@ def normalize_permissions(value) -> set[str]:
     return {normalize_permission_name(str(value))}
 
 
+def validate_permissions(value) -> list[str]:
+    permissions = normalize_permissions(value)
+    invalid = sorted(permission for permission in permissions if permission not in VALID_PERMISSIONS and permission != "*")
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Unknown permission(s): {', '.join(invalid)}")
+    return sorted(permissions)
+
+
 def get_default_permissions_for_role(role: str | None) -> list[str]:
     normalized = normalize_user_role(role)
     return list(DEFAULT_ROLE_PERMISSIONS.get(normalized, []))
@@ -326,32 +359,46 @@ def user_has_permission(user: models.User, permission: str) -> bool:
 
 def get_current_admin_user(
     db: Session = Depends(get_db),
-    admin_username: str | None = Header(default=None, alias="X-Admin-Username"),
-    admin_role: str | None = Header(default=None, alias="X-Admin-Role"),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        try:
-            payload = decode_access_token(token)
-            username = payload.get("sub")
-            if username:
-                user = db.query(models.User).filter(models.User.username == username).first()
-                if user and normalize_user_role(user.role) == "Super Administrator" and getattr(user, "is_active", True):
-                    return user
-        except Exception:
-            pass
-
-    if not admin_username or not admin_role:
+    if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=403, detail="Super Administrator access required")
-
-    if normalize_user_role(admin_role) != "Super Administrator":
-        raise HTTPException(status_code=403, detail="Super Administrator access required")
-
-    user = db.query(models.User).filter(models.User.username == admin_username).first()
-    if not user or normalize_user_role(user.role) != "Super Administrator" or not getattr(user, "is_active", True):
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        payload = decode_access_token(token)
+        username = payload.get("sub")
+        user = db.query(models.User).filter(models.User.username == username).first() if username else None
+    except Exception:
+        user = None
+    if not user or normalize_user_role(user.role) != "Super Administrator" or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
         raise HTTPException(status_code=403, detail="Super Administrator access required")
     return user
+
+
+def get_current_user_for_user_management(
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=403, detail="Authenticated user required")
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        payload = decode_access_token(token)
+        username = payload.get("sub")
+        user = db.query(models.User).filter(models.User.username == username).first() if username else None
+    except Exception:
+        user = None
+    if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
+        raise HTTPException(status_code=403, detail="Authenticated user required")
+    return user
+
+
+def require_user_management_permission(permission: str):
+    def dependency(current_user: models.User = Depends(get_current_user_for_user_management)):
+        require_permission(current_user, permission)
+        return current_user
+
+    return dependency
 
 
 def require_user_role(user: models.User, allowed_roles: set[str]):
@@ -374,19 +421,17 @@ def require_permission(user: models.User, permission: str):
 
 def get_current_documents_import_user(
     db: Session = Depends(get_db),
-    import_username: str | None = Header(default=None, alias="X-Admin-Username"),
-    import_role: str | None = Header(default=None, alias="X-Admin-Role"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    if not import_username or not import_role:
+    if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=403, detail="Access denied")
-
-    normalized_role = normalize_user_role(import_role)
-    allowed_roles = {"Super Administrator", "Employee", "SB Member"}
-    user = db.query(models.User).filter(models.User.username == import_username).first()
-    if not user or not getattr(user, "is_active", True):
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        payload = decode_access_token(token)
+        username = payload.get("sub")
+        user = db.query(models.User).filter(models.User.username == username).first() if username else None
+    except Exception:
+        user = None
+    if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
         raise HTTPException(status_code=403, detail="Access denied")
-
-    if normalize_user_role(user.role) == "Super Administrator" or normalize_user_role(user.role) in allowed_roles:
-        return user
-
-    raise HTTPException(status_code=403, detail="Access denied")
+    return user

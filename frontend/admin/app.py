@@ -130,6 +130,7 @@ from frontend.admin.documents import build_documents_view
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
 from frontend.admin.users_roles import build_users_roles_table, build_users_roles_view, EMPLOYEE_PERMISSION_GROUPS
+from frontend.admin.reference_data import build_reference_data_view
 from frontend.admin.admin_shell import render_shell
 
 
@@ -276,11 +277,7 @@ def main(page: ft.Page, session=None):
     def get_admin_headers():
         refresh_runtime_token_if_needed()
         hdrs = {}
-        if current_user:
-            hdrs["X-Admin-Username"] = current_user
-        if current_user_role:
-            hdrs["X-Admin-Role"] = current_user_role
-        # prefer runtime token if present, else env token
+        # Protected admin routes authorize the bearer token server-side.
         token_to_use = runtime_token or AUTH_TOKEN
         if token_to_use:
             hdrs["Authorization"] = f"Bearer {token_to_use}"
@@ -940,6 +937,94 @@ def main(page: ft.Page, session=None):
             tb = traceback.format_exc()
             print("committees_view error:\n", tb)
             return ft.Column([ft.Text("Error building Committees view"), ft.Text(str(e)), ft.Text(tb)])
+
+    reference_categories = []
+    reference_document_types = []
+    reference_search = ft.TextField(label="Search definitions", width=240, on_change=lambda _: refresh_reference_data_view())
+    reference_kind_filter = ft.Dropdown(label="Definition", width=180, value="All", options=[ft.dropdown.Option("All"), ft.dropdown.Option("Categories"), ft.dropdown.Option("Document Types")], on_change=lambda _: refresh_reference_data_view())
+    reference_name_field = ft.TextField(label="Name", width=360)
+    reference_kind_dialog = "Categories"
+    reference_edit_item = None
+    reference_dialog = ft.AlertDialog(
+        title=ft.Text("Document Definition", size=18, weight=ft.FontWeight.BOLD),
+        content=reference_name_field,
+        actions=[ft.TextButton("Cancel", on_click=lambda _: close_reference_dialog()), ft.Button("Save", on_click=lambda _: save_reference_definition(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE)],
+    )
+    page.overlay.append(reference_dialog)
+
+    def load_reference_data():
+        nonlocal reference_categories, reference_document_types
+        try:
+            headers = get_admin_headers()
+            categories_response = requests.get(f"{BACKEND_URL}/reference-data/categories", headers=headers, verify=False, timeout=15)
+            types_response = requests.get(f"{BACKEND_URL}/reference-data/document-types", headers=headers, verify=False, timeout=15)
+            if categories_response.status_code != 200 or types_response.status_code != 200:
+                raise Exception(categories_response.text if categories_response.status_code != 200 else types_response.text)
+            reference_categories = categories_response.json() or []
+            reference_document_types = types_response.json() or []
+        except Exception as exc:
+            show_document_notice(f"Unable to load document definitions: {exc}")
+
+    def refresh_reference_data_view():
+        page.update()
+
+    def close_reference_dialog(_=None):
+        reference_dialog.open = False
+        page.update()
+
+    def open_reference_create_dialog(kind):
+        nonlocal reference_kind_dialog, reference_edit_item
+        reference_kind_dialog = "Document Types" if kind == "Document Types" else "Categories"
+        reference_edit_item = None
+        reference_name_field.value = ""
+        reference_dialog.title = ft.Text(f"Add {reference_kind_dialog[:-1]}", size=18, weight=ft.FontWeight.BOLD)
+        reference_dialog.open = True
+        page.update()
+
+    def open_reference_edit_dialog(kind, item):
+        nonlocal reference_kind_dialog, reference_edit_item
+        reference_kind_dialog = kind + "s" if kind == "Category" else "Document Types"
+        reference_edit_item = item
+        reference_name_field.value = item.get("name") or ""
+        reference_dialog.title = ft.Text(f"Edit {kind}", size=18, weight=ft.FontWeight.BOLD)
+        reference_dialog.open = True
+        page.update()
+
+    def save_reference_definition():
+        name = (reference_name_field.value or "").strip()
+        if not name:
+            show_document_notice("Definition name is required.")
+            return
+        endpoint_kind = "document-types" if reference_kind_dialog == "Document Types" else "categories"
+        try:
+            if reference_edit_item:
+                response = requests.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{reference_edit_item.get('id')}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
+            else:
+                response = requests.post(f"{BACKEND_URL}/reference-data/{endpoint_kind}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
+            if response.status_code not in {200, 201}:
+                raise Exception(response.text)
+            close_reference_dialog()
+            load_reference_data()
+            page.update()
+            show_document_notice("Document definition saved.")
+        except Exception as exc:
+            show_document_notice(f"Unable to save definition: {exc}")
+
+    def toggle_reference_definition(kind, item):
+        endpoint_kind = "document-types" if kind == "Document Type" else "categories"
+        try:
+            response = requests.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{item.get('id')}", json={"name": item.get("name"), "is_active": not bool(item.get("is_active", True))}, headers=get_admin_headers(), verify=False, timeout=15)
+            if response.status_code != 200:
+                raise Exception(response.text)
+            load_reference_data()
+            page.update()
+        except Exception as exc:
+            show_document_notice(f"Unable to change definition status: {exc}")
+
+    def reference_data_view():
+        load_reference_data()
+        load_active_definition_options()
+        return build_reference_data_view(reference_categories, reference_document_types, reference_search, reference_kind_filter, open_reference_create_dialog, open_reference_edit_dialog, toggle_reference_definition, load_reference_data, page, section_header)
 
     documents_data = []
     archived_documents_data = []
@@ -1788,6 +1873,141 @@ def main(page: ft.Page, session=None):
         except Exception as exc:
             show_document_notice(f"Document registration failed: {exc}")
 
+    edit_document_id = None
+    edit_document_title = ft.TextField(label="Title", width=680)
+    edit_document_description = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=3, width=680)
+    edit_document_category = ft.Dropdown(label="Category", width=330, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")])
+    edit_document_type = ft.Dropdown(label="Document Type", width=330, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")])
+    edit_document_current_office = ft.Dropdown(label="Current Office", width=330, options=[ft.dropdown.Option("SB Secretariat"), ft.dropdown.Option("Office of the Mayor"), ft.dropdown.Option("Committee on Health")])
+    edit_document_assigned_to = ft.TextField(label="Assigned To", width=330)
+    edit_document_author = ft.TextField(label="Author", width=330)
+    edit_document_priority = ft.Dropdown(label="Priority", width=330, options=[ft.dropdown.Option("Low"), ft.dropdown.Option("Medium"), ft.dropdown.Option("High")])
+    edit_document_remarks = ft.TextField(label="Remarks", multiline=True, min_lines=2, max_lines=3, width=680)
+    edit_document_session = ft.TextField(label="Session", width=330)
+
+    def load_active_definition_options():
+        try:
+            headers = get_admin_headers()
+            category_response = requests.get(f"{BACKEND_URL}/reference-data/categories", params={"active_only": "true"}, headers=headers, verify=False, timeout=15)
+            type_response = requests.get(f"{BACKEND_URL}/reference-data/document-types", params={"active_only": "true"}, headers=headers, verify=False, timeout=15)
+            if category_response.status_code != 200 or type_response.status_code != 200:
+                return
+            category_names = [item.get("name") for item in category_response.json() if item.get("name")]
+            type_names = [item.get("name") for item in type_response.json() if item.get("name")]
+            for control, names in (
+                (registration_category, category_names),
+                (bulk_common_category, category_names),
+                (edit_document_category, category_names),
+                (documents_filter_category, category_names),
+                (archived_documents_filter_category, category_names),
+                (registration_document_type, type_names),
+                (bulk_common_document_type, type_names),
+                (edit_document_type, type_names),
+                (documents_filter_type, type_names),
+                (archived_documents_filter_type, type_names),
+            ):
+                current_value = control.value
+                control.options = [ft.dropdown.Option(name) for name in names]
+                if current_value and current_value in names:
+                    control.value = current_value
+                elif not current_value and names:
+                    control.value = names[0]
+        except Exception:
+            pass
+
+    edit_document_dialog = ft.AlertDialog(
+        title=ft.Text("Edit Document", size=20, weight=ft.FontWeight.BOLD),
+        content=ft.Column(
+            [
+                ft.Text("Update document information. Tracking number, attachment, QR, visibility, and archive state are preserved.", size=12, color=ft.Colors.BLUE_GREY_600),
+                edit_document_title,
+                edit_document_description,
+                ft.Row([edit_document_category, edit_document_type], spacing=12, wrap=True),
+                ft.Row([edit_document_current_office, edit_document_assigned_to], spacing=12, wrap=True),
+                ft.Row([edit_document_author, edit_document_priority, edit_document_session], spacing=12, wrap=True),
+                edit_document_remarks,
+            ],
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            width=700,
+        ),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_edit_document_dialog()),
+            ft.Button("Save Changes", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: submit_edit_document(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+        ],
+    )
+    page.overlay.append(edit_document_dialog)
+
+    def _set_edit_dropdown_value(control, value):
+        normalized = (value or "").strip()
+        if normalized and not any(getattr(option, "key", None) == normalized or getattr(option, "text", None) == normalized for option in control.options):
+            control.options.append(ft.dropdown.Option(normalized))
+        control.value = normalized or None
+
+    def close_edit_document_dialog(_=None):
+        edit_document_dialog.open = False
+        page.update()
+
+    def open_edit_document_dialog(document):
+        nonlocal edit_document_id
+        edit_document_id = document.get("id")
+        if not edit_document_id:
+            show_document_notice("Unable to edit document: document ID is missing.")
+            return
+        edit_document_title.value = str(document.get("title") or "").strip()
+        edit_document_description.value = str(document.get("description") or "").strip()
+        _set_edit_dropdown_value(edit_document_category, document.get("category"))
+        _set_edit_dropdown_value(edit_document_type, document.get("document_type"))
+        _set_edit_dropdown_value(edit_document_current_office, document.get("current_office"))
+        edit_document_assigned_to.value = "" if document.get("assigned_to") in (None, "-") else str(document.get("assigned_to"))
+        edit_document_author.value = "" if document.get("author") in (None, "-") else str(document.get("author"))
+        _set_edit_dropdown_value(edit_document_priority, document.get("priority") or "Medium")
+        edit_document_remarks.value = str(document.get("remarks") or "").strip()
+        edit_document_session.value = "" if document.get("session") in (None, "-") else str(document.get("session"))
+        edit_document_dialog.open = True
+        page.update()
+
+    def submit_edit_document(_=None):
+        if not edit_document_id:
+            show_document_notice("Unable to edit document: no document is selected.")
+            return
+        title = (edit_document_title.value or "").strip()
+        if not title:
+            show_document_notice("Title is required.")
+            return
+        payload = {
+            "title": title,
+            "description": (edit_document_description.value or "").strip() or None,
+            "category": (edit_document_category.value or "").strip() or None,
+            "document_type": (edit_document_type.value or "").strip() or None,
+            "current_office": (edit_document_current_office.value or "").strip() or None,
+            "assigned_to": (edit_document_assigned_to.value or "").strip() or None,
+            "author": (edit_document_author.value or "").strip() or None,
+            "priority": (edit_document_priority.value or "").strip() or None,
+            "remarks": (edit_document_remarks.value or "").strip() or None,
+            "session": (edit_document_session.value or "").strip() or None,
+        }
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/documents/{edit_document_id}",
+                json=payload,
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=15,
+            )
+            if response.status_code != 200:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise Exception(f"{response.status_code} {detail}")
+            edit_document_dialog.open = False
+            page.update()
+            load_documents_table(documents_page)
+            show_document_notice("Document updated successfully.")
+        except Exception as exc:
+            show_document_notice(f"Document update failed: {exc}")
+
     def format_qr_monitor_details(payload):
         summary = []
         summary.append(ft.Text(f"Total documents: {payload.get('total_documents', 0)}", size=13, weight=ft.FontWeight.BOLD))
@@ -2504,6 +2724,12 @@ def main(page: ft.Page, session=None):
                     ],
                     spacing=16,
                 ),
+                ft.Row(
+                    [
+                        ft.Column([ft.Text("Public Visibility", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text("Public" if doc.get("is_public") else "Private", size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
             ],
             spacing=12,
             scroll=ft.ScrollMode.AUTO,
@@ -2587,6 +2813,7 @@ def main(page: ft.Page, session=None):
             "attachment_name": doc.get("attachment_name") or "-",
             "remarks": doc.get("remarks") or "",
             "attachments": doc.get("attachments") or [],
+            "is_public": bool(doc.get("is_public", False)),
             "archived": bool(doc.get("archived", False)),
         }
 
@@ -2619,6 +2846,203 @@ def main(page: ft.Page, session=None):
             page.launch_url(preview_url)
         except Exception as exc:
             show_document_notice(f"Unable to preview PDF: {exc}")
+
+    def print_document_pdf(doc):
+        attachments = [item for item in doc.get("attachments", []) if isinstance(item, dict)]
+        pdf_attachment = next(
+            (
+                item for item in attachments
+                if (item.get("mime_type") or "").lower() == "application/pdf"
+                or str(item.get("original_filename") or "").lower().endswith(".pdf")
+            ),
+            None,
+        )
+        if not pdf_attachment:
+            show_document_notice("No PDF attachment available for printing.")
+            return
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/documents/{doc.get('id')}/attachments/{pdf_attachment.get('id')}/preview-token",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                raise Exception(response.text)
+            preview_url = response.json().get("preview_url")
+            if not preview_url:
+                raise Exception("Print preview URL was not returned")
+            page.launch_url(preview_url)
+            show_document_notice("Print preview opened. Use the browser print command to print the document.")
+        except Exception as exc:
+            show_document_notice(f"Unable to open print preview: {exc}")
+
+    def download_document_attachment(doc):
+        attachments = [item for item in doc.get("attachments", []) if isinstance(item, dict) and item.get("id")]
+        if not attachments:
+            show_document_notice("No attachment available for this document.")
+            return
+
+        attachment = attachments[0]
+        document_id = doc.get("id")
+        attachment_id = attachment.get("id")
+        try:
+            response = requests.get(
+                f"{BACKEND_URL}/documents/{document_id}/attachments/{attachment_id}",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=60,
+                stream=True,
+            )
+            if response.status_code != 200:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise Exception(f"{response.status_code} {detail}")
+
+            filename = attachment.get("original_filename") or doc.get("attachment_name") or "document_attachment"
+            content_disposition = response.headers.get("content-disposition", "")
+            match = re.search(r"filename=\"?([^\";]+)", content_disposition, flags=re.IGNORECASE)
+            if match:
+                filename = match.group(1).strip()
+            filename = os.path.basename(filename) or "document_attachment"
+            download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+            os.makedirs(download_dir, exist_ok=True)
+            file_path = os.path.join(download_dir, filename)
+            with open(file_path, "wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+            os.startfile(file_path)
+            show_document_notice(f"Downloaded {filename}.")
+        except Exception as exc:
+            show_document_notice(f"Document download failed: {exc}")
+
+    replace_attachment_document = None
+    replace_attachment_record = None
+    replacement_file = None
+    replacement_file_label = ft.Text("No replacement file selected", size=12, color=ft.Colors.BLUE_GREY_600)
+    replace_attachment_picker = ft.FilePicker(on_result=lambda e: None)
+    page.overlay.append(replace_attachment_picker)
+
+    def _on_replacement_file(e):
+        nonlocal replacement_file
+        try:
+            if getattr(e, "files", None):
+                selected = e.files[0]
+                path = getattr(e, "path", None) or getattr(selected, "path", None)
+                replacement_file = {"path": path, "name": getattr(selected, "name", None)}
+                replacement_file_label.value = replacement_file.get("name") or "Replacement file selected"
+            else:
+                replacement_file = None
+                replacement_file_label.value = "No replacement file selected"
+        except Exception:
+            replacement_file = None
+            replacement_file_label.value = "No replacement file selected"
+        page.update()
+
+    replace_attachment_picker.on_result = _on_replacement_file
+    replace_attachment_dialog = ft.AlertDialog(
+        title=ft.Text("Replace Attachment", size=20, weight=ft.FontWeight.BOLD),
+        content=ft.Column(
+            [
+                ft.Text("The replacement must be a PDF, DOC, or DOCX file and must not duplicate existing file content.", size=12, color=ft.Colors.BLUE_GREY_600),
+                ft.Text("Current attachment", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
+                ft.Text("-", size=13),
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.UPLOAD_FILE, color=ft.Colors.BLUE_700, size=22),
+                        ft.Column([ft.Text("Replacement file", size=13, weight=ft.FontWeight.BOLD), replacement_file_label], spacing=3, expand=True),
+                        ft.OutlinedButton("Choose file", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: replace_attachment_picker.pick_files(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf", "doc", "docx"])),
+                    ],
+                    spacing=10,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+            ],
+            spacing=10,
+            width=620,
+        ),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_replace_attachment_dialog()),
+            ft.Button("Replace Attachment", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: submit_replace_attachment(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+        ],
+    )
+    page.overlay.append(replace_attachment_dialog)
+
+    def close_replace_attachment_dialog(_=None):
+        replace_attachment_dialog.open = False
+        page.update()
+
+    def open_replace_attachment_dialog(doc):
+        nonlocal replace_attachment_document, replace_attachment_record, replacement_file
+        attachments = [item for item in doc.get("attachments", []) if isinstance(item, dict) and item.get("id")]
+        if not attachments:
+            show_document_notice("No attachment is available to replace.")
+            return
+        replace_attachment_document = doc
+        replace_attachment_record = attachments[0]
+        replacement_file = None
+        replacement_file_label.value = "No replacement file selected"
+        current_label = replace_attachment_dialog.content.controls[2]
+        current_label.value = str(replace_attachment_record.get("original_filename") or doc.get("attachment_name") or "-")
+        replace_attachment_dialog.open = True
+        page.update()
+
+    def submit_replace_attachment(_=None):
+        if not replace_attachment_document or not replace_attachment_record:
+            show_document_notice("No attachment is selected for replacement.")
+            return
+        if not replacement_file or not replacement_file.get("path"):
+            show_document_notice("Choose a replacement file first.")
+            return
+        path = replacement_file["path"]
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+        try:
+            with open(path, "rb") as handle:
+                response = requests.post(
+                    f"{BACKEND_URL}/documents/{replace_attachment_document.get('id')}/attachments/{replace_attachment_record.get('id')}/replace",
+                    files={"file": (replacement_file.get("name") or os.path.basename(path), handle, mimetypes.guess_type(path)[0] or "application/octet-stream")},
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=60,
+                )
+            if response.status_code != 200:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise Exception(f"{response.status_code} {detail}")
+            close_replace_attachment_dialog()
+            load_documents_table(documents_page)
+            show_document_notice("Attachment replaced successfully.")
+        except Exception as exc:
+            show_document_notice(f"Attachment replacement failed: {exc}")
+
+    def set_document_visibility(doc, is_public):
+        document_id = doc.get("id")
+        if not document_id:
+            show_document_notice("Unable to change visibility: document ID is missing.")
+            return
+        try:
+            response = requests.put(
+                f"{BACKEND_URL}/documents/{document_id}",
+                json={"is_public": bool(is_public)},
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=15,
+            )
+            if response.status_code != 200:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise Exception(f"{response.status_code} {detail}")
+            load_documents_table(documents_page)
+            show_document_notice(f"Document is now {'public' if is_public else 'private'}.")
+        except Exception as exc:
+            show_document_notice(f"Visibility update failed: {exc}")
 
     def apply_document_search_to_current_view():
         visible_documents = get_visible_documents()
@@ -2653,10 +3077,20 @@ def main(page: ft.Page, session=None):
                 actions.append(ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)))
             if has_permission("download_documents"):
                 actions.append(ft.PopupMenuItem(content=ft.Text("Preview PDF"), on_click=lambda _, d=doc: preview_document_pdf(d)))
+            if has_permission("print_documents"):
+                actions.append(ft.PopupMenuItem(content=ft.Text("Print"), on_click=lambda _, d=doc: print_document_pdf(d)))
             if has_permission("download_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _: show_document_notice("Download action preview enabled.")))
+                actions.append(ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _, d=doc: download_document_attachment(d)))
             if has_permission("edit_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _: show_document_notice("Edit action available.")))
+                actions.append(ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, d=doc: open_edit_document_dialog(d)))
+                if any(isinstance(item, dict) and item.get("id") for item in doc.get("attachments", [])):
+                    actions.append(ft.PopupMenuItem(content=ft.Text("Replace Attachment"), on_click=lambda _, d=doc: open_replace_attachment_dialog(d)))
+                actions.append(
+                    ft.PopupMenuItem(
+                        content=ft.Text("Remove Public Visibility" if doc.get("is_public") else "Mark Public"),
+                        on_click=lambda _, d=doc: set_document_visibility(d, not d.get("is_public", False)),
+                    )
+                )
             if has_permission("archive_documents"):
                 actions.append(ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)))
             rows.append(
@@ -2936,6 +3370,7 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def build_archived_documents_view():
+        load_active_definition_options()
         load_archived_documents_table()
         sync_archived_document_delete_selected_button_state()
 
@@ -3116,6 +3551,7 @@ def main(page: ft.Page, session=None):
     def documents_view():
         nonlocal documents_toolbar_update
         try:
+            load_active_definition_options()
             load_documents_table()
             print("documents_view: building document controls")
             documents_controls = {
@@ -3785,6 +4221,30 @@ def main(page: ft.Page, session=None):
             spacing=14,
         )
 
+    office_options = []
+
+    def load_office_options():
+        nonlocal office_options
+        try:
+            response = requests.get(
+                f"{BACKEND_URL}/auth/offices",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=20,
+            )
+            if response.status_code != 200:
+                raise Exception(response.text)
+            office_options = response.json() if response.content else []
+        except Exception as exc:
+            office_options = []
+            page.snack_bar = ft.SnackBar(ft.Text(f"Unable to load offices: {exc}"), open=True)
+
+    def refresh_office_filter_options():
+        selected = user_office_filter.value or "All"
+        names = [item.get("name") for item in office_options if item.get("name")]
+        user_office_filter.options = [ft.dropdown.Option("All")] + [ft.dropdown.Option(name) for name in names]
+        user_office_filter.value = selected if selected == "All" or selected in names else "All"
+
     def load_user_management_data():
         nonlocal user_management_data
         previous_data = list(user_management_data)
@@ -3827,6 +4287,8 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def refresh_user_management_data(_=None):
+        load_office_options()
+        refresh_office_filter_options()
         load_user_management_data()
 
     user_search_field = ft.TextField(
@@ -3900,9 +4362,6 @@ def main(page: ft.Page, session=None):
         width=180,
         options=[
             ft.dropdown.Option("All"),
-            ft.dropdown.Option("SB Secretariat"),
-            ft.dropdown.Option("Office of the Mayor"),
-            ft.dropdown.Option("Committee on Health"),
         ],
         value="All",
         on_change=update_users_role_view,
@@ -3950,6 +4409,8 @@ def main(page: ft.Page, session=None):
         return visible
 
     def users_roles_view():
+        load_office_options()
+        refresh_office_filter_options()
         load_user_management_data()
         visible_users = filter_user_data()
 
@@ -3996,6 +4457,15 @@ def main(page: ft.Page, session=None):
                 ft.dropdown.Option("SB Member"),
             ],
             value="Employee",
+        )
+        office_choice = ft.Dropdown(
+            label="Department/Office",
+            options=[ft.dropdown.Option("Unassigned")] + [
+                ft.dropdown.Option(item["name"])
+                for item in office_options
+                if item.get("name")
+            ],
+            value="Unassigned",
         )
 
         permission_area = ft.Column([], spacing=8)
@@ -4107,6 +4577,12 @@ def main(page: ft.Page, session=None):
                 "email": email.value.strip(),
                 "role": role_choice.value,
             }
+            selected_office = next(
+                (item for item in office_options if item.get("name") == office_choice.value),
+                None,
+            )
+            if selected_office:
+                payload["office_id"] = selected_office.get("id")
             if permissions:
                 payload["permissions"] = str(permissions)
 
@@ -4127,10 +4603,13 @@ def main(page: ft.Page, session=None):
                     raise Exception(detail)
                 body = response.json()
                 created_user = {
+                    "id": body.get("id"),
                     "full_name": full_name.value,
                     "username": body.get("username", username.value.strip()),
                     "email": email.value,
                     "role": body.get("role", role_choice.value),
+                    "office_id": body.get("office_id"),
+                    "department": office_choice.value if selected_office else None,
                     "status": "Active",
                     "permissions": permissions,
                     "last_login": "—",
@@ -4157,6 +4636,7 @@ def main(page: ft.Page, session=None):
                     password,
                     confirm_password,
                     role_choice,
+                    office_choice,
                     permission_area,
                     error_message,
                 ], width=560, scroll=ft.ScrollMode.ALWAYS, spacing=10),
@@ -4197,6 +4677,7 @@ def main(page: ft.Page, session=None):
                     ft.Text(f"Username: {user.get('username', '-')}") ,
                     ft.Text(f"Email: {user.get('email', '-')}") ,
                     ft.Text(f"Role: {user.get('role', '-')}") ,
+                    ft.Text(f"Department/Office: {user.get('department') or 'Unassigned'}") ,
                     ft.Text(f"Account Status: {user.get('status', 'Active')}") ,
                     ft.Text(f"Created Date: {user.get('created', '-')}") ,
                     ft.Text(f"Last Login: {user.get('last_login', '-')}") ,
@@ -4213,29 +4694,26 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def open_edit_user_dialog(user):
-        if user.get("role") == "Super Administrator":
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Super Administrator"),
-                content=ft.Column([
-                    ft.Text("Full system access", weight=ft.FontWeight.BOLD),
-                    ft.Text("All permissions are permanently enabled."),
-                    ft.Checkbox(label="Full Access", value=True, disabled=True),
-                ], width=420, spacing=10),
-                actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
-            )
-            page.overlay.append(dialog)
-            dialog.open = True
-            page.update()
-            return
-
         full_name = ft.TextField(label="Full Name", value=user.get("full_name", ""), width=270)
         username = ft.TextField(label="Username", value=user.get("username", ""), width=270)
         email = ft.TextField(label="Email", value=user.get("email", ""), width=270)
+        is_super_admin = user.get("role") == "Super Administrator"
         role_choice = ft.Dropdown(
             label="Role",
             value=user.get("role", "Employee"),
-            options=[ft.dropdown.Option("Employee"), ft.dropdown.Option("SB Member")],
+            options=[ft.dropdown.Option("Employee"), ft.dropdown.Option("SB Member"), ft.dropdown.Option("Super Administrator")],
+            width=270,
+            autofocus=False,
+            disabled=is_super_admin,
+        )
+        office_choice = ft.Dropdown(
+            label="Department/Office",
+            options=[ft.dropdown.Option("Unassigned")] + [
+                ft.dropdown.Option(item["name"])
+                for item in office_options
+                if item.get("name")
+            ],
+            value=user.get("department") or "Unassigned",
             width=270,
             autofocus=False,
         )
@@ -4315,6 +4793,11 @@ def main(page: ft.Page, session=None):
 
         def render_permission_cards(_=None):
             permission_cards.controls.clear()
+            if role_choice.value == "Super Administrator":
+                permission_cards.controls.append(ft.Text("Full system access. Super Administrator permissions cannot be reduced here.", size=12, color=ft.Colors.BLUE_GREY_600))
+                update_permission_state()
+                page.update()
+                return
             search_text = (permission_search.value or "").strip().lower()
             for group_name, labels in permission_groups.items():
                 matching_labels = [label for label in labels if not search_text or search_text in label.lower() or search_text in group_name.lower()]
@@ -4589,6 +5072,13 @@ def main(page: ft.Page, session=None):
                 "status": status_choice.value,
                 "permissions": collect_permissions(),
             }
+            if is_super_admin:
+                payload["permissions"] = ["*"]
+            selected_office = next(
+                (item for item in office_options if item.get("name") == office_choice.value),
+                None,
+            )
+            payload["office_id"] = selected_office.get("id") if selected_office else None
             try:
                 response = requests.put(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}",
@@ -4619,6 +5109,7 @@ def main(page: ft.Page, session=None):
                     ft.Text("Account Information", weight=ft.FontWeight.BOLD, size=14),
                     ft.Row([full_name, username], spacing=10),
                     ft.Row([email, role_choice], spacing=10),
+                    office_choice,
                     status_choice,
                     error_message,
                     ft.Divider(height=1),
@@ -4641,16 +5132,61 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def open_reset_password_dialog(user):
+        new_password = ft.TextField(label="New Password", password=True, can_reveal_password=True)
+        confirm_password = ft.TextField(label="Confirm New Password", password=True, can_reveal_password=True)
+        error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
+
+        def reset_password(_):
+            if not new_password.value:
+                error_message.value = "New password is required."
+                page.update()
+                return
+            if new_password.value != confirm_password.value:
+                error_message.value = "Passwords do not match."
+                page.update()
+                return
+            if len(new_password.value) < 8:
+                error_message.value = "Password must be at least 8 characters long."
+                page.update()
+                return
+            try:
+                response = requests.post(
+                    f"{BACKEND_URL}/auth/users/{user.get('id')}/reset-password",
+                    json={
+                        "new_password": new_password.value,
+                        "confirm_password": confirm_password.value,
+                    },
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=20,
+                )
+                if response.status_code != 200:
+                    detail = response.text
+                    try:
+                        detail = response.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    raise Exception(detail)
+                close_dialog(dialog)
+                page.snack_bar = ft.SnackBar(ft.Text("User password reset successfully."), open=True)
+                page.update()
+            except Exception as exc:
+                error_message.value = f"Unable to reset password: {exc}"
+                page.update()
+
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Reset Password"),
             content=ft.Column([
                 ft.Text("Are you sure you want to reset this user's password?"),
                 ft.Text(f"User: {user.get('full_name', 'Unknown User')} ({user.get('username', '')})", color=ft.Colors.BLUE_GREY_700),
+                new_password,
+                confirm_password,
+                error_message,
             ], tight=True, spacing=8),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
-                ft.Button("Reset Password", on_click=lambda _: close_dialog(dialog), bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
+                ft.Button("Reset Password", on_click=reset_password, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
             ],
         )
         page.overlay.append(dialog)
@@ -4658,18 +5194,6 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def delete_user(user):
-        if user.get("role") == "Super Administrator":
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Protected Account"),
-                content=ft.Text("The Super Administrator account cannot be deleted from this interface."),
-                actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
-            )
-            page.overlay.append(dialog)
-            dialog.open = True
-            page.update()
-            return
-
         def confirm_delete():
             try:
                 response = requests.delete(
@@ -4777,7 +5301,8 @@ def main(page: ft.Page, session=None):
         users_employees = sum(1 for user in user_management_data if user.get("role") == "Employee")
         users_sb_members = sum(1 for user in user_management_data if user.get("role") == "SB Member")
         summary_items = [
-            {"title": "Total Documents", "value": str(total_docs), "detail": "Active + archived documents", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
+            {"title": "Total Documents", "value": str
+            (total_docs), "detail": "Active + archived documents", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
             {"title": "Active Documents", "value": str(active_docs), "detail": "Currently in process", "icon": ft.Icons.LIBRARY_ADD_CHECK_OUTLINED, "accent": ft.Colors.GREEN_700},
             {"title": "Pending", "value": str(pending_docs), "detail": "Awaiting action", "icon": ft.Icons.SCHEDULE_OUTLINED, "accent": ft.Colors.ORANGE_700},
             {"title": "Completed", "value": str(completed_docs), "detail": "Finished workflows", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.TEAL_700},
@@ -5413,6 +5938,7 @@ def main(page: ft.Page, session=None):
             items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view))
         if current_user_role == "Super Administrator":
             items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view()))
+            items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view()))
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
         elif has_permission("view_audit_logs"):
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))

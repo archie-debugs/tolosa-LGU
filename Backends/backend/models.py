@@ -23,6 +23,7 @@ class Category(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
 
 
 class DocumentType(Base):
@@ -30,6 +31,7 @@ class DocumentType(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
 
 
 class Document(Base):
@@ -94,6 +96,8 @@ class User(Base):
     role = Column(String, nullable=False, default="Super Administrator")
     full_name = Column(String, nullable=True)
     email = Column(String, nullable=True, index=True)
+    office_id = Column(Integer, ForeignKey("offices.id"), nullable=True, index=True)
+    office = relationship("Office", foreign_keys=[office_id])
     permissions = Column(Text, nullable=True, default="[]")
     status = Column(String, nullable=False, default="Active", index=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)

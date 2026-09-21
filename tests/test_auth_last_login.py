@@ -55,7 +55,9 @@ def test_login_and_refresh_update_last_login():
     assert login_response.status_code == 200, login_response.text
     login_payload = login_response.json()
 
-    admin_headers = {"X-Admin-Username": "adminuser", "X-Admin-Role": "Super Administrator"}
+    admin_login = client.post("/auth/login", data={"username": "adminuser", "password": "adminpass"})
+    assert admin_login.status_code == 200, admin_login.text
+    admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
     users_response = client.get("/auth/users", headers=admin_headers)
     assert users_response.status_code == 200, users_response.text
     users_payload = users_response.json()

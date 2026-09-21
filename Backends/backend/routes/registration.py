@@ -151,6 +151,9 @@ def approve_registration_request(request_id: int, payload: ApproveRequest, db: S
         raise HTTPException(status_code=400, detail="Invalid final role")
     final_role = normalized_role
 
+    if final_role == "Super Administrator" and current_admin.role != "Super Administrator":
+        raise HTTPException(status_code=403, detail="Only a Super Administrator can assign the Super Administrator role")
+
     reg = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.id == request_id).with_for_update().first()
     if not reg:
         raise HTTPException(status_code=404, detail="Registration request not found")
