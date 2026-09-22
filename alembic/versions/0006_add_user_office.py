@@ -5,7 +5,7 @@ import sqlalchemy as sa
 
 
 revision = "0006_add_user_office"
-down_revision = "0005_reference_definition_state"
+down_revision = "0005_add_reference_definition_activity"
 branch_labels = None
 depends_on = None
 
@@ -13,6 +13,8 @@ depends_on = None
 def upgrade():
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if "users" not in inspector.get_table_names():
+        return
     columns = {column["name"] for column in inspector.get_columns("users")}
     if "office_id" not in columns:
         with op.batch_alter_table("users") as batch_op:
@@ -24,6 +26,8 @@ def upgrade():
 def downgrade():
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if "users" not in inspector.get_table_names():
+        return
     columns = {column["name"] for column in inspector.get_columns("users")}
     if "office_id" in columns:
         with op.batch_alter_table("users") as batch_op:

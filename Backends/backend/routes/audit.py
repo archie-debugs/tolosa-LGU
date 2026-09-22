@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import csv
+import io
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -32,6 +35,9 @@ def list_audit_logs(
     user: str | None = Query(None),
     action: str | None = Query(None),
     module: str | None = Query(None),
+    target_id: str | None = Query(None),
+    affected_document: str | None = Query(None),
+    affected_account: str | None = Query(None),
     status: str | None = Query(None),
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
@@ -58,6 +64,9 @@ def list_audit_logs(
         query = query.filter(models.AuditLog.action == action)
     if module:
         query = query.filter(models.AuditLog.target_type == module)
+    selected_target_id = target_id or affected_document or affected_account
+    if selected_target_id:
+        query = query.filter(models.AuditLog.target_id == selected_target_id)
     if status:
         normalized_status = str(status).strip().lower()
         if normalized_status == "failed":
@@ -179,3 +188,60 @@ def list_audit_logs(
             "statuses": ["Success", "Failed"],
         },
     }
+
+
+@router.get("/audit/logs/export")
+def export_audit_logs(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+    search: str | None = Query(None),
+    user: str | None = Query(None),
+    action: str | None = Query(None),
+    module: str | None = Query(None),
+    target_id: str | None = Query(None),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+):
+    require_permission(current_user, "export_audit_logs")
+    query = db.query(models.AuditLog)
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        query = query.filter(or_(
+            models.AuditLog.actor.ilike(like),
+            models.AuditLog.action.ilike(like),
+            models.AuditLog.target_type.ilike(like),
+            models.AuditLog.target_id.ilike(like),
+            models.AuditLog.details.ilike(like),
+        ))
+    if user:
+        query = query.filter(models.AuditLog.actor == user)
+    if action:
+        query = query.filter(models.AuditLog.action == action)
+    if module:
+        query = query.filter(models.AuditLog.target_type == module)
+    if target_id:
+        query = query.filter(models.AuditLog.target_id == target_id)
+    if from_date:
+        query = query.filter(models.AuditLog.created_at >= datetime.fromisoformat(from_date))
+    if to_date:
+        query = query.filter(models.AuditLog.created_at <= datetime.fromisoformat(to_date))
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "created_at", "actor", "action", "target_type", "target_id", "status", "details"])
+    for item in query.order_by(models.AuditLog.created_at.desc()).all():
+        writer.writerow([
+            item.id,
+            item.created_at.isoformat() if item.created_at else "",
+            item.actor,
+            item.action,
+            item.target_type or "",
+            item.target_id or "",
+            _derive_status_value(item.action),
+            item.details or "",
+        ])
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=audit_logs.csv"},
+    )

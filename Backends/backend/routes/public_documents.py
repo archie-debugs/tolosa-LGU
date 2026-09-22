@@ -78,13 +78,8 @@ def list_public_documents(
             "type": document.document_type or "Document",
             "document_type": document.document_type,
             "date": document.date_registered or (document.created_at.strftime("%B %d, %Y") if document.created_at else ""),
-            "status": document.status,
             "category": document.category,
             "description": document.description,
-            "author": document.author,
-            "session": document.session,
-            "current_office": document.current_office,
-            "originating_office": document.originating_office,
         }
         for document in documents
         ],

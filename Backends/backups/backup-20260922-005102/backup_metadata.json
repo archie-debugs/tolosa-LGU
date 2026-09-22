@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-09-22T00:51:02.058594+00:00",
+  "type": "database_and_documents",
+  "include_documents": true,
+  "include_temp_uploads": false,
+  "created_by": "superuser"
+}

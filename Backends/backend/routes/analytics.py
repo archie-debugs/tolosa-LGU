@@ -362,6 +362,193 @@ def get_analytics_overview(
     }
 
 
+def _filtered_document_query(
+    db: Session,
+    *,
+    document_type: str | None = None,
+    status: str | None = None,
+    office: str | None = None,
+    archived: bool | None = None,
+    public: bool | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
+    query = db.query(models.Document)
+    if document_type:
+        query = query.filter(models.Document.document_type == document_type)
+    if status:
+        query = query.filter(models.Document.status == status)
+    if office:
+        query = query.filter(models.Document.current_office == office)
+    if archived is not None:
+        query = query.filter(models.Document.archived.is_(archived))
+    if public is not None:
+        query = query.filter(models.Document.is_public.is_(public))
+    if start_date:
+        start_dt = _as_aware_datetime(start_date)
+        if start_dt:
+            query = query.filter(models.Document.created_at >= start_dt)
+    if end_date:
+        end_dt = _as_aware_datetime(end_date)
+        if end_dt:
+            query = query.filter(models.Document.created_at <= end_dt)
+    return query.order_by(models.Document.created_at.desc())
+
+
+@router.get("/reports")
+def get_reports(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+    status: str | None = Query(default=None),
+    document_type: str | None = Query(default=None),
+    office: str | None = Query(default=None),
+    archived: bool | None = Query(default=None),
+    public: bool | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+):
+    require_permission(current_user, "view_analytics")
+
+    filters = {
+        "status": status,
+        "document_type": document_type,
+        "office": office,
+        "archived": archived,
+        "public": public,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    documents_query = _filtered_document_query(
+        db,
+        document_type=document_type,
+        status=status,
+        office=office,
+        archived=archived,
+        public=public,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    documents = documents_query.all()
+    report_documents = [
+        {
+            "id": doc.id,
+            "tracking_number": doc.tracking_number,
+            "title": doc.title,
+            "status": doc.status,
+            "document_type": doc.document_type,
+            "category": doc.category,
+            "current_office": doc.current_office,
+            "archived": bool(doc.archived),
+            "is_public": bool(doc.is_public),
+            "created_at": (doc.created_at.isoformat() if doc.created_at else None),
+        }
+        for doc in documents
+    ]
+
+    registration_statuses = (
+        db.query(models.RegistrationRequest.status, func.count(models.RegistrationRequest.id))
+        .group_by(models.RegistrationRequest.status)
+        .all()
+    )
+    registration_summary = {
+        str(status_name or "Unknown"): count
+        for status_name, count in registration_statuses
+    }
+
+    user_summary = {
+        "total": db.query(func.count(models.User.id)).scalar() or 0,
+        "active": db.query(func.count(models.User.id)).filter(models.User.is_active.is_(True)).scalar() or 0,
+        "inactive": db.query(func.count(models.User.id)).filter(models.User.is_active.is_(False)).scalar() or 0,
+    }
+
+    security_summary = {
+        "recent_security_events": len(_recent_security_events(db)),
+    }
+
+    return {
+        "report_type": "documents",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "filters": filters,
+        "documents": {
+            "total": len(report_documents),
+            "items": report_documents[:200],
+            "status_breakdown": {
+                _norm_status(doc["status"]): sum(1 for item in report_documents if _norm_status(item["status"]) == _norm_status(doc["status"]))
+                for doc in report_documents
+            },
+        },
+        "users": user_summary,
+        "registrations": registration_summary,
+        "security": security_summary,
+        "storage": _storage_information(),
+    }
+
+
+@router.get("/reports/export")
+def export_reports_csv(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+    status: str | None = Query(default=None),
+    document_type: str | None = Query(default=None),
+    office: str | None = Query(default=None),
+    archived: bool | None = Query(default=None),
+    public: bool | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+):
+    require_permission(current_user, "export_analytics")
+
+    documents = _filtered_document_query(
+        db,
+        document_type=document_type,
+        status=status,
+        office=office,
+        archived=archived,
+        public=public,
+        start_date=start_date,
+        end_date=end_date,
+    ).all()
+
+    output = io.StringIO()
+    fieldnames = [
+        "id",
+        "tracking_number",
+        "title",
+        "document_type",
+        "category",
+        "current_office",
+        "status",
+        "priority",
+        "archived",
+        "is_public",
+        "created_at",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for doc in documents:
+        writer.writerow(
+            {
+                "id": doc.id,
+                "tracking_number": doc.tracking_number,
+                "title": doc.title,
+                "document_type": doc.document_type,
+                "category": doc.category,
+                "current_office": doc.current_office,
+                "status": doc.status,
+                "priority": doc.priority,
+                "archived": "true" if doc.archived else "false",
+                "is_public": "true" if doc.is_public else "false",
+                "created_at": doc.created_at.isoformat() if doc.created_at else "",
+            }
+        )
+
+    headers = {
+        "Content-Disposition": 'attachment; filename="analytics_reports_export.csv"',
+        "Content-Type": "text/csv; charset=utf-8",
+    }
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
 @router.get("/export")
 def export_analytics_csv(
     db: Session = Depends(get_db),

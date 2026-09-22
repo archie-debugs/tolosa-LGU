@@ -146,58 +146,70 @@ def ensure_schema_columns() -> None:
     from .database import engine
     with engine.begin() as connection:
         dialect = engine.dialect.name
+        existing_tables = set(connection.dialect.get_table_names(connection)) if hasattr(connection.dialect, "get_table_names") else set()
+
+        if "users" not in existing_tables and "documents" not in existing_tables and "registration_requests" not in existing_tables:
+            models.Base.metadata.create_all(bind=engine)
+            existing_tables = set(connection.dialect.get_table_names(connection))
 
         if dialect == "sqlite":
-            _add_column_if_missing(connection, "users", "status", "ALTER TABLE users ADD COLUMN status VARCHAR NOT NULL DEFAULT 'Active'")
-            _add_column_if_missing(connection, "users", "is_active", "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
-            _add_column_if_missing(connection, "users", "created_at", "ALTER TABLE users ADD COLUMN created_at DATETIME")
-            _add_column_if_missing(connection, "users", "updated_at", "ALTER TABLE users ADD COLUMN updated_at DATETIME")
-            _add_column_if_missing(connection, "users", "permissions", "ALTER TABLE users ADD COLUMN permissions TEXT")
-            _add_column_if_missing(connection, "users", "full_name", "ALTER TABLE users ADD COLUMN full_name VARCHAR")
-            _add_column_if_missing(connection, "users", "email", "ALTER TABLE users ADD COLUMN email VARCHAR")
-            _add_column_if_missing(connection, "users", "last_login", "ALTER TABLE users ADD COLUMN last_login DATETIME")
-            _add_column_if_missing(connection, "registration_requests", "assigned_role", "ALTER TABLE registration_requests ADD COLUMN assigned_role VARCHAR")
-            _add_column_if_missing(connection, "registration_requests", "approved_by", "ALTER TABLE registration_requests ADD COLUMN approved_by VARCHAR")
-            _add_column_if_missing(connection, "registration_requests", "approved_at", "ALTER TABLE registration_requests ADD COLUMN approved_at DATETIME")
-            _add_column_if_missing(connection, "registration_requests", "rejected_by", "ALTER TABLE registration_requests ADD COLUMN rejected_by VARCHAR")
-            _add_column_if_missing(connection, "registration_requests", "rejected_at", "ALTER TABLE registration_requests ADD COLUMN rejected_at DATETIME")
-            _add_column_if_missing(connection, "documents", "author", "ALTER TABLE documents ADD COLUMN author VARCHAR")
-            _add_column_if_missing(connection, "documents", "session", "ALTER TABLE documents ADD COLUMN session VARCHAR")
-            _add_column_if_missing(connection, "documents", "date_registered", "ALTER TABLE documents ADD COLUMN date_registered VARCHAR")
-            _add_column_if_missing(connection, "documents", "attachment_name", "ALTER TABLE documents ADD COLUMN attachment_name VARCHAR")
-            _add_column_if_missing(connection, "documents", "qr_code_value", "ALTER TABLE documents ADD COLUMN qr_code_value VARCHAR")
-            _add_column_if_missing(connection, "documents", "archived_at", "ALTER TABLE documents ADD COLUMN archived_at DATETIME")
-            _add_column_if_missing(connection, "documents", "archived_by", "ALTER TABLE documents ADD COLUMN archived_by VARCHAR")
+            if "users" in existing_tables:
+                _add_column_if_missing(connection, "users", "status", "ALTER TABLE users ADD COLUMN status VARCHAR NOT NULL DEFAULT 'Active'")
+                _add_column_if_missing(connection, "users", "is_active", "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
+                _add_column_if_missing(connection, "users", "created_at", "ALTER TABLE users ADD COLUMN created_at DATETIME")
+                _add_column_if_missing(connection, "users", "updated_at", "ALTER TABLE users ADD COLUMN updated_at DATETIME")
+                _add_column_if_missing(connection, "users", "permissions", "ALTER TABLE users ADD COLUMN permissions TEXT")
+                _add_column_if_missing(connection, "users", "full_name", "ALTER TABLE users ADD COLUMN full_name VARCHAR")
+                _add_column_if_missing(connection, "users", "email", "ALTER TABLE users ADD COLUMN email VARCHAR")
+                _add_column_if_missing(connection, "users", "last_login", "ALTER TABLE users ADD COLUMN last_login DATETIME")
+            if "registration_requests" in existing_tables:
+                _add_column_if_missing(connection, "registration_requests", "assigned_role", "ALTER TABLE registration_requests ADD COLUMN assigned_role VARCHAR")
+                _add_column_if_missing(connection, "registration_requests", "approved_by", "ALTER TABLE registration_requests ADD COLUMN approved_by VARCHAR")
+                _add_column_if_missing(connection, "registration_requests", "approved_at", "ALTER TABLE registration_requests ADD COLUMN approved_at DATETIME")
+                _add_column_if_missing(connection, "registration_requests", "rejected_by", "ALTER TABLE registration_requests ADD COLUMN rejected_by VARCHAR")
+                _add_column_if_missing(connection, "registration_requests", "rejected_at", "ALTER TABLE registration_requests ADD COLUMN rejected_at DATETIME")
+            if "documents" in existing_tables:
+                _add_column_if_missing(connection, "documents", "author", "ALTER TABLE documents ADD COLUMN author VARCHAR")
+                _add_column_if_missing(connection, "documents", "session", "ALTER TABLE documents ADD COLUMN session VARCHAR")
+                _add_column_if_missing(connection, "documents", "date_registered", "ALTER TABLE documents ADD COLUMN date_registered VARCHAR")
+                _add_column_if_missing(connection, "documents", "attachment_name", "ALTER TABLE documents ADD COLUMN attachment_name VARCHAR")
+                _add_column_if_missing(connection, "documents", "qr_code_value", "ALTER TABLE documents ADD COLUMN qr_code_value VARCHAR")
+                _add_column_if_missing(connection, "documents", "archived_at", "ALTER TABLE documents ADD COLUMN archived_at DATETIME")
+                _add_column_if_missing(connection, "documents", "archived_by", "ALTER TABLE documents ADD COLUMN archived_by VARCHAR")
         else:
-            _add_column_if_missing(connection, "users", "status", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'Active'"))
-            _add_column_if_missing(connection, "users", "is_active", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"))
-            _add_column_if_missing(connection, "users", "created_at", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP"))
-            _add_column_if_missing(connection, "users", "updated_at", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP"))
-            _add_column_if_missing(connection, "users", "permissions", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT"))
-            _add_column_if_missing(connection, "users", "full_name", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR"))
-            _add_column_if_missing(connection, "users", "email", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR"))
-            _add_column_if_missing(connection, "users", "last_login", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP"))
-            _add_column_if_missing(connection, "registration_requests", "assigned_role", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS assigned_role VARCHAR"))
-            _add_column_if_missing(connection, "registration_requests", "approved_by", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS approved_by VARCHAR"))
-            _add_column_if_missing(connection, "registration_requests", "approved_at", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"))
-            _add_column_if_missing(connection, "registration_requests", "rejected_by", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS rejected_by VARCHAR"))
-            _add_column_if_missing(connection, "registration_requests", "rejected_at", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP"))
-            _add_column_if_missing(connection, "documents", "author", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS author VARCHAR"))
-            _add_column_if_missing(connection, "documents", "session", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS session VARCHAR"))
-            _add_column_if_missing(connection, "documents", "date_registered", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS date_registered VARCHAR"))
-            _add_column_if_missing(connection, "documents", "attachment_name", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS attachment_name VARCHAR"))
-            _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
-            _add_column_if_missing(connection, "documents", "archived_at", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP"))
-            _add_column_if_missing(connection, "documents", "archived_by", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_by VARCHAR"))
+            if "users" in existing_tables:
+                _add_column_if_missing(connection, "users", "status", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'Active'"))
+                _add_column_if_missing(connection, "users", "is_active", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"))
+                _add_column_if_missing(connection, "users", "created_at", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP"))
+                _add_column_if_missing(connection, "users", "updated_at", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP"))
+                _add_column_if_missing(connection, "users", "permissions", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT"))
+                _add_column_if_missing(connection, "users", "full_name", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR"))
+                _add_column_if_missing(connection, "users", "email", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR"))
+                _add_column_if_missing(connection, "users", "last_login", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP"))
+            if "registration_requests" in existing_tables:
+                _add_column_if_missing(connection, "registration_requests", "assigned_role", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS assigned_role VARCHAR"))
+                _add_column_if_missing(connection, "registration_requests", "approved_by", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS approved_by VARCHAR"))
+                _add_column_if_missing(connection, "registration_requests", "approved_at", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"))
+                _add_column_if_missing(connection, "registration_requests", "rejected_by", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS rejected_by VARCHAR"))
+                _add_column_if_missing(connection, "registration_requests", "rejected_at", text("ALTER TABLE registration_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP"))
+            if "documents" in existing_tables:
+                _add_column_if_missing(connection, "documents", "author", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS author VARCHAR"))
+                _add_column_if_missing(connection, "documents", "session", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS session VARCHAR"))
+                _add_column_if_missing(connection, "documents", "date_registered", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS date_registered VARCHAR"))
+                _add_column_if_missing(connection, "documents", "attachment_name", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS attachment_name VARCHAR"))
+                _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
+                _add_column_if_missing(connection, "documents", "archived_at", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP"))
+                _add_column_if_missing(connection, "documents", "archived_by", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_by VARCHAR"))
 
-        connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
-        connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))
-        connection.execute(text("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')"))
-        connection.execute(text("UPDATE users SET status = 'Active' WHERE status IS NULL OR status = ''"))
-        connection.execute(text("UPDATE users SET is_active = TRUE WHERE is_active IS NULL"))
-        connection.execute(text("UPDATE users SET permissions = '[]' WHERE permissions IS NULL"))
-        connection.execute(text("UPDATE users SET created_at = current_timestamp WHERE created_at IS NULL"))
-        _add_column_if_missing(connection, "users", "permissions", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT"))
+        if "users" in existing_tables:
+            connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
+            connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))
+            connection.execute(text("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')"))
+            connection.execute(text("UPDATE users SET status = 'Active' WHERE status IS NULL OR status = ''"))
+            connection.execute(text("UPDATE users SET is_active = TRUE WHERE is_active IS NULL"))
+            connection.execute(text("UPDATE users SET permissions = '[]' WHERE permissions IS NULL"))
+            connection.execute(text("UPDATE users SET created_at = current_timestamp WHERE created_at IS NULL"))
+            _add_column_if_missing(connection, "users", "permissions", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT"))
 
 
 VALID_ROLES = {"Super Administrator", "Employee", "SB Member"}
@@ -262,6 +274,9 @@ USER_MANAGEMENT_PERMISSIONS = {
     "delete_users",
     "assign_roles",
     "manage_permissions",
+    "view_registration_requests",
+    "approve_registrations",
+    "reject_registrations",
 }
 UI_PERMISSIONS = {
     "delete_documents",
@@ -269,6 +284,7 @@ UI_PERMISSIONS = {
     "edit_committee",
     "delete_committee",
     "modify_system_settings",
+    "manage_public_visibility",
 }
 VALID_PERMISSIONS = {
     permission
@@ -276,6 +292,31 @@ VALID_PERMISSIONS = {
     for permission in permissions
     if permission != "*"
 } | USER_MANAGEMENT_PERMISSIONS | UI_PERMISSIONS
+
+DEFAULT_SYSTEM_SETTINGS = {
+    "organization_name": "LGU Tolosa",
+    "system_name": "LGU Tolosa Legislative Document Tracking System",
+    "public_portal_enabled": True,
+    "maintenance_mode": False,
+    "session_timeout_minutes": 60,
+    "upload_max_size_mb": 25,
+    "allowed_file_types": ["pdf", "doc", "docx", "jpg", "jpeg", "png"],
+}
+
+SYSTEM_SETTING_TYPES = {
+    "organization_name": str,
+    "system_name": str,
+    "public_portal_enabled": bool,
+    "maintenance_mode": bool,
+    "session_timeout_minutes": int,
+    "upload_max_size_mb": int,
+    "allowed_file_types": list,
+}
+
+ROLE_DEFINITIONS = {
+    role: tuple(permissions)
+    for role, permissions in DEFAULT_ROLE_PERMISSIONS.items()
+}
 
 
 def normalize_user_role(role: str | None) -> str:
@@ -357,6 +398,23 @@ def user_has_permission(user: models.User, permission: str) -> bool:
     return normalized_permission in permissions
 
 
+def validate_registered_session(db: Session, payload: dict, user: models.User | None):
+    if not user:
+        return
+    session_id = payload.get("session_id") or payload.get("jti")
+    if not payload.get("session_id"):
+        return
+    session = db.query(models.UserSession).filter(
+        models.UserSession.session_id == session_id,
+        models.UserSession.user_id == user.id,
+    ).first()
+    now = datetime.now(timezone.utc)
+    expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
+    if not session or session.revoked_at or not expires_at or expires_at <= now:
+        raise HTTPException(status_code=401, detail="Session is no longer active")
+    session.last_activity = now
+
+
 def get_current_admin_user(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -368,6 +426,9 @@ def get_current_admin_user(
         payload = decode_access_token(token)
         username = payload.get("sub")
         user = db.query(models.User).filter(models.User.username == username).first() if username else None
+        validate_registered_session(db, payload, user)
+    except HTTPException:
+        raise
     except Exception:
         user = None
     if not user or normalize_user_role(user.role) != "Super Administrator" or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
@@ -386,6 +447,9 @@ def get_current_user_for_user_management(
         payload = decode_access_token(token)
         username = payload.get("sub")
         user = db.query(models.User).filter(models.User.username == username).first() if username else None
+        validate_registered_session(db, payload, user)
+    except HTTPException:
+        raise
     except Exception:
         user = None
     if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
@@ -430,6 +494,9 @@ def get_current_documents_import_user(
         payload = decode_access_token(token)
         username = payload.get("sub")
         user = db.query(models.User).filter(models.User.username == username).first() if username else None
+        validate_registered_session(db, payload, user)
+    except HTTPException:
+        raise
     except Exception:
         user = None
     if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":

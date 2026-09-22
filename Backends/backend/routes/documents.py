@@ -1092,6 +1092,8 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
 
     data = payload.model_dump(exclude_unset=True)
     previous_visibility = bool(doc.is_public)
+    if "is_public" in data and data["is_public"] != previous_visibility:
+        require_permission(current_user, "manage_public_visibility")
     # apply simple fields
     for field, value in data.items():
         if field in ("document_type", "category", "originating_office", "current_office"):
@@ -1115,6 +1117,14 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
 
     db.commit()
     db.refresh(doc)
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="DOCUMENT_UPDATED",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Updated document {doc.tracking_number}; fields={','.join(sorted(data.keys()))}",
+    )
     if "is_public" in data and bool(doc.is_public) != previous_visibility:
         record_audit_log(
             db,

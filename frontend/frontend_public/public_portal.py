@@ -50,13 +50,12 @@ def load_public_documents(page=1, page_size=10, search="", document_type="All Ty
             return payload
     except requests.RequestException:
         pass
-    total = len(DOCUMENTS)
     return {
-        "items": list(DOCUMENTS[(page - 1) * page_size:page * page_size]),
-        "total": total,
+        "items": [],
+        "total": 0,
         "page": page,
         "page_size": page_size,
-        "total_pages": max(1, (total + page_size - 1) // page_size),
+        "total_pages": 1,
     }
 
 

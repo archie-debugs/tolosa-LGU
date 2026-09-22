@@ -98,12 +98,29 @@ class User(Base):
     email = Column(String, nullable=True, index=True)
     office_id = Column(Integer, ForeignKey("offices.id"), nullable=True, index=True)
     office = relationship("Office", foreign_keys=[office_id])
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     permissions = Column(Text, nullable=True, default="[]")
     status = Column(String, nullable=False, default="Active", index=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
     last_login = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    last_activity = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    revoked_at = Column(DateTime, nullable=True, index=True)
+    revoke_reason = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
+    user = relationship("User", back_populates="sessions", foreign_keys=[user_id])
 
 
 class Attachment(Base):
@@ -185,6 +202,18 @@ class AuditLog(Base):
     target_id = Column(String, nullable=True, index=True)
     details = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, nullable=False, unique=True, index=True)
+    value = Column(Text, nullable=False, default="{}")
+    category = Column(String, nullable=False, default="system", index=True)
+    description = Column(Text, nullable=True)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
 
 class StatusLookup(Base):

@@ -3087,18 +3087,126 @@ def main(page: ft.Page, session=None):
         system_config_visible = has_permission("modify_system_settings") or current_user_role == "Super Administrator"
         system_configuration_card = None
         if system_config_visible:
+            default_system_settings = {
+                "organization_name": "LGU Tolosa",
+                "system_name": "LGU Tolosa Legislative Document Tracking System",
+                "public_portal_enabled": True,
+                "maintenance_mode": False,
+                "session_timeout_minutes": 60,
+                "upload_max_size_mb": 25,
+            }
+            try:
+                resp = requests.get(f"{BACKEND_URL}/system-settings", headers=get_admin_headers(), verify=False, timeout=15)
+                if resp.status_code == 200:
+                    remote_settings = resp.json().get("settings") or {}
+                    default_system_settings.update({key: value for key, value in remote_settings.items() if key in default_system_settings})
+            except Exception:
+                pass
+
+            org_name_field = ft.TextField(label="Organization Name", value=str(default_system_settings.get("organization_name", "LGU Tolosa")), width=360)
+            system_name_field = ft.TextField(label="System Name", value=str(default_system_settings.get("system_name", "LGU Tolosa Legislative Document Tracking System")), width=360)
+            maintenance_switch = ft.Switch(label="Maintenance Mode", value=bool(default_system_settings.get("maintenance_mode", False)))
+            public_portal_switch = ft.Switch(label="Public Portal Enabled", value=bool(default_system_settings.get("public_portal_enabled", True)))
+            session_timeout_field = ft.TextField(label="Session Timeout (minutes)", value=str(default_system_settings.get("session_timeout_minutes", 60)), width=180)
+            upload_size_field = ft.TextField(label="Max Upload Size (MB)", value=str(default_system_settings.get("upload_max_size_mb", 25)), width=180)
+
+            def save_system_settings(_):
+                try:
+                    payload = {
+                        "settings": {
+                            "organization_name": (org_name_field.value or "LGU Tolosa").strip() or "LGU Tolosa",
+                            "system_name": (system_name_field.value or "LGU Tolosa Legislative Document Tracking System").strip() or "LGU Tolosa Legislative Document Tracking System",
+                            "maintenance_mode": bool(maintenance_switch.value),
+                            "public_portal_enabled": bool(public_portal_switch.value),
+                            "session_timeout_minutes": int(str(session_timeout_field.value or "60").strip() or "60"),
+                            "upload_max_size_mb": int(str(upload_size_field.value or "25").strip() or "25"),
+                        }
+                    }
+                    response = requests.put(f"{BACKEND_URL}/system-settings", headers=get_admin_headers(), json=payload, verify=False, timeout=15)
+                    if response.status_code == 200:
+                        page.snack_bar = ft.SnackBar(ft.Text("System settings saved successfully."), open=True)
+                    else:
+                        detail = response.json().get("detail", "Unable to save system settings.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to save system settings."
+                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
+                except Exception as exc:
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Unable to save system settings: {exc}"), open=True)
+                page.update()
+
+            backup_status = ft.Text("No backup verification yet.", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400)
+
+            def create_backup(_):
+                try:
+                    response = requests.post(
+                        f"{BACKEND_URL}/backup/create",
+                        headers=get_admin_headers(),
+                        json={"confirm": True, "include_documents": True},
+                        verify=False,
+                        timeout=30,
+                    )
+                    if response.status_code == 200:
+                        payload = response.json()
+                        location = payload.get("backup", {}).get("location", "unknown")
+                        backup_status.value = f"Backup created: {location}"
+                        backup_status.color = ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_400
+                        page.snack_bar = ft.SnackBar(ft.Text("Backup created successfully."), open=True)
+                    else:
+                        detail = response.json().get("detail", "Unable to create backup.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to create backup."
+                        backup_status.value = str(detail)[:180]
+                        backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
+                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
+                except Exception as exc:
+                    backup_status.value = f"Backup failed: {exc}"
+                    backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Backup failed: {exc}"), open=True)
+                page.update()
+
+            def verify_backup(_):
+                try:
+                    response = requests.get(f"{BACKEND_URL}/backup/verify", headers=get_admin_headers(), verify=False, timeout=15)
+                    if response.status_code == 200:
+                        payload = response.json()
+                        backups = payload.get("backups") or []
+                        if payload.get("verified"):
+                            backup_status.value = f"Backup verification passed: {len(backups)} backup(s) found."
+                            backup_status.color = ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_400
+                            page.snack_bar = ft.SnackBar(ft.Text("Backup verification complete."), open=True)
+                        else:
+                            backup_status.value = "Backup verification failed: no valid backup metadata found."
+                            backup_status.color = ft.Colors.ORANGE_700 if not is_dark else ft.Colors.ORANGE_400
+                            page.snack_bar = ft.SnackBar(ft.Text("No valid backups found."), open=True)
+                    else:
+                        detail = response.json().get("detail", "Unable to verify backups.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to verify backups."
+                        backup_status.value = str(detail)[:180]
+                        backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
+                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
+                except Exception as exc:
+                    backup_status.value = f"Backup verification failed: {exc}"
+                    backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
+                    page.snack_bar = ft.SnackBar(ft.Text(f"Backup verification failed: {exc}"), open=True)
+                page.update()
+
             system_configuration_card = surface_card(
                 ft.Column([
                     section_header("System Configuration", "Authorized administration settings for the application.", ft.Icons.SETTINGS_APPLICATIONS_OUTLINED, ft.Colors.BLUE_700),
                     ft.Divider(height=1),
                     ft.Text("Organization Information", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Text("LGU Tolosa Legislative Document Tracking System", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
-                    ft.Text("Document Configuration", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Text("Default document status, filing preferences, and office configuration remain managed by the existing system setup.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
-                    ft.Text("QR Configuration", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Text("QR tracking preferences are controlled through the QR & Tracking settings card and the current tracking workflow.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
-                    ft.Text("Notification Configuration", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Text("System-wide announcements and application notifications are configured from the Notifications card.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
+                    ft.Row([org_name_field, system_name_field], wrap=True, spacing=12),
+                    ft.Text("Operational Controls", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Row([
+                        maintenance_switch,
+                        public_portal_switch,
+                    ], wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Text("Storage and Session Settings", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Row([session_timeout_field, upload_size_field], wrap=True, spacing=12),
+                    ft.Text("Data Protection", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
+                    ft.Row([
+                        ft.ElevatedButton("Create Backup", icon=ft.Icons.SAVE_ALT_OUTLINED, on_click=create_backup),
+                        ft.OutlinedButton("Verify Backups", icon=ft.Icons.CHECK_CIRCLE_OUTLINE, on_click=verify_backup),
+                    ], wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    backup_status,
+                    ft.Row([
+                        ft.ElevatedButton("Save System Settings", icon=ft.Icons.SAVE_OUTLINED, on_click=save_system_settings),
+                    ], alignment=ft.MainAxisAlignment.END),
                 ], spacing=10),
                 padding=18,
                 expand=False,

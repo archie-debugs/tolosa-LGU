@@ -6,7 +6,15 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from ..database import get_db
 from .. import models
-from ..core import get_password_hash, record_audit_log, get_current_admin_user
+from ..core import (
+    get_password_hash,
+    record_audit_log,
+    get_current_admin_user,
+    get_current_user_for_user_management,
+    get_default_permissions_for_role,
+    normalize_user_role,
+    require_permission,
+)
 
 router = APIRouter()
 
@@ -73,8 +81,9 @@ def create_registration(request: RegistrationCreate, db: Session = Depends(get_d
 def list_registration_requests(
     status: str | None = Query("Pending", description="Filter registration requests by status"),
     db: Session = Depends(get_db),
-    current_admin: models.User = Depends(get_current_admin_user),
+    current_admin: models.User = Depends(get_current_user_for_user_management),
 ):
+    require_permission(current_admin, "view_registration_requests")
     normalized_status = (status or "Pending").strip().title()
     if normalized_status not in {"All", "Pending", "Approved", "Rejected"}:
         raise HTTPException(status_code=400, detail="Invalid status filter")
@@ -108,7 +117,8 @@ def list_registration_requests(
 
 
 @router.get("/registration/requests/{request_id}")
-def get_registration_request(request_id: int, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin_user)):
+def get_registration_request(request_id: int, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_user_for_user_management)):
+    require_permission(current_admin, "view_registration_requests")
     r = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.id == request_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Registration request not found")
@@ -143,7 +153,8 @@ def get_registration_request(request_id: int, db: Session = Depends(get_db), cur
 
 
 @router.put("/registration/requests/{request_id}/approve")
-def approve_registration_request(request_id: int, payload: ApproveRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin_user)):
+def approve_registration_request(request_id: int, payload: ApproveRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_user_for_user_management)):
+    require_permission(current_admin, "approve_registrations")
     allowed_roles = {"Super Administrator", "Employee", "SB Member"}
     final_role = payload.final_role.strip()
     normalized_role = next((candidate for candidate in allowed_roles if candidate.lower() == final_role.lower()), None)
@@ -165,10 +176,20 @@ def approve_registration_request(request_id: int, payload: ApproveRequest, db: S
         raise HTTPException(status_code=409, detail="Username already exists")
 
     try:
+        office = None
+        if reg.office:
+            office = db.query(models.Office).filter(models.Office.name.ilike(reg.office.strip())).first()
+        full_name = " ".join(
+            part for part in (reg.first_name, reg.middle_name, reg.last_name, reg.suffix) if part
+        ).strip()
         user = models.User(
             username=reg.username,
             hashed_password=reg.hashed_password,
+            full_name=full_name,
+            email=reg.email,
+            office_id=office.id if office else None,
             role=final_role,
+            permissions=str(get_default_permissions_for_role(final_role)),
             status="Active",
             is_active=True,
         )
@@ -196,12 +217,21 @@ def approve_registration_request(request_id: int, payload: ApproveRequest, db: S
         target_id=reg.registration_reference,
         details=f"Approved {reg.username} and assigned role {final_role}",
     )
+    record_audit_log(
+        db,
+        actor=current_admin.username,
+        action="USER_REGISTERED",
+        target_type="User",
+        target_id=str(user.id),
+        details=f"Approved registration created active {final_role} account {user.username}",
+    )
 
     return {"message": "Registration approved and user created", "username": user.username, "role": user.role}
 
 
 @router.put("/registration/requests/{request_id}/reject")
-def reject_registration_request(request_id: int, payload: RejectRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin_user)):
+def reject_registration_request(request_id: int, payload: RejectRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_user_for_user_management)):
+    require_permission(current_admin, "reject_registrations")
     reason = payload.reason.strip()
     if not reason:
         raise HTTPException(status_code=400, detail="Rejection reason is required")

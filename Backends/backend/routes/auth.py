@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+import uuid
+from datetime import timedelta
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
@@ -162,6 +164,18 @@ def list_users(
     ]
 
 
+@router.get("/auth/roles")
+def list_roles(
+    current_admin: models.User = Depends(require_user_management_permission("view_users")),
+):
+    from ..core import ROLE_DEFINITIONS
+
+    return [
+        {"name": role, "permissions": list(permissions)}
+        for role, permissions in ROLE_DEFINITIONS.items()
+    ]
+
+
 @router.get("/auth/offices")
 def list_user_offices(
     db: Session = Depends(get_db),
@@ -214,6 +228,8 @@ def update_user(
     if duplicate:
         raise HTTPException(status_code=409, detail="Username already exists")
 
+    previous_role = normalize_user_role(user.role)
+    previous_permissions = normalize_permissions(user.permissions)
     user.full_name = payload.full_name.strip()
     user.username = payload.username.strip()
     user.email = payload.email.strip()
@@ -223,6 +239,24 @@ def update_user(
     user.status = normalized_status
     user.is_active = normalized_status == "Active"
     db.commit()
+    if normalized_role != previous_role:
+        record_audit_log(
+            db,
+            actor=current_admin.username,
+            action="USER_ROLE_CHANGED",
+            target_type="User",
+            target_id=str(user.id),
+            details=f"{current_admin.username} changed {user.username} role from {previous_role} to {normalized_role}",
+        )
+    if set(requested_permissions) != previous_permissions and not target_is_super_admin:
+        record_audit_log(
+            db,
+            actor=current_admin.username,
+            action="USER_PERMISSIONS_CHANGED",
+            target_type="User",
+            target_id=str(user.id),
+            details=f"{current_admin.username} changed permissions for {user.username}",
+        )
     record_audit_log(
         db,
         actor=current_admin.username,
@@ -255,6 +289,7 @@ def delete_user(
             raise HTTPException(status_code=400, detail="The final active Super Administrator cannot be deleted")
 
     username = user.username
+    db.query(models.UserSession).filter(models.UserSession.user_id == user_id).delete(synchronize_session=False)
     db.delete(user)
     db.commit()
     record_audit_log(
@@ -375,8 +410,18 @@ def login_user(
     user.last_login = datetime.now(timezone.utc)
     db.commit()
 
-    access_token = create_access_token({"sub": user.username})
-    refresh_token = create_refresh_token({"sub": user.username})
+    session_id = str(uuid.uuid4())
+    session_now = datetime.now(timezone.utc)
+    db.add(models.UserSession(
+        session_id=session_id,
+        user_id=user.id,
+        created_at=session_now,
+        last_activity=session_now,
+        expires_at=session_now + timedelta(days=7),
+    ))
+    db.commit()
+    access_token = create_access_token({"sub": user.username, "session_id": session_id})
+    refresh_token = create_refresh_token({"sub": user.username, "session_id": session_id})
 
     role = normalize_user_role(user.role)
     permissions = list(normalize_permissions(getattr(user, "permissions", None)))
@@ -408,7 +453,15 @@ def refresh_access_token(
         raise HTTPException(status_code=401, detail="Refresh token invalid")
 
     user = db.query(models.User).filter(models.User.username == username).first()
-    if not user or not getattr(user, "is_active", True):
+    session_id = payload.get("session_id")
+    session = db.query(models.UserSession).filter(
+        models.UserSession.session_id == session_id,
+        models.UserSession.user_id == user.id if user else False,
+    ).first() if session_id else None
+    expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
+    if session_id and (not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc)):
+        raise HTTPException(status_code=401, detail="Session is no longer active")
+    if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
         raise HTTPException(status_code=401, detail="User no longer active")
 
     # Refresh is treated as a successful authenticated activity event. This keeps the
@@ -423,10 +476,69 @@ def refresh_access_token(
         permissions = get_default_permissions_for_role(role)
 
     return {
-        "access_token": create_access_token({"sub": user.username}),
-        "refresh_token": create_refresh_token({"sub": user.username}),
+        "access_token": create_access_token({"sub": user.username, "session_id": session_id} if session_id else {"sub": user.username}),
+        "refresh_token": create_refresh_token({"sub": user.username, "session_id": session_id} if session_id else {"sub": user.username}),
         "username": user.username,
         "role": role,
         "permissions": permissions,
         "token_type": "bearer",
     }
+
+
+@router.post("/auth/logout")
+def logout_user(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    from ..auth_jwt import decode_access_token
+
+    payload = decode_access_token(authorization.split(" ", 1)[1].strip())
+    session_id = payload.get("session_id")
+    username = payload.get("sub")
+    if session_id:
+        session = db.query(models.UserSession).filter(models.UserSession.session_id == session_id).first()
+        if session and not session.revoked_at:
+            session.revoked_at = datetime.now(timezone.utc)
+            session.revoke_reason = "logout"
+            db.commit()
+            record_audit_log(db, actor=username or "unknown", action="SESSION_REVOKED", target_type="Session", target_id=session_id, details="User logged out")
+    return {"message": "Logged out successfully"}
+
+
+@router.get("/auth/sessions")
+def list_active_sessions(
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    now = datetime.now(timezone.utc)
+    sessions = db.query(models.UserSession).filter(
+        models.UserSession.revoked_at.is_(None),
+        models.UserSession.expires_at > now,
+    ).order_by(models.UserSession.last_activity.desc()).all()
+    return [{
+        "id": session.id,
+        "session_id": session.session_id,
+        "username": session.user.username if session.user else None,
+        "created_at": session.created_at.isoformat(),
+        "last_activity": session.last_activity.isoformat(),
+        "expires_at": session.expires_at.isoformat(),
+    } for session in sessions]
+
+
+@router.post("/auth/sessions/{session_id}/revoke")
+def revoke_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    session = db.query(models.UserSession).filter(models.UserSession.session_id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.revoked_at:
+        session.revoked_at = datetime.now(timezone.utc)
+        session.revoke_reason = "administrator_revocation"
+        db.commit()
+        record_audit_log(db, actor=current_admin.username, action="SESSION_REVOKED", target_type="Session", target_id=session_id, details="Administrator revoked session")
+    return {"message": "Session revoked"}

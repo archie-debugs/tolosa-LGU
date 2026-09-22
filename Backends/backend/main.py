@@ -16,7 +16,7 @@ from alembic.config import Config
 
 from .database import engine, get_database_info
 from . import models
-from .core import ensure_default_super_admin_account
+from .core import ensure_default_super_admin_account, ensure_schema_columns, ensure_user_role_column
 from .routes.auth import router as auth_router
 from .routes.status import router as status_router
 from .routes.audit import router as audit_router
@@ -25,6 +25,9 @@ from .routes.documents import router as documents_router
 from .routes.analytics import _storage_information, router as analytics_router
 from .routes.public_documents import router as public_documents_router
 from .routes.reference_data import router as reference_data_router
+from .routes.settings import router as settings_router
+from .routes.storage import router as storage_router
+from .routes.backup import router as backup_router
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -68,12 +71,16 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 
 def run_database_migrations() -> None:
-    table_names = inspect(engine).get_table_names()
+    table_names = set(inspect(engine).get_table_names())
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     alembic_cfg = Config(os.path.join(project_root, "alembic.ini"))
 
-    if not table_names:
+    expected_tables = set(models.Base.metadata.tables.keys())
+    if not table_names or not expected_tables.issubset(table_names):
         models.Base.metadata.create_all(bind=engine)
+        table_names = set(inspect(engine).get_table_names())
+
+    if not table_names:
         command.stamp(alembic_cfg, "head")
         return
 
@@ -86,6 +93,8 @@ def run_database_migrations() -> None:
 
 try:
     run_database_migrations()
+    ensure_user_role_column()
+    ensure_schema_columns()
     ensure_default_super_admin_account()
 except Exception as exc:
     raise RuntimeError(f"Startup initialization failed: {exc}") from exc
@@ -98,6 +107,9 @@ app.include_router(documents_router)
 app.include_router(analytics_router)
 app.include_router(public_documents_router)
 app.include_router(reference_data_router)
+app.include_router(settings_router)
+app.include_router(storage_router)
+app.include_router(backup_router)
 
 
 @app.on_event("startup")
@@ -117,6 +129,15 @@ def health():
         database_status = "unavailable"
 
     storage = _storage_information()
+    maintenance_mode = False
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text("SELECT value FROM system_settings WHERE key = 'maintenance_mode' LIMIT 1")).fetchone()
+            if result is not None:
+                maintenance_mode = str(result[0]).strip().lower() == "true"
+    except Exception:
+        maintenance_mode = False
+
     return {
         "status": "ok",
         "backend": {"status": "operational"},
@@ -128,4 +149,5 @@ def health():
         "document_storage": storage["document_storage"],
         "temporary_upload_storage": storage["temporary_upload_storage"],
         "storage": storage,
+        "maintenance_mode": maintenance_mode,
     }

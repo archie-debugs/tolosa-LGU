@@ -20,7 +20,14 @@ from Backends.backend.database import get_db
 
 
 SB_ROLE = "SB Member"
-SB_PERMISSIONS = {"view_documents", "search_documents", "download_documents"}
+SB_PERMISSIONS = {
+    "view_documents",
+    "search_documents",
+    "filter_documents",
+    "view_document_details",
+    "download_documents",
+    "print_documents",
+}
 
 app = FastAPI(title="LGU Tolosa SB Member Workspace")
 app.add_middleware(

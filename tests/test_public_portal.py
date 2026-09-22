@@ -7,6 +7,8 @@ def test_public_portal_builds_without_page():
     assert hasattr(portal, "controls")
 
 
-def test_public_documents_loader_returns_list():
+def test_public_documents_loader_returns_paginated_payload():
     docs = load_public_documents()
-    assert isinstance(docs, list)
+    assert isinstance(docs, dict)
+    assert isinstance(docs.get("items"), list)
+    assert "total_pages" in docs
