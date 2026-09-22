@@ -60,7 +60,7 @@ class Document(Base):
     originating_office_rel = relationship("Office", foreign_keys=[originating_office_id])
     current_office_rel = relationship("Office", foreign_keys=[current_office_id])
 
-    status = Column(String, nullable=False, default="Pending", index=True)
+    status = Column(String, nullable=False, default="Approved", index=True)
     priority = Column(String, nullable=False, default="Medium", index=True)
     is_public = Column(Boolean, nullable=False, default=False, index=True)
     remarks = Column(Text, nullable=True)

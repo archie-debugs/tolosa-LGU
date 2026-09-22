@@ -964,7 +964,7 @@ def main(page: ft.Page, session=None):
     documents_filter_status = ft.Dropdown(
         label="Status",
         width=140,
-        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Pending"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
         value="All",
     )
     documents_filter_type = ft.Dropdown(
@@ -1069,11 +1069,10 @@ def main(page: ft.Page, session=None):
         label="Status",
         width=200,
         options=[
-            ft.dropdown.Option("Pending"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
         ],
-        value="Pending",
+        value="Approved",
     )
     scan_submit_button = ft.Button("Submit Scan", icon=ft.Icons.QR_CODE_2, on_click=lambda _: submit_qr_scan())
 
@@ -1916,7 +1915,6 @@ def main(page: ft.Page, session=None):
         width=140,
         options=[
             ft.dropdown.Option("All"),
-            ft.dropdown.Option("Pending"),
             ft.dropdown.Option("Received"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
@@ -3132,59 +3130,6 @@ def main(page: ft.Page, session=None):
                     page.snack_bar = ft.SnackBar(ft.Text(f"Unable to save system settings: {exc}"), open=True)
                 page.update()
 
-            backup_status = ft.Text("No backup verification yet.", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400)
-
-            def create_backup(_):
-                try:
-                    response = requests.post(
-                        f"{BACKEND_URL}/backup/create",
-                        headers=get_admin_headers(),
-                        json={"confirm": True, "include_documents": True},
-                        verify=False,
-                        timeout=30,
-                    )
-                    if response.status_code == 200:
-                        payload = response.json()
-                        location = payload.get("backup", {}).get("location", "unknown")
-                        backup_status.value = f"Backup created: {location}"
-                        backup_status.color = ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_400
-                        page.snack_bar = ft.SnackBar(ft.Text("Backup created successfully."), open=True)
-                    else:
-                        detail = response.json().get("detail", "Unable to create backup.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to create backup."
-                        backup_status.value = str(detail)[:180]
-                        backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
-                except Exception as exc:
-                    backup_status.value = f"Backup failed: {exc}"
-                    backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Backup failed: {exc}"), open=True)
-                page.update()
-
-            def verify_backup(_):
-                try:
-                    response = requests.get(f"{BACKEND_URL}/backup/verify", headers=get_admin_headers(), verify=False, timeout=15)
-                    if response.status_code == 200:
-                        payload = response.json()
-                        backups = payload.get("backups") or []
-                        if payload.get("verified"):
-                            backup_status.value = f"Backup verification passed: {len(backups)} backup(s) found."
-                            backup_status.color = ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_400
-                            page.snack_bar = ft.SnackBar(ft.Text("Backup verification complete."), open=True)
-                        else:
-                            backup_status.value = "Backup verification failed: no valid backup metadata found."
-                            backup_status.color = ft.Colors.ORANGE_700 if not is_dark else ft.Colors.ORANGE_400
-                            page.snack_bar = ft.SnackBar(ft.Text("No valid backups found."), open=True)
-                    else:
-                        detail = response.json().get("detail", "Unable to verify backups.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to verify backups."
-                        backup_status.value = str(detail)[:180]
-                        backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
-                except Exception as exc:
-                    backup_status.value = f"Backup verification failed: {exc}"
-                    backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Backup verification failed: {exc}"), open=True)
-                page.update()
-
             system_configuration_card = surface_card(
                 ft.Column([
                     section_header("System Configuration", "Authorized administration settings for the application.", ft.Icons.SETTINGS_APPLICATIONS_OUTLINED, ft.Colors.BLUE_700),
@@ -3198,12 +3143,6 @@ def main(page: ft.Page, session=None):
                     ], wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     ft.Text("Storage and Session Settings", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
                     ft.Row([session_timeout_field, upload_size_field], wrap=True, spacing=12),
-                    ft.Text("Data Protection", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Row([
-                        ft.ElevatedButton("Create Backup", icon=ft.Icons.SAVE_ALT_OUTLINED, on_click=create_backup),
-                        ft.OutlinedButton("Verify Backups", icon=ft.Icons.CHECK_CIRCLE_OUTLINE, on_click=verify_backup),
-                    ], wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    backup_status,
                     ft.Row([
                         ft.ElevatedButton("Save System Settings", icon=ft.Icons.SAVE_OUTLINED, on_click=save_system_settings),
                     ], alignment=ft.MainAxisAlignment.END),

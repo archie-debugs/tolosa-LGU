@@ -131,7 +131,6 @@ from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
 from frontend.admin.users_roles import build_users_roles_table, build_users_roles_view, EMPLOYEE_PERMISSION_GROUPS
 from frontend.admin.reference_data import build_reference_data_view
-from frontend.admin.registration_requests import build_registration_requests_view
 from frontend.admin.admin_shell import render_shell
 
 
@@ -1083,7 +1082,7 @@ def main(page: ft.Page, session=None):
     documents_filter_status = ft.Dropdown(
         label="Status",
         width=140,
-        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Pending"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
         value="All",
     )
     documents_filter_type = ft.Dropdown(
@@ -1207,11 +1206,10 @@ def main(page: ft.Page, session=None):
         label="Status",
         width=200,
         options=[
-            ft.dropdown.Option("Pending"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
         ],
-        value="Pending",
+        value="Approved",
     )
     scan_submit_button = ft.Button("Submit Scan", icon=ft.Icons.QR_CODE_2, on_click=lambda _: submit_qr_scan())
 
@@ -2226,7 +2224,6 @@ def main(page: ft.Page, session=None):
         width=140,
         options=[
             ft.dropdown.Option("All"),
-            ft.dropdown.Option("Pending"),
             ft.dropdown.Option("Received"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
@@ -3545,6 +3542,12 @@ def main(page: ft.Page, session=None):
         load_documents_table(1)
         page.update()
 
+    def open_pending_documents_view(_=None):
+        documents_search_field.value = ""
+        documents_status_filter.value = "Approved"
+        load_documents_table(1)
+        page.update()
+
     def open_documents_view(_=None):
         load_documents_table()
         page.update()
@@ -3804,59 +3807,6 @@ def main(page: ft.Page, session=None):
                     page.snack_bar = ft.SnackBar(ft.Text(f"Unable to save system settings: {exc}"), open=True)
                 page.update()
 
-            backup_status = ft.Text("No backup verification yet.", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400)
-
-            def create_backup(_):
-                try:
-                    response = requests.post(
-                        f"{BACKEND_URL}/backup/create",
-                        headers=get_admin_headers(),
-                        json={"confirm": True, "include_documents": True},
-                        verify=False,
-                        timeout=30,
-                    )
-                    if response.status_code == 200:
-                        payload = response.json()
-                        location = payload.get("backup", {}).get("location", "unknown")
-                        backup_status.value = f"Backup created: {location}"
-                        backup_status.color = ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_400
-                        page.snack_bar = ft.SnackBar(ft.Text("Backup created successfully."), open=True)
-                    else:
-                        detail = response.json().get("detail", "Unable to create backup.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to create backup."
-                        backup_status.value = str(detail)[:180]
-                        backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
-                except Exception as exc:
-                    backup_status.value = f"Backup failed: {exc}"
-                    backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Backup failed: {exc}"), open=True)
-                page.update()
-
-            def verify_backup(_):
-                try:
-                    response = requests.get(f"{BACKEND_URL}/backup/verify", headers=get_admin_headers(), verify=False, timeout=15)
-                    if response.status_code == 200:
-                        payload = response.json()
-                        backups = payload.get("backups") or []
-                        if payload.get("verified"):
-                            backup_status.value = f"Backup verification passed: {len(backups)} backup(s) found."
-                            backup_status.color = ft.Colors.GREEN_700 if not is_dark else ft.Colors.GREEN_400
-                            page.snack_bar = ft.SnackBar(ft.Text("Backup verification complete."), open=True)
-                        else:
-                            backup_status.value = "Backup verification failed: no valid backup metadata found."
-                            backup_status.color = ft.Colors.ORANGE_700 if not is_dark else ft.Colors.ORANGE_400
-                            page.snack_bar = ft.SnackBar(ft.Text("No valid backups found."), open=True)
-                    else:
-                        detail = response.json().get("detail", "Unable to verify backups.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to verify backups."
-                        backup_status.value = str(detail)[:180]
-                        backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
-                except Exception as exc:
-                    backup_status.value = f"Backup verification failed: {exc}"
-                    backup_status.color = ft.Colors.RED_700 if not is_dark else ft.Colors.RED_400
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Backup verification failed: {exc}"), open=True)
-                page.update()
-
             system_configuration_card = surface_card(
                 ft.Column([
                     section_header("System Configuration", "Authorized administration settings for the application.", ft.Icons.SETTINGS_APPLICATIONS_OUTLINED, ft.Colors.BLUE_700),
@@ -3870,12 +3820,6 @@ def main(page: ft.Page, session=None):
                     ], wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     ft.Text("Storage and Session Settings", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
                     ft.Row([session_timeout_field, upload_size_field], wrap=True, spacing=12),
-                    ft.Text("Data Protection", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Row([
-                        ft.ElevatedButton("Create Backup", icon=ft.Icons.SAVE_ALT_OUTLINED, on_click=create_backup),
-                        ft.OutlinedButton("Verify Backups", icon=ft.Icons.CHECK_CIRCLE_OUTLINE, on_click=verify_backup),
-                    ], wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    backup_status,
                     ft.Row([
                         ft.ElevatedButton("Save System Settings", icon=ft.Icons.SAVE_OUTLINED, on_click=save_system_settings),
                     ], alignment=ft.MainAxisAlignment.END),
@@ -5407,7 +5351,6 @@ def main(page: ft.Page, session=None):
 
         overview = analytics_payload.get("overview") or {}
         user_metrics = analytics_payload.get("users") or {}
-        registration_metrics = analytics_payload.get("registration_requests") or {}
 
         total_docs = overview.get("total_documents", fallback_total_docs)
         active_docs = overview.get("active_documents", fallback_active_docs)
@@ -5434,12 +5377,6 @@ def main(page: ft.Page, session=None):
             {"title": "Employees", "value": str(users_employees), "detail": "Employee accounts", "icon": ft.Icons.WORK_OUTLINED, "accent": ft.Colors.INDIGO_700},
             {"title": "SB Members", "value": str(users_sb_members), "detail": "Read-only members", "icon": ft.Icons.GROUP_OUTLINED, "accent": ft.Colors.PURPLE_700},
             {"title": "Inactive Users", "value": str(users_inactive), "detail": "Disabled accounts", "icon": ft.Icons.PERSON_OFF_OUTLINED, "accent": ft.Colors.RED_700},
-        ]
-
-        registration_cards = [
-            {"title": "Pending Requests", "value": str(registration_metrics.get("pending", 0)), "detail": "Awaiting review", "icon": ft.Icons.HOURGLASS_TOP, "accent": ft.Colors.AMBER_700},
-            {"title": "Approved Requests", "value": str(registration_metrics.get("approved", 0)), "detail": "Approved registrations", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.GREEN_700},
-            {"title": "Rejected Requests", "value": str(registration_metrics.get("rejected", 0)), "detail": "Rejected registrations", "icon": ft.Icons.CANCEL_OUTLINED, "accent": ft.Colors.RED_700},
         ]
 
         recent_activity = analytics_payload.get("recent_activity") or []
@@ -5849,8 +5786,6 @@ def main(page: ft.Page, session=None):
                         spacing=8,
                     ),
                     ft.Row([metric_card(item) for item in user_cards], spacing=10, run_spacing=10, wrap=True),
-                    ft.Text("Registration Requests", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                    ft.Row([metric_card(item) for item in registration_cards], spacing=10, run_spacing=10, wrap=True),
                     document_analytics_section,
                     ft.Row(
                         [
@@ -5972,15 +5907,6 @@ def main(page: ft.Page, session=None):
         )
         load_sessions()
         return view
-
-    def registration_requests_view():
-        return build_registration_requests_view(
-            page,
-            surface_card,
-            section_header,
-            refresh_callback=load_user_management_data,
-            headers_provider=get_admin_headers,
-        )
 
     def show_login():
         page.clean()
@@ -6126,7 +6052,6 @@ def main(page: ft.Page, session=None):
         if has_permission("view_qr_tracking"):
             items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view))
         if current_user_role == "Super Administrator":
-            items.append((ft.Icons.CHECK_CIRCLE_OUTLINED, "Registration Requests", registration_requests_view))
             items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view()))
             items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view))
             items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view()))

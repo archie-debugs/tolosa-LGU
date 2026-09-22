@@ -20,14 +20,12 @@ from .core import ensure_default_super_admin_account, ensure_schema_columns, ens
 from .routes.auth import router as auth_router
 from .routes.status import router as status_router
 from .routes.audit import router as audit_router
-from .routes.registration import router as registration_router
 from .routes.documents import router as documents_router
 from .routes.analytics import _storage_information, router as analytics_router
 from .routes.public_documents import router as public_documents_router
 from .routes.reference_data import router as reference_data_router
 from .routes.settings import router as settings_router
 from .routes.storage import router as storage_router
-from .routes.backup import router as backup_router
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -101,7 +99,6 @@ except Exception as exc:
 
 app.include_router(status_router)
 app.include_router(auth_router)
-app.include_router(registration_router)
 app.include_router(audit_router)
 app.include_router(documents_router)
 app.include_router(analytics_router)
@@ -109,7 +106,6 @@ app.include_router(public_documents_router)
 app.include_router(reference_data_router)
 app.include_router(settings_router)
 app.include_router(storage_router)
-app.include_router(backup_router)
 
 
 @app.on_event("startup")

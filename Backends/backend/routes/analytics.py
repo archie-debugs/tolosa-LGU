@@ -222,17 +222,6 @@ def get_analytics_overview(
         ).scalar() or 0,
     }
 
-    registration_rows = (
-        db.query(models.RegistrationRequest.status, func.count(models.RegistrationRequest.id))
-        .group_by(models.RegistrationRequest.status)
-        .all()
-    )
-    registration_metrics = {"pending": 0, "approved": 0, "rejected": 0}
-    for request_status, count in registration_rows:
-        normalized_status = str(request_status or "pending").strip().lower()
-        if normalized_status in registration_metrics:
-            registration_metrics[normalized_status] += count
-
     processing_days = []
     for doc in documents:
         doc_created = _as_aware_datetime(doc.created_at)
@@ -346,7 +335,6 @@ def get_analytics_overview(
         "document_categories": document_categories,
         "offices": offices,
         "users": user_metrics,
-        "registration_requests": registration_metrics,
         "processing": {
             "average_processing_days": average_processing_days,
             "awaiting_action": awaiting_action,

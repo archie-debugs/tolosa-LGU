@@ -8,6 +8,7 @@ import secrets
 import os
 import json
 import re
+import tempfile
 from . import models
 from fastapi import Header
 from .auth_jwt import decode_access_token
@@ -15,8 +16,12 @@ from .database import get_db
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
-TEMP_UPLOAD_DIR = os.path.abspath(os.path.join(UPLOAD_DIR, "tmp"))
+# Keep ephemeral upload artifacts out of the repository. Temporary files may still be
+# needed by legacy flows, but they belong in the system temp area rather than the app's
+# workspace so the repo-local uploads folder is never recreated.
+UPLOAD_ROOT = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking"))
+UPLOAD_DIR = os.path.abspath(os.path.join(UPLOAD_ROOT, "uploads"))
+TEMP_UPLOAD_DIR = os.path.abspath(os.path.join(UPLOAD_ROOT, "tmp"))
 
 
 def get_password_hash(password: str) -> str:
@@ -274,9 +279,6 @@ USER_MANAGEMENT_PERMISSIONS = {
     "delete_users",
     "assign_roles",
     "manage_permissions",
-    "view_registration_requests",
-    "approve_registrations",
-    "reject_registrations",
 }
 UI_PERMISSIONS = {
     "delete_documents",

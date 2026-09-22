@@ -1,4 +1,5 @@
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -199,7 +200,7 @@ def download_document(document_id: int, attachment_id: int, db: Session = Depend
     if not attachment or not attachment.stored_path or not os.path.isabs(attachment.stored_path):
         raise HTTPException(status_code=404, detail="Attachment not found")
     path = Path(attachment.stored_path).resolve()
-    upload_root = Path(__file__).resolve().parents[1] / "uploads"
+    upload_root = Path(tempfile.gettempdir()) / "sb_tolosa_tracking" / "uploads"
     if upload_root.resolve() not in path.parents or not path.is_file():
         raise HTTPException(status_code=404, detail="Attachment file not found")
     return FileResponse(str(path), filename=attachment.original_filename, media_type=attachment.mime_type or "application/octet-stream")

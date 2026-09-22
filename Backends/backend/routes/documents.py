@@ -334,16 +334,11 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             base_title = os.path.splitext(original_filename)[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
 
-            # generate unique tracking number
-            attempt = 0
-            while True:
-                attempt += 1
-                tracking_number = _next_tracking_number(db)
-                existing = db.query(models.Document).filter(models.Document.tracking_number == tracking_number).first()
-                if not existing:
-                    break
-                if attempt > 5:
-                    raise Exception("Unable to generate unique tracking number")
+            # generate unique tracking number from the actual ordinance number when available
+            try:
+                tracking_number = _next_tracking_number(db, title=doc_title)
+            except ValueError as exc:
+                raise Exception(str(exc))
 
             doc = models.Document(
                 tracking_number=tracking_number,
@@ -354,7 +349,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 current_office=(current_office or None),
                 assigned_to=(assigned_to or None),
                 author=(author or None),
-                status="Pending",
+                status="Approved",
                 priority=(priority or "Medium") or "Medium",
                 is_public=False,
                 date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -520,16 +515,11 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             base_title = os.path.splitext(os.path.basename(filename))[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
 
-            # generate a tracking number and ensure uniqueness by retrying on conflict
-            attempt = 0
-            while True:
-                attempt += 1
-                tracking_number = _next_tracking_number(db)
-                existing = db.query(models.Document).filter(models.Document.tracking_number == tracking_number).first()
-                if not existing:
-                    break
-                if attempt > 5:
-                    raise Exception("Unable to generate unique tracking number")
+            # generate a tracking number from the actual ordinance number when available
+            try:
+                tracking_number = _next_tracking_number(db, title=doc_title)
+            except ValueError as exc:
+                raise Exception(str(exc))
 
             doc = models.Document(
                 tracking_number=tracking_number,
@@ -540,7 +530,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                 current_office=(current_office or None),
                 assigned_to=(assigned_to or None),
                 author=(author or None),
-                status="Pending",
+                status="Approved",
                 priority=(priority or "Medium") or "Medium",
                 is_public=False,
                 date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -606,7 +596,25 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     return {"success": len(failed) == 0, "total": len(files), "registered": len(created), "failed": len(failed), "documents": created, "errors": failed, "duplicates": duplicates}
 
 
-def _next_tracking_number(db: Session) -> str:
+def _extract_ordinance_number(title: str | None) -> int | None:
+    text = (title or "").strip()
+    if not text:
+        return None
+    match = re.search(r"(?i)\bordinance\s+no\.?\s*0*([1-9][0-9]*)\b", text)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _next_tracking_number(db: Session, title: str | None = None) -> str:
+    ordinance_number = _extract_ordinance_number(title)
+    if ordinance_number is not None:
+        candidate = f"DOC-{ordinance_number}"
+        existing = db.query(models.Document).filter(models.Document.tracking_number == candidate).first()
+        if existing is not None:
+            raise ValueError(f"Ordinance number {ordinance_number} is already assigned to another document.")
+        return candidate
+
     rows = db.query(models.Document.tracking_number).filter(models.Document.tracking_number.like("DOC-%")).all()
     used_numbers = set()
     for (tracking_number,) in rows:
@@ -1164,7 +1172,10 @@ def register_document(
         if existing:
             raise HTTPException(status_code=409, detail="Tracking number already exists")
     else:
-        tracking_number = _next_tracking_number(db)
+        try:
+            tracking_number = _next_tracking_number(db, title=title)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
     category = (category or None)
     document_type = (document_type or None)
@@ -1192,7 +1203,7 @@ def register_document(
         current_office=current_office,
         assigned_to=assigned_to,
         author=author,
-        status="Pending",
+        status="Approved",
         priority=priority,
         is_public=False,
         date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),

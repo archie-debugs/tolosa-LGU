@@ -7,12 +7,14 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=False)
 
-# Prefer the active environment, but do not silently hide a bad DB configuration.
-# If the env file is present and still does not define DATABASE_URL, fail loudly instead
-# of silently switching to a development SQLite database that can mismatch credentials.
+# Require an explicit DATABASE_URL so the real application cannot silently fall back
+# to SQLite. Tests may still set DATABASE_URL to sqlite:// for isolated coverage.
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./sb_tolosa.db"
+    raise RuntimeError(
+        "DATABASE_URL is required. PostgreSQL is the authoritative application database; "
+        "SQLite is not an allowed silent fallback in production."
+    )
 
 engine_kwargs = {}
 if DATABASE_URL.startswith("sqlite://"):

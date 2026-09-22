@@ -60,22 +60,6 @@ def system_health(
     ).count()
     audit_status = "operational" if audit_failures == 0 else "warning"
 
-    backup_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backups"))
-    backup_status = "warning"
-    backup_detail = "No backup directory found"
-    if os.path.isdir(backup_dir):
-        backups = [
-            os.path.join(backup_dir, name)
-            for name in sorted(os.listdir(backup_dir))
-            if os.path.isdir(os.path.join(backup_dir, name))
-        ]
-        if backups:
-            backup_status = "operational"
-            backup_detail = f"{len(backups)} backup(s) available"
-        else:
-            backup_status = "warning"
-            backup_detail = "Backup directory exists but contains no backups"
-
     components = {
         "database": {
             "status": db_status,
@@ -90,8 +74,8 @@ def system_health(
             "detail": {"failed_events": audit_failures},
         },
         "backup": {
-            "status": backup_status,
-            "detail": backup_detail,
+            "status": "manual",
+            "detail": "Manual backups are managed outside the application.",
         },
         "authentication": {
             "status": "operational",

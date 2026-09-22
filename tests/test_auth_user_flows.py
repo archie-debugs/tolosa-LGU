@@ -10,6 +10,7 @@ from Backends.backend.core import UPLOAD_DIR, get_password_hash, verify_password
 from Backends.backend.auth_jwt import create_access_token
 from Backends.backend.database import SessionLocal, engine
 from Backends.backend.core import get_default_permissions_for_role, require_permission
+from Backends.backend.routes import documents as documents_routes
 from fastapi import HTTPException
 
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
@@ -74,6 +75,28 @@ def bearer_headers(client, username="superuser", password="pw123"):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+def test_ordinance_title_extraction_uses_actual_number_and_detects_conflicts():
+    assert documents_routes._extract_ordinance_number("ORDINANCE NO. 32 Series 1993") == 32
+    assert documents_routes._extract_ordinance_number("ORDINANCE NO. 07 Series 1993") == 7
+    assert documents_routes._extract_ordinance_number("OR35DF~1") is None
+
+    with SessionLocal() as db:
+        db.query(models.Attachment).delete()
+        db.query(models.Document).delete()
+        db.add(models.Document(
+            tracking_number="DOC-32",
+            title="ORDINANCE NO. 32 Series 1993",
+            status="Approved",
+            priority="Medium",
+        ))
+        db.commit()
+        try:
+            documents_routes._next_tracking_number(db, title="ORDINANCE NO. 32 Series 1993")
+            raise AssertionError("Expected duplicate ordinance assignment to raise a conflict")
+        except ValueError:
+            pass
+
+
 def test_inactive_user_login_is_rejected():
     reset_db()
     client = TestClient(main.app)
@@ -126,6 +149,22 @@ def test_register_user_success_and_login_workflow():
     login = client.post("/auth/login", data={"username": "newuser", "password": "securepass"})
     assert login.status_code == 200, login.text
     assert login.json()["username"] == "newuser"
+
+
+def test_uploaded_documents_are_created_as_approved():
+    reset_db()
+    client = TestClient(main.app)
+    admin_headers = bearer_headers(client)
+
+    response = client.post(
+        "/documents/register",
+        headers=admin_headers,
+        data={"title": "Approved upload", "description": "test"},
+        files={"file": ("sample.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "Approved"
 
 
 def test_authorized_admin_can_reset_employee_password_and_audits_without_plaintext():
@@ -650,6 +689,21 @@ def _seed_registration_request(username, email, status="Pending"):
         db.commit()
         db.refresh(request)
         return request.id
+
+
+def test_registration_requests_accept_case_insensitive_pending_statuses():
+    reset_db()
+    client = TestClient(main.app)
+    request_id = _seed_registration_request("pending-lowercase", "pending-lowercase@example.com", status="pending")
+    admin_headers = bearer_headers(client)
+
+    pending = client.get("/registration/requests", params={"status": "pending"}, headers=admin_headers)
+    assert pending.status_code == 200, pending.text
+    assert any(item["id"] == request_id for item in pending.json()["items"])
+
+    default_pending = client.get("/registration/requests", headers=admin_headers)
+    assert default_pending.status_code == 200, default_pending.text
+    assert any(item["id"] == request_id for item in default_pending.json()["items"])
 
 
 def test_registration_approval_creates_active_user_with_audit_and_login():

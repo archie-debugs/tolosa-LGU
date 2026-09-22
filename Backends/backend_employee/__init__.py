@@ -12,7 +12,7 @@ class DocumentCreate(BaseModel):
     originating_office: Optional[str] = None
     current_office: Optional[str] = None
     assigned_to: Optional[str] = None
-    status: Optional[str] = "Pending"
+    status: Optional[str] = "Approved"
     priority: Optional[str] = "Medium"
     remarks: Optional[str] = None
     author: Optional[str] = None

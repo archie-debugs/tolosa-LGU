@@ -964,7 +964,7 @@ def main(page: ft.Page, session=None):
     documents_filter_status = ft.Dropdown(
         label="Status",
         width=140,
-        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Pending"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
+        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
         value="All",
     )
     documents_filter_type = ft.Dropdown(
@@ -1069,11 +1069,10 @@ def main(page: ft.Page, session=None):
         label="Status",
         width=200,
         options=[
-            ft.dropdown.Option("Pending"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
         ],
-        value="Pending",
+        value="Approved",
     )
     scan_submit_button = ft.Button("Submit Scan", icon=ft.Icons.QR_CODE_2, on_click=lambda _: submit_qr_scan())
 
@@ -1916,7 +1915,6 @@ def main(page: ft.Page, session=None):
         width=140,
         options=[
             ft.dropdown.Option("All"),
-            ft.dropdown.Option("Pending"),
             ft.dropdown.Option("Received"),
             ft.dropdown.Option("Approved"),
             ft.dropdown.Option("Returned"),
