@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from jose import JWTError, jwt
-from sqlalchemy import func, or_
+from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
 load_dotenv()
@@ -76,7 +76,9 @@ def _safe_document(doc: models.Document, db: Session) -> dict[str, Any]:
     attachments = db.query(models.Attachment).filter(models.Attachment.document_id == doc.id).all()
     return {
         "id": doc.id,
-        "document_number": doc.tracking_number,
+        "tracking_number": doc.tracking_number,
+        "document_number": doc.document_number,
+        "series_year": doc.series_year,
         "title": doc.title,
         "document_type": doc.document_type,
         "description": doc.description,
@@ -111,6 +113,8 @@ def _document_query(
         query = query.filter(
             or_(
                 models.Document.tracking_number.ilike(like),
+                models.Document.document_number.ilike(like),
+                cast(models.Document.series_year, String).ilike(like),
                 models.Document.title.ilike(like),
                 models.Document.document_type.ilike(like),
                 models.Document.description.ilike(like),
@@ -125,7 +129,14 @@ def _document_query(
     if year and year.isdigit() and len(year) == 4:
         start = datetime(int(year), 1, 1, tzinfo=timezone.utc)
         end = datetime(int(year) + 1, 1, 1, tzinfo=timezone.utc)
-        query = query.filter(models.Document.created_at >= start, models.Document.created_at < end)
+        query = query.filter(
+            or_(
+                models.Document.series_year == int(year),
+                models.Document.series_year.is_(None)
+                & (models.Document.created_at >= start)
+                & (models.Document.created_at < end),
+            )
+        )
     return query.order_by(models.Document.created_at.desc())
 
 

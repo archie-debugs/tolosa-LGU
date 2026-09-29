@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 class DocumentCreate(BaseModel):
     tracking_number: str = Field(..., min_length=1)
+    document_number: Optional[str] = None
+    series_year: Optional[int] = None
     title: str = Field(..., min_length=1)
     description: Optional[str] = None
     document_type: Optional[str] = None
@@ -26,6 +28,8 @@ class DocumentCreate(BaseModel):
 
 class DocumentRegistration(BaseModel):
     title: str = Field(..., min_length=1)
+    document_number: Optional[str] = None
+    series_year: Optional[int] = None
     description: Optional[str] = None
     document_type: Optional[str] = None
     current_office: Optional[str] = None
@@ -35,6 +39,8 @@ class DocumentRegistration(BaseModel):
 
 class DocumentUpdate(BaseModel):
     tracking_number: Optional[str] = None
+    document_number: Optional[str] = None
+    series_year: Optional[int] = None
     title: Optional[str] = None
     description: Optional[str] = None
     document_type: Optional[str] = None
@@ -57,6 +63,8 @@ class DocumentUpdate(BaseModel):
 class DocumentResponse(BaseModel):
     id: int
     tracking_number: str
+    document_number: Optional[str] = None
+    series_year: Optional[int] = None
     title: str
     description: Optional[str] = None
     document_type: Optional[str] = None

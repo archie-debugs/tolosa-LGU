@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi import Query
-from sqlalchemy import Integer, cast, exc, func, or_
+from sqlalchemy import Integer, String, cast, exc, func, or_, text
 from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
@@ -29,6 +29,8 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 QR_IMAGE_DIR = os.path.join(UPLOAD_DIR, "qr")
 TITLE_YEAR_PATTERN = r"(?i)series[[:space:]]*:?[[:space:]]*((19|20)[0-9]{2})"
+LEGISLATIVE_NUMBER_PATTERN = re.compile(r"(?i)\b(?:ordinance|resolution)\s+(?:no\.?|number)\s*[:#]?\s*([0-9]+)\b")
+SERIES_YEAR_PATTERN = re.compile(r"(?i)\bseries\s*:?\s*((?:19|20)[0-9]{2})\b")
 
 # bulk registration settings
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -333,15 +335,15 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
 
             base_title = os.path.splitext(original_filename)[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
-
-            # generate unique tracking number from the actual ordinance number when available
-            try:
-                tracking_number = _next_tracking_number(db, title=doc_title)
-            except ValueError as exc:
-                raise Exception(str(exc))
+            inferred_number, inferred_year = _extract_legislative_metadata(original_filename or doc_title)
+            document_number = (payload.get("document_number") or inferred_number or "").strip() or None
+            series_year = payload.get("series_year") or inferred_year
+            series_year = int(series_year) if series_year not in (None, "") else None
 
             doc = models.Document(
-                tracking_number=tracking_number,
+                tracking_number=f"PENDING-{uuid.uuid4().hex}",
+                document_number=document_number,
+                series_year=series_year,
                 title=doc_title,
                 description=(description or None),
                 category=(category or None),
@@ -356,14 +358,14 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 qr_code_value=None,
                 created_by=getattr(current_user, "username", None),
             )
-            db.add(doc)
+            _assign_system_tracking_number(db, doc)
             db.commit()
             db.refresh(doc)
-            payload = _compute_qr_payload(doc)
-            doc.qr_code_value = payload
+            qr_payload = _compute_qr_payload(doc)
+            doc.qr_code_value = qr_payload
             db.commit()
             db.refresh(doc)
-            _ensure_qr_png(doc, payload)
+            _ensure_qr_png(doc, qr_payload)
 
             # move file from tmp to uploads
             safe_stored = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(safe_name)}"
@@ -514,15 +516,15 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             # attempt to create document record
             base_title = os.path.splitext(os.path.basename(filename))[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
-
-            # generate a tracking number from the actual ordinance number when available
-            try:
-                tracking_number = _next_tracking_number(db, title=doc_title)
-            except ValueError as exc:
-                raise Exception(str(exc))
+            inferred_number, inferred_year = _extract_legislative_metadata(filename or doc_title)
+            document_number = (payload.get("document_number") or inferred_number or "").strip() or None
+            series_year = payload.get("series_year") or inferred_year
+            series_year = int(series_year) if series_year not in (None, "") else None
 
             doc = models.Document(
-                tracking_number=tracking_number,
+                tracking_number=f"PENDING-{uuid.uuid4().hex}",
+                document_number=document_number,
+                series_year=series_year,
                 title=doc_title,
                 description=(description or None),
                 category=(category or None),
@@ -534,10 +536,11 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                 priority=(priority or "Medium") or "Medium",
                 is_public=False,
                 date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                qr_code_value=tracking_number,
+                qr_code_value=None,
                 created_by=getattr(current_user, "username", None),
             )
-            db.add(doc)
+            tracking_number = _assign_system_tracking_number(db, doc)
+            doc.qr_code_value = tracking_number
             db.commit()
             db.refresh(doc)
 
@@ -596,38 +599,27 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     return {"success": len(failed) == 0, "total": len(files), "registered": len(created), "failed": len(failed), "documents": created, "errors": failed, "duplicates": duplicates}
 
 
-def _extract_ordinance_number(title: str | None) -> int | None:
-    text = (title or "").strip()
-    if not text:
-        return None
-    match = re.search(r"(?i)\bordinance\s+no\.?\s*0*([1-9][0-9]*)\b", text)
-    if not match:
-        return None
-    return int(match.group(1))
+def _next_display_tracking_value(db: Session) -> int:
+    return int(db.execute(text("SELECT nextval('document_tracking_number_seq')")).scalar_one())
 
 
-def _next_tracking_number(db: Session, title: str | None = None) -> str:
-    ordinance_number = _extract_ordinance_number(title)
-    if ordinance_number is not None:
-        candidate = f"DOC-{ordinance_number}"
-        existing = db.query(models.Document).filter(models.Document.tracking_number == candidate).first()
-        if existing is not None:
-            raise ValueError(f"Ordinance number {ordinance_number} is already assigned to another document.")
-        return candidate
+def _assign_system_tracking_number(db: Session, doc: models.Document) -> str:
+    sequence_value = _next_display_tracking_value(db)
+    tracking_number = f"DOC-{int(sequence_value):06d}"
+    doc.tracking_number = tracking_number
+    db.add(doc)
+    db.flush()
+    return tracking_number
 
-    rows = db.query(models.Document.tracking_number).filter(models.Document.tracking_number.like("DOC-%")).all()
-    used_numbers = set()
-    for (tracking_number,) in rows:
-        if not tracking_number or not tracking_number.startswith("DOC-"):
-            continue
-        suffix = tracking_number.replace("DOC-", "", 1)
-        if suffix.isdigit():
-            used_numbers.add(int(suffix))
 
-    candidate = 1
-    while candidate in used_numbers:
-        candidate += 1
-    return f"DOC-{candidate}"
+def _extract_legislative_metadata(value: str | None) -> tuple[str | None, int | None]:
+    text = value or ""
+    number_match = LEGISLATIVE_NUMBER_PATTERN.search(text)
+    year_match = SERIES_YEAR_PATTERN.search(text)
+    return (
+        number_match.group(1) if number_match else None,
+        int(year_match.group(1)) if year_match else None,
+    )
 
 
 def _documents_with_checksum(db: Session, checksum: str):
@@ -672,6 +664,8 @@ def _serialize_document(doc: models.Document):
     payload = {
         "id": doc.id,
         "tracking_number": doc.tracking_number,
+        "document_number": doc.document_number,
+        "series_year": doc.series_year,
         "title": doc.title,
         "description": doc.description,
         "document_type": doc.document_type,
@@ -756,28 +750,30 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     qr_text = str(qr_value).strip()
     if not qr_text:
         return None
+    normalized_value = qr_text.upper()
+    current = db.query(models.Document).filter(models.Document.tracking_number == normalized_value).first()
+    if current is not None:
+        return current
+
+    current_qr = db.query(models.Document).filter(models.Document.qr_code_value == qr_text).first()
+    if current_qr is not None:
+        return current_qr
+
+    aliases = {normalized_value}
     normalized_tracking = _normalize_tracking_query(qr_text)
-    candidate_value = qr_text
-    query = db.query(models.Document)
     if normalized_tracking is not None:
-        canonical_tracking = f"DOC-{int(normalized_tracking)}"
-        query = query.filter(
-            or_(
-                models.Document.qr_code_value == candidate_value,
-                models.Document.qr_code_value == canonical_tracking,
-                models.Document.tracking_number == canonical_tracking,
-                models.Document.tracking_number == qr_text.upper(),
-            )
-        )
-    else:
-        query = query.filter(
-            or_(
-                models.Document.qr_code_value == candidate_value,
-                models.Document.qr_code_value == qr_text.upper(),
-                models.Document.tracking_number == qr_text.upper(),
-            )
-        )
-    return query.first()
+        numeric_tracking = int(normalized_tracking)
+        aliases.add(f"DOC-{numeric_tracking}")
+        aliases.add(f"DOC-{numeric_tracking:06d}")
+
+    alias = (
+        db.query(models.DocumentTrackingNumberAlias)
+        .filter(models.DocumentTrackingNumberAlias.tracking_number.in_(aliases))
+        .first()
+    )
+    if alias is None:
+        return None
+    return db.query(models.Document).filter(models.Document.id == alias.document_id).first()
 
 
 def _compute_qr_payload(doc: models.Document) -> str:
@@ -940,8 +936,8 @@ def _parse_document_date_filter(value: str, is_end: bool = False) -> str:
 
 
 def _document_title_year_expression():
-    """Extract a valid historical year only from a Series title pattern."""
-    return cast(func.substring(models.Document.title, TITLE_YEAR_PATTERN), Integer)
+    """Use structured series year, falling back to legacy title parsing."""
+    return func.coalesce(models.Document.series_year, cast(func.substring(models.Document.title, TITLE_YEAR_PATTERN), Integer))
 
 
 def _is_year_only_filter(value: str) -> bool:
@@ -987,33 +983,31 @@ def list_documents(
     available_years = list(range(oldest_year, current_year + 1)) if oldest_year else [current_year]
     if search:
         normalized_tracking = _normalize_tracking_query(search)
-        if normalized_tracking is not None and re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([1-9][0-9]*|0)", str(search).strip()):
-            canonical_tracking = f"DOC-{int(normalized_tracking)}"
-            query = query.filter(
-                or_(
-                    models.Document.tracking_number == canonical_tracking,
-                    models.Document.tracking_number == str(search).strip().upper(),
-                )
-            )
-        else:
-            like = f"%{search.lower()}%"
-            query = query.filter(
-                or_(
-                    models.Document.tracking_number.ilike(like),
-                    models.Document.title.ilike(like),
-                    models.Document.description.ilike(like),
-                    models.Document.document_type.ilike(like),
-                    models.Document.category.ilike(like),
-                    models.Document.originating_office.ilike(like),
-                    models.Document.current_office.ilike(like),
-                    models.Document.assigned_to.ilike(like),
-                    models.Document.status.ilike(like),
-                    models.Document.remarks.ilike(like),
-                    models.Document.author.ilike(like),
-                    models.Document.session.ilike(like),
-                    models.Document.created_by.ilike(like),
-                )
-            )
+        like = f"%{search.lower()}%"
+        search_conditions = [
+            models.Document.tracking_number.ilike(like),
+            models.Document.document_number.ilike(like),
+            cast(models.Document.series_year, String).ilike(like),
+            models.Document.title.ilike(like),
+            models.Document.description.ilike(like),
+            models.Document.document_type.ilike(like),
+            models.Document.category.ilike(like),
+            models.Document.originating_office.ilike(like),
+            models.Document.current_office.ilike(like),
+            models.Document.assigned_to.ilike(like),
+            models.Document.status.ilike(like),
+            models.Document.remarks.ilike(like),
+            models.Document.author.ilike(like),
+            models.Document.session.ilike(like),
+            models.Document.created_by.ilike(like),
+        ]
+        if normalized_tracking is not None:
+            tracking_value = int(normalized_tracking)
+            search_conditions.extend([
+                models.Document.tracking_number == f"DOC-{tracking_value}",
+                models.Document.tracking_number == f"DOC-{tracking_value:06d}",
+            ])
+        query = query.filter(or_(*search_conditions))
     if status:
         query = query.filter(models.Document.status == status)
     if document_type:
@@ -1094,9 +1088,7 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
         raise HTTPException(status_code=404, detail="Document not found")
 
     if payload.tracking_number is not None and payload.tracking_number != doc.tracking_number:
-        existing = db.query(models.Document).filter(models.Document.tracking_number == payload.tracking_number).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Tracking number already exists")
+        raise HTTPException(status_code=400, detail="Tracking numbers are generated automatically and cannot be changed.")
 
     data = payload.model_dump(exclude_unset=True)
     previous_visibility = bool(doc.is_public)
@@ -1148,6 +1140,8 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
 @router.post("/register", response_model=schemas.DocumentResponse)
 def register_document(
     title: str = Form(...),
+    document_number: Optional[str] = Form(None),
+    series_year: Optional[int] = Form(None),
     description: Optional[str] = Form(None),
     category: Optional[str] = Form(None),
     document_type: Optional[str] = Form(None),
@@ -1166,16 +1160,12 @@ def register_document(
     if not title:
         raise HTTPException(status_code=400, detail="Title is required")
 
-    tracking_number = (tracking_number or "").strip()
-    if tracking_number:
-        existing = db.query(models.Document).filter(models.Document.tracking_number == tracking_number).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Tracking number already exists")
-    else:
-        try:
-            tracking_number = _next_tracking_number(db, title=title)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+    if (tracking_number or "").strip():
+        raise HTTPException(status_code=400, detail="Tracking numbers are generated automatically.")
+
+    inferred_number, inferred_year = _extract_legislative_metadata(file.filename if file and file.filename else title)
+    document_number = (document_number or inferred_number or "").strip() or None
+    series_year = series_year if series_year is not None else inferred_year
 
     category = (category or None)
     document_type = (document_type or None)
@@ -1195,7 +1185,9 @@ def register_document(
             raise HTTPException(status_code=409, detail=_duplicate_reason(duplicate_documents))
 
     doc = models.Document(
-        tracking_number=tracking_number,
+        tracking_number=f"PENDING-{uuid.uuid4().hex}",
+        document_number=document_number,
+        series_year=series_year,
         title=title,
         description=(description or None),
         category=category,
@@ -1210,7 +1202,10 @@ def register_document(
         qr_code_value=None,
         created_by=getattr(current_user, "username", None),
     )
-    db.add(doc)
+    try:
+        _assign_system_tracking_number(db, doc)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     db.commit()
     db.refresh(doc)
     payload = _compute_qr_payload(doc)

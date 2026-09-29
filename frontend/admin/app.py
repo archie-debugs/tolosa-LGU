@@ -104,6 +104,7 @@ import json
 import ast
 import re
 import secrets
+import threading
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
@@ -120,6 +121,15 @@ load_dotenv(override=True)
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN")
+
+
+def get_admin_headers():
+    hdrs = {}
+    token_to_use = AUTH_TOKEN
+    if token_to_use:
+        hdrs["Authorization"] = f"Bearer {token_to_use}"
+    return hdrs
+
 
 if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
     if BACKEND_URL.startswith("https://"):
@@ -142,6 +152,106 @@ def clear_stale_session_state(state):
     reset["runtime_token"] = None
     reset["refresh_token"] = None
     return reset
+
+
+def _read_selected_file_bytes(selected_file):
+    if selected_file is None:
+        return None
+    try:
+        if hasattr(selected_file, "read"):
+            data = selected_file.read()
+            if data is not None:
+                return data
+    except Exception:
+        pass
+    candidate_path = getattr(selected_file, "path", None)
+    if candidate_path and os.path.exists(candidate_path):
+        try:
+            with open(candidate_path, "rb") as handle:
+                return handle.read()
+        except Exception:
+            pass
+    return None
+
+
+def _trace_filepicker_file(context, selected_file):
+    file_bytes = _read_selected_file_bytes(selected_file)
+    raw_bytes = getattr(selected_file, "bytes", None)
+    print(
+        "FILEPICKER TRACE "
+        f"context={context} "
+        f"type={type(selected_file)!r} "
+        f"name={getattr(selected_file, 'name', None)!r} "
+        f"id={getattr(selected_file, 'id', None)!r} "
+        f"path={getattr(selected_file, 'path', None)!r} "
+        f"has_bytes={hasattr(selected_file, 'bytes')} "
+        f"bytes_type={type(raw_bytes)!r} "
+        f"bytes_length={len(raw_bytes) if raw_bytes is not None else None} "
+        f"has_read={callable(getattr(selected_file, 'read', None))} "
+        f"read_result_length={len(file_bytes) if file_bytes is not None else None}",
+        flush=True,
+    )
+    return file_bytes
+
+
+def _browser_selected_file_needs_upload(selected_file):
+    if selected_file is None:
+        return False
+    if getattr(selected_file, "path", None):
+        return False
+    if hasattr(selected_file, "read") or hasattr(selected_file, "bytes"):
+        return False
+    return True
+
+
+def _route_file_picker_result(current_context, event, single_handler, bulk_handler, replacement_handler):
+    if current_context == "single_registration" and callable(single_handler):
+        return single_handler(event)
+    if current_context == "bulk_registration" and callable(bulk_handler):
+        return bulk_handler(event)
+    if current_context == "replacement" and callable(replacement_handler):
+        return replacement_handler(event)
+    return None
+
+
+def _prepare_single_registration_upload(selected_file, filename):
+    if selected_file is None:
+        raise ValueError("No file selected")
+    safe_name = filename or getattr(selected_file, "name", None) or "document.pdf"
+    size = getattr(selected_file, "size", None) or 0
+    response = requests.post(
+        f"{BACKEND_URL}/documents/uploads/create_tmp_uploads",
+        json={"files": [{"filename": safe_name, "size": size}]},
+        headers=get_admin_headers(),
+        verify=False,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise Exception(response.text)
+    payload = response.json()
+    upload_info = next((item for item in payload.get("files", []) if item.get("ok")), None)
+    if upload_info is None:
+        raise Exception("No temporary upload URL was returned")
+    return {
+        "filename": safe_name,
+        "size": size,
+        "tmp_name": upload_info.get("tmp_name"),
+        "upload_url": upload_info.get("upload_url"),
+        "upload_token": upload_info.get("upload_token"),
+    }
+
+
+def _upload_selected_file_via_picker(file_picker_ref, selected_file, filename):
+    if selected_file is None or not _browser_selected_file_needs_upload(selected_file):
+        return None
+    upload_info = _prepare_single_registration_upload(selected_file, filename)
+    picker_upload = ft.FilePickerUploadFile(
+        name=upload_info.get("filename"),
+        upload_url=upload_info.get("upload_url"),
+        method="PUT",
+    )
+    file_picker_ref.upload([picker_upload])
+    return upload_info
 
 
 def main(page: ft.Page, session=None):
@@ -1255,6 +1365,8 @@ def main(page: ft.Page, session=None):
     page.overlay.append(qr_label_download_dialog)
 
     registration_title = ft.TextField(label="Title", width=680)
+    registration_document_number = ft.TextField(label="Legislative Document Number", width=240)
+    registration_series_year = ft.TextField(label="Series Year", width=180)
     registration_description = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=3, width=680)
     registration_category = ft.Dropdown(
         label="Category",
@@ -1300,6 +1412,16 @@ def main(page: ft.Page, session=None):
     )
     registration_attachment = None
     registration_attachment_label = ft.Text("No file selected", size=12, color=ft.Colors.BLUE_GREY_600)
+    current_file_picker_context = None
+    single_registration_upload = {
+        "tmp_name": None,
+        "upload_url": None,
+        "upload_token": None,
+        "filename": None,
+        "status": "idle",
+        "selected_file_source": None,
+        "in_progress": False,
+    }
     file_picker = ft.FilePicker(on_result=lambda e: None)
     page.overlay.append(file_picker)
 
@@ -1309,11 +1431,14 @@ def main(page: ft.Page, session=None):
             if getattr(e, 'files', None):
                 f = e.files[0]
                 attachment_path = getattr(e, 'path', None) or getattr(f, 'path', None)
+                file_bytes = _trace_filepicker_file("registration", f)
                 if attachment_path and not os.path.isabs(attachment_path) and not os.path.exists(attachment_path):
                     attachment_path = os.path.abspath(attachment_path)
                 registration_attachment = {
                     "path": attachment_path,
                     "name": getattr(f, 'name', None),
+                    "file_bytes": file_bytes,
+                    "selected_file_source": f,
                 }
                 filename = registration_attachment["name"] or ""
                 registration_attachment_label.value = filename or "No file selected"
@@ -1349,8 +1474,103 @@ def main(page: ft.Page, session=None):
             registration_attachment_label.value = "No file selected"
         page.update()
 
+    def _on_single_upload(e):
+        nonlocal single_registration_upload
+        fname = getattr(e, "file_name", None)
+        error = getattr(e, "error", None)
+        progress = getattr(e, "progress", None)
+        print(
+            "FILEPICKER TRACE "
+            f"context=single_upload_event file_name={fname!r} progress={progress!r} error={error!r} "
+            f"pending_tmp={single_registration_upload.get('tmp_name')!r}",
+            flush=True,
+        )
+        if error:
+            single_registration_upload["status"] = "error"
+            single_registration_upload["in_progress"] = False
+            show_document_notice(f"Single document upload failed: {error}")
+            return
+        if progress is not None:
+            if progress >= 1.0:
+                single_registration_upload["status"] = "uploaded"
+                single_registration_upload["in_progress"] = False
+                _confirm_single_registration_upload()
+            else:
+                single_registration_upload["status"] = "uploading"
+                single_registration_upload["in_progress"] = True
+        else:
+            single_registration_upload["status"] = "uploaded"
+            single_registration_upload["in_progress"] = False
+            _confirm_single_registration_upload()
+        page.update()
+
+    def _confirm_single_registration_upload():
+        nonlocal single_registration_upload
+        if not single_registration_upload.get("tmp_name"):
+            show_document_notice("No uploaded document is available to register.")
+            return
+        title = (registration_title.value or "").strip()
+        if not title:
+            show_document_notice("Title is required to register a document.")
+            return
+        payload = {
+            "tmp_names": [single_registration_upload["tmp_name"]],
+            "title": title,
+            "document_number": (registration_document_number.value or "").strip() or None,
+            "series_year": (registration_series_year.value or "").strip() or None,
+            "description": (registration_description.value or "").strip() or None,
+            "category": (registration_category.value or "").strip() or None,
+            "document_type": (registration_document_type.value or "").strip() or None,
+            "current_office": (registration_current_office.value or "").strip() or None,
+            "assigned_to": (registration_assigned_to.value or "").strip() or None,
+            "author": (registration_author.value or "").strip() or None,
+            "priority": (registration_priority.value or "Medium").strip() or "Medium",
+        }
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/documents/bulk-register/confirm_tmp",
+                json=payload,
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=180,
+            )
+            if response.status_code not in {200, 201}:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise Exception(f"{response.status_code} {detail}")
+            result = response.json()
+            if not result.get("success", False):
+                failures = result.get("errors") or []
+                detail = "; ".join(str(item.get("reason", item)) for item in failures if isinstance(item, dict)) or response.text
+                raise Exception(detail)
+            register_document_dialog.open = False
+            page.update()
+            load_documents_table()
+            show_document_notice("Document registered successfully.")
+        except Exception as exc:
+            show_document_notice(f"Document registration failed: {exc}")
+        finally:
+            single_registration_upload = {
+                "tmp_name": None,
+                "upload_url": None,
+                "upload_token": None,
+                "filename": None,
+                "status": "idle",
+                "selected_file_source": None,
+                "in_progress": False,
+            }
+
     # attach handler to file_picker
-    file_picker.on_result = _on_registration_file
+    file_picker.on_result = lambda e: _route_file_picker_result(
+        current_file_picker_context,
+        e,
+        _on_registration_file,
+        _on_bulk_pick,
+        _on_replacement_file,
+    )
+    file_picker.on_upload = _on_single_upload
 
     def registration_section(title):
         return ft.Text(
@@ -1413,6 +1633,7 @@ def main(page: ft.Page, session=None):
             [
                 registration_section("Basic Information"),
                 registration_title,
+                ft.Row([registration_document_number, registration_series_year], spacing=12, wrap=True),
                 registration_description,
                 ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
                 registration_section("Document Classification"),
@@ -1507,12 +1728,35 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def close_register_document_dialog():
+        nonlocal current_file_picker_context, single_registration_upload
+        current_file_picker_context = None
+        single_registration_upload = {
+            "tmp_name": None,
+            "upload_url": None,
+            "upload_token": None,
+            "filename": None,
+            "status": "idle",
+            "selected_file_source": None,
+            "in_progress": False,
+        }
         register_document_dialog.open = False
         page.update()
 
     def open_register_document_dialog(_=None):
-        nonlocal registration_attachment
+        nonlocal registration_attachment, current_file_picker_context, single_registration_upload
+        current_file_picker_context = "single_registration"
+        single_registration_upload = {
+            "tmp_name": None,
+            "upload_url": None,
+            "upload_token": None,
+            "filename": None,
+            "status": "idle",
+            "selected_file_source": None,
+            "in_progress": False,
+        }
         registration_title.value = ""
+        registration_document_number.value = ""
+        registration_series_year.value = ""
         registration_description.value = ""
         registration_category.value = "Legislation"
         registration_document_type.value = "Ordinance"
@@ -1540,6 +1784,8 @@ def main(page: ft.Page, session=None):
         bgcolor=ft.Colors.WHITE,
     )
     bulk_common_title = ft.TextField(label="Common Title (optional)", width=320)
+    bulk_common_document_number = ft.TextField(label="Legislative Document Number (optional)", width=260)
+    bulk_common_series_year = ft.TextField(label="Series Year (optional)", width=180)
     bulk_common_description = ft.TextField(label="Common Description", multiline=True, min_lines=2, max_lines=3, width=320)
     bulk_common_category = ft.Dropdown(label="Category", width=210, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")], value="Legislation")
     bulk_common_document_type = ft.Dropdown(label="Document Type", width=210, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
@@ -1587,6 +1833,55 @@ def main(page: ft.Page, session=None):
         bulk_import_files = [i for i in bulk_import_files if i.get("tmp_name") != tmp_name]
         _render_bulk_selected_list()
 
+    def _start_bulk_uploads():
+        pending_items = [item for item in bulk_import_files if item.get("tmp_name") and item.get("upload_url")]
+        if not pending_items:
+            return
+
+        upload_files = []
+        for item in pending_items:
+            item["status"] = "Queued"
+            item["progress"] = 0.0
+            status_control = item.get("_status_control")
+            progress_control = item.get("_progress_control")
+            if status_control is not None:
+                status_control.value = item["status"]
+                status_control.color = ft.Colors.BLUE_GREY_700
+            if progress_control is not None:
+                progress_control.value = item["progress"]
+            upload_files.append(
+                ft.FilePickerUploadFile(
+                    name=item.get("name") or item.get("upload_name") or item.get("tmp_name"),
+                    upload_url=item.get("upload_url"),
+                    method="PUT",
+                )
+            )
+        try:
+            print(
+                "FILEPICKER TRACE "
+                f"context=bulk_upload_invocation count={len(upload_files)} "
+                f"names={[item.get('name') for item in pending_items]!r}",
+                flush=True,
+            )
+            bulk_file_picker.upload(upload_files)
+            for item in pending_items:
+                item["status"] = "Uploading"
+                item["progress"] = 0.05
+                status_control = item.get("_status_control")
+                progress_control = item.get("_progress_control")
+                if status_control is not None:
+                    status_control.value = item["status"]
+                    status_control.color = ft.Colors.BLUE_GREY_700
+                if progress_control is not None:
+                    progress_control.value = item["progress"]
+            page.update()
+        except Exception as exc:
+            print(f"FILEPICKER TRACE context=bulk_upload_exception type={type(exc)!r} message={exc!r}", flush=True)
+            for item in pending_items:
+                item["status"] = f"Error: {exc}"
+                item["progress"] = 0.0
+            page.update()
+
     def _on_bulk_pick(e):
         nonlocal bulk_import_files
         files = getattr(e, "files", None) or []
@@ -1594,33 +1889,63 @@ def main(page: ft.Page, session=None):
             return
         # Request server-generated temporary upload URLs tied to the authenticated user
         files_meta = []
+        selected_file_map = {}
         for f in files:
             name = getattr(f, "name", None) or ""
             size = getattr(f, "size", None) or 0
+            selected_id = getattr(f, "id", None)
+            selected_key = selected_id or name or f"{getattr(f, 'path', '')}:{size}"
+            file_bytes = _trace_filepicker_file("bulk", f)
             files_meta.append({"filename": name, "size": size})
+            selected_file_map[selected_key] = {"size": size, "path": getattr(f, "path", None), "file_bytes": file_bytes, "source": f, "id": selected_id, "key": selected_key}
 
         try:
             resp = requests.post(f"{BACKEND_URL}/documents/uploads/create_tmp_uploads", json={"files": files_meta}, headers=get_admin_headers(), verify=False, timeout=30)
             if resp.status_code != 200:
                 raise Exception(resp.text)
             body = resp.json()
-            upload_items = []
             for info in body.get("files", []):
                 if not info.get("ok"):
-                    bulk_import_files.append({"name": info.get("filename"), "size": 0, "tmp_name": None, "status": f"Rejected: {info.get('reason')}", "progress": 0.0})
+                    bulk_import_files.append({"name": info.get("filename"), "size": 0, "tmp_name": None, "path": None, "file_bytes": None, "selected_file_source": None, "upload_url": None, "upload_token": None, "upload_name": None, "status": f"Rejected: {info.get('reason')}", "progress": 0.0})
                     continue
                 name = info.get("filename")
                 tmp_name = info.get("tmp_name")
                 upload_url = info.get("upload_url")
-                selected_size = next((getattr(f, "size", None) for f in files if getattr(f, "name", None) == name), None)
-                bulk_import_files.append({"name": name, "size": selected_size, "tmp_name": tmp_name, "status": "Queued", "progress": 0.0})
-                upload_items.append(FilePickerUploadFile(name=name, upload_url=upload_url, method="PUT"))
+                selected_key = next((key for key, value in selected_file_map.items() if value.get("source") is not None and getattr(value.get("source"), "name", None) == name), None)
+                if selected_key is None:
+                    selected_key = name
+                selected = selected_file_map.get(selected_key, {})
+                print(
+                    "FILEPICKER TRACE "
+                    f"context=bulk_selected_file_map name={name!r} "
+                    f"selected_key={selected_key!r} "
+                    f"stored_bytes_length={len(selected.get('file_bytes')) if selected.get('file_bytes') is not None else None} "
+                    f"stored_source_type={type(selected.get('source'))!r}",
+                    flush=True,
+                )
+                selected_size = selected.get("size", 0)
+                selected_path = selected.get("path")
+                selected_bytes = selected.get("file_bytes")
+                selected_source = selected.get("source")
+                upload_name = name
+                bulk_import_files.append({
+                    "name": name,
+                    "size": selected_size,
+                    "tmp_name": tmp_name,
+                    "path": selected_path,
+                    "file_bytes": selected_bytes,
+                    "selected_file_source": selected_source,
+                    "upload_url": upload_url,
+                    "upload_token": info.get("upload_token"),
+                    "upload_name": upload_name,
+                    "selected_file_id": selected.get("id"),
+                    "selected_file_key": selected.get("key"),
+                    "status": "Queued",
+                    "progress": 0.0,
+                })
 
             _render_bulk_selected_list()
-            try:
-                bulk_file_picker.upload(upload_items)
-            except Exception as exc:
-                show_document_notice(f"Upload start failed: {exc}")
+            _start_bulk_uploads()
         except Exception as exc:
             show_document_notice(f"Failed to create upload URLs: {exc}")
 
@@ -1630,7 +1955,8 @@ def main(page: ft.Page, session=None):
         progress = getattr(e, "progress", None)
         error = getattr(e, "error", None)
         for item in bulk_import_files:
-            if item.get("name") == fname:
+            item_key = item.get("upload_name") or item.get("tmp_name") or item.get("name")
+            if item_key == fname or item.get("name") == fname:
                 if error:
                     item["status"] = f"Error: {error}"
                     item["progress"] = 0.0
@@ -1651,15 +1977,24 @@ def main(page: ft.Page, session=None):
                 break
         page.update()
 
-    bulk_file_picker.on_result = _on_bulk_pick
+    bulk_file_picker.on_result = lambda e: _route_file_picker_result(
+        current_file_picker_context,
+        e,
+        _on_registration_file,
+        _on_bulk_pick,
+        _on_replacement_file,
+    )
     bulk_file_picker.on_upload = _on_bulk_upload
 
     def open_bulk_register_document_dialog(_=None):
         # reset
-        nonlocal bulk_import_files
+        nonlocal bulk_import_files, current_file_picker_context
+        current_file_picker_context = "bulk_registration"
         bulk_import_files = []
         _render_bulk_selected_list()
         bulk_common_title.value = ""
+        bulk_common_document_number.value = ""
+        bulk_common_series_year.value = ""
         bulk_common_description.value = ""
         bulk_common_assigned_to.value = ""
         bulk_common_author.value = ""
@@ -1729,6 +2064,7 @@ def main(page: ft.Page, session=None):
                 ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
                 bulk_section_label("2. Common Document Information", "These details will be applied to all uploaded documents."),
                 ft.Row([bulk_common_title, bulk_common_description], spacing=12, wrap=True),
+                ft.Row([bulk_common_document_number, bulk_common_series_year], spacing=12, wrap=True),
                 ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
                 bulk_section_label("3. Document Details", "Set the classification and assignment for all uploaded documents."),
                 ft.Row([bulk_common_category, bulk_common_document_type, bulk_common_priority], spacing=12, wrap=True),
@@ -1747,6 +2083,8 @@ def main(page: ft.Page, session=None):
     page.overlay.append(bulk_register_dialog)
 
     def close_bulk_register_document_dialog():
+        nonlocal current_file_picker_context
+        current_file_picker_context = None
         bulk_register_dialog.open = False
         page.update()
 
@@ -1781,6 +2119,8 @@ def main(page: ft.Page, session=None):
         payload = {
             "tmp_names": tmp_names,
             "title": (bulk_common_title.value or None),
+            "document_number": (bulk_common_document_number.value or "").strip() or None,
+            "series_year": (bulk_common_series_year.value or "").strip() or None,
             "description": (bulk_common_description.value or None),
             "category": (bulk_common_category.value or None),
             "document_type": (bulk_common_document_type.value or None),
@@ -1800,17 +2140,28 @@ def main(page: ft.Page, session=None):
                     if item.get("name") == error.get("filename"):
                         item["status"] = f"Duplicate: {', '.join(error.get('documents', []))}"
                         item["progress"] = 0.0
+            errors = result.get("errors", [])
+            message = f"Bulk registration completed: {result.get('registered', 0)} created, {result.get('failed', 0)} failed."
+            if errors:
+                failure_details = [
+                    f"{error.get('filename') or 'File'}: {error.get('reason') or 'Unknown error'}"
+                    for error in errors[:5]
+                ]
+                if len(errors) > 5:
+                    failure_details.append(f"...and {len(errors) - 5} more")
+                message += "\n\nFailed:\n" + "\n".join(failure_details)
             if duplicate_errors:
                 _render_bulk_selected_list()
-                show_document_notice(f"Duplicate PDF detected for {len(duplicate_errors)} file(s). No duplicate files were stored.")
+                show_document_notice(message)
             else:
-                show_document_notice(f"Bulk registration completed: {result.get('registered',0)} created, {result.get('failed',0)} failed.")
+                show_document_notice(message)
                 close_bulk_register_document_dialog()
                 load_documents_table()
         except Exception as exc:
             show_document_notice(f"Bulk registration failed: {exc}")
 
     def submit_register_document(_=None):
+        nonlocal single_registration_upload
         title = (registration_title.value or "").strip()
         if not title:
             show_document_notice("Title is required to register a document.")
@@ -1818,6 +2169,8 @@ def main(page: ft.Page, session=None):
 
         payload = {
             "title": title,
+            "document_number": (registration_document_number.value or "").strip() or None,
+            "series_year": (registration_series_year.value or "").strip() or None,
             "description": (registration_description.value or "").strip() or None,
             "category": (registration_category.value or "").strip() or None,
             "document_type": (registration_document_type.value or "").strip() or None,
@@ -1828,36 +2181,41 @@ def main(page: ft.Page, session=None):
         }
 
         try:
-            # if a file was chosen, send multipart/form-data with file and form fields
-            if registration_attachment and registration_attachment.get("path"):
-                data = {k: v for k, v in payload.items() if v is not None}
-                attachment_path = registration_attachment["path"]
-                if not os.path.isabs(attachment_path):
-                    attachment_path = os.path.abspath(attachment_path)
-                with open(attachment_path, "rb") as fh:
-                    files = {
-                        "file": (
-                            registration_attachment.get("name") or os.path.basename(attachment_path),
-                            fh,
-                            mimetypes.guess_type(attachment_path)[0] or "application/octet-stream",
-                        )
-                    }
-                    response = requests.post(
-                        f"{BACKEND_URL}/documents/register",
-                        data=data,
-                        files=files,
-                        headers=get_admin_headers(),
-                        verify=False,
-                        timeout=60,
-                    )
-            else:
-                response = requests.post(
-                    f"{BACKEND_URL}/documents/register",
-                    data={k: v for k, v in payload.items() if v is not None},
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=15,
+            if registration_attachment:
+                selected_source = registration_attachment.get("selected_file_source")
+                filename = registration_attachment.get("name") or "document.pdf"
+                print(
+                    "FILEPICKER TRACE "
+                    f"context=registration_submit_browser_upload name={filename!r} "
+                    f"source_type={type(selected_source)!r} path={getattr(selected_source, 'path', None)!r}",
+                    flush=True,
                 )
+                upload_info = _prepare_single_registration_upload(selected_source, filename)
+                single_registration_upload = {
+                    "tmp_name": upload_info.get("tmp_name"),
+                    "upload_url": upload_info.get("upload_url"),
+                    "upload_token": upload_info.get("upload_token"),
+                    "filename": upload_info.get("filename"),
+                    "status": "queued",
+                    "selected_file_source": selected_source,
+                    "in_progress": True,
+                }
+                picker_upload = ft.FilePickerUploadFile(
+                    name=upload_info.get("filename"),
+                    upload_url=upload_info.get("upload_url"),
+                    method="PUT",
+                )
+                file_picker.upload([picker_upload])
+                page.update()
+                return
+
+            response = requests.post(
+                f"{BACKEND_URL}/documents/register",
+                data={k: v for k, v in payload.items() if v is not None},
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=15,
+            )
             if response.status_code not in {200, 201}:
                 try:
                     error_json = response.json()
@@ -1874,6 +2232,8 @@ def main(page: ft.Page, session=None):
 
     edit_document_id = None
     edit_document_title = ft.TextField(label="Title", width=680)
+    edit_document_number = ft.TextField(label="Legislative Document Number", width=240)
+    edit_series_year = ft.TextField(label="Series Year", width=180)
     edit_document_description = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=3, width=680)
     edit_document_category = ft.Dropdown(label="Category", width=330, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")])
     edit_document_type = ft.Dropdown(label="Document Type", width=330, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")])
@@ -1920,6 +2280,7 @@ def main(page: ft.Page, session=None):
             [
                 ft.Text("Update document information. Tracking number, attachment, QR, visibility, and archive state are preserved.", size=12, color=ft.Colors.BLUE_GREY_600),
                 edit_document_title,
+                ft.Row([edit_document_number, edit_series_year], spacing=12, wrap=True),
                 edit_document_description,
                 ft.Row([edit_document_category, edit_document_type], spacing=12, wrap=True),
                 ft.Row([edit_document_current_office, edit_document_assigned_to], spacing=12, wrap=True),
@@ -1954,6 +2315,8 @@ def main(page: ft.Page, session=None):
             show_document_notice("Unable to edit document: document ID is missing.")
             return
         edit_document_title.value = str(document.get("title") or "").strip()
+        edit_document_number.value = str(document.get("document_number") or "").strip()
+        edit_series_year.value = str(document.get("series_year") or "").strip()
         edit_document_description.value = str(document.get("description") or "").strip()
         _set_edit_dropdown_value(edit_document_category, document.get("category"))
         _set_edit_dropdown_value(edit_document_type, document.get("document_type"))
@@ -1976,6 +2339,8 @@ def main(page: ft.Page, session=None):
             return
         payload = {
             "title": title,
+            "document_number": (edit_document_number.value or "").strip() or None,
+            "series_year": (edit_series_year.value or "").strip() or None,
             "description": (edit_document_description.value or "").strip() or None,
             "category": (edit_document_category.value or "").strip() or None,
             "document_type": (edit_document_type.value or "").strip() or None,
@@ -2319,7 +2684,7 @@ def main(page: ft.Page, session=None):
         if not text:
             return "Smart search"
         if looks_like_tracking_search(text):
-            return "Tracking ID • Exact match"
+            return "ID / legislative metadata search"
         return "Smart search"
 
     def document_matches_search_term(doc, term):
@@ -2330,9 +2695,8 @@ def main(page: ft.Page, session=None):
         if looks_like_tracking_search(query):
             doc_tracking = normalize_tracking_identifier(doc.get("tracking_number") or doc.get("id"))
             search_tracking = normalize_tracking_identifier(query)
-            if doc_tracking is None or search_tracking is None:
-                return False
-            return doc_tracking == search_tracking
+            if doc_tracking is not None and search_tracking is not None and doc_tracking == search_tracking:
+                return True
 
         fields = [
             doc.get("title"),
@@ -2347,6 +2711,8 @@ def main(page: ft.Page, session=None):
             doc.get("author"),
             doc.get("session"),
             doc.get("tracking_number"),
+            doc.get("document_number"),
+            doc.get("series_year"),
             doc.get("created_by"),
         ]
 
@@ -2654,6 +3020,13 @@ def main(page: ft.Page, session=None):
                 ft.Text(doc.get("description", "No description provided."), size=13, color=ft.Colors.BLUE_GREY_700),
                 ft.Row(
                     [
+                        ft.Column([ft.Text("Legislative Document Number", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("document_number") or "-", size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("Series Year", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("series_year") or "-", size=13)], spacing=2, expand=True),
+                    ],
+                    spacing=16,
+                ),
+                ft.Row(
+                    [
                         ft.Column([ft.Text("Document Type", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("document_type", "-"), size=13)], spacing=2, expand=True),
                         ft.Column([ft.Text("Category", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("category", "-"), size=13)], spacing=2, expand=True),
                     ],
@@ -2930,7 +3303,8 @@ def main(page: ft.Page, session=None):
             if getattr(e, "files", None):
                 selected = e.files[0]
                 path = getattr(e, "path", None) or getattr(selected, "path", None)
-                replacement_file = {"path": path, "name": getattr(selected, "name", None)}
+                file_bytes = _trace_filepicker_file("replacement", selected)
+                replacement_file = {"path": path, "name": getattr(selected, "name", None), "file_bytes": file_bytes, "selected_file_source": selected}
                 replacement_file_label.value = replacement_file.get("name") or "Replacement file selected"
             else:
                 replacement_file = None
@@ -2940,7 +3314,13 @@ def main(page: ft.Page, session=None):
             replacement_file_label.value = "No replacement file selected"
         page.update()
 
-    replace_attachment_picker.on_result = _on_replacement_file
+    replace_attachment_picker.on_result = lambda e: _route_file_picker_result(
+        current_file_picker_context,
+        e,
+        _on_registration_file,
+        _on_bulk_pick,
+        _on_replacement_file,
+    )
     replace_attachment_dialog = ft.AlertDialog(
         title=ft.Text("Replace Attachment", size=20, weight=ft.FontWeight.BOLD),
         content=ft.Column(
@@ -2969,11 +3349,14 @@ def main(page: ft.Page, session=None):
     page.overlay.append(replace_attachment_dialog)
 
     def close_replace_attachment_dialog(_=None):
+        nonlocal current_file_picker_context
+        current_file_picker_context = None
         replace_attachment_dialog.open = False
         page.update()
 
     def open_replace_attachment_dialog(doc):
-        nonlocal replace_attachment_document, replace_attachment_record, replacement_file
+        nonlocal replace_attachment_document, replace_attachment_record, replacement_file, current_file_picker_context
+        current_file_picker_context = "replacement"
         attachments = [item for item in doc.get("attachments", []) if isinstance(item, dict) and item.get("id")]
         if not attachments:
             show_document_notice("No attachment is available to replace.")
@@ -2991,21 +3374,35 @@ def main(page: ft.Page, session=None):
         if not replace_attachment_document or not replace_attachment_record:
             show_document_notice("No attachment is selected for replacement.")
             return
-        if not replacement_file or not replacement_file.get("path"):
+        if not replacement_file:
             show_document_notice("Choose a replacement file first.")
             return
-        path = replacement_file["path"]
-        if not os.path.isabs(path):
-            path = os.path.abspath(path)
+        path = replacement_file.get("path")
+        name = replacement_file.get("name") or "replacement.pdf"
+        file_bytes = replacement_file.get("file_bytes")
+        if file_bytes is None:
+            file_bytes = _read_selected_file_bytes(replacement_file.get("selected_file_source"))
+            print(
+                "FILEPICKER TRACE "
+                f"context=replacement_submit_reread result_length={len(file_bytes) if file_bytes is not None else None}",
+                flush=True,
+            )
+            if file_bytes is None:
+                if not path or not os.path.exists(path):
+                    show_document_notice("Choose a replacement file first.")
+                    return
+                if not os.path.isabs(path):
+                    path = os.path.abspath(path)
+                with open(path, "rb") as handle:
+                    file_bytes = handle.read()
         try:
-            with open(path, "rb") as handle:
-                response = requests.post(
-                    f"{BACKEND_URL}/documents/{replace_attachment_document.get('id')}/attachments/{replace_attachment_record.get('id')}/replace",
-                    files={"file": (replacement_file.get("name") or os.path.basename(path), handle, mimetypes.guess_type(path)[0] or "application/octet-stream")},
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=60,
-                )
+            response = requests.post(
+                f"{BACKEND_URL}/documents/{replace_attachment_document.get('id')}/attachments/{replace_attachment_record.get('id')}/replace",
+                files={"file": (name, file_bytes, mimetypes.guess_type(name)[0] or "application/octet-stream")},
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=60,
+            )
             if response.status_code != 200:
                 try:
                     detail = response.json().get("detail", response.text)
@@ -3112,7 +3509,23 @@ def main(page: ft.Page, session=None):
                                 alignment=ft.Alignment.CENTER,
                             )
                         ),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13),
+                                    ft.Text(
+                                        f"No. {doc.get('document_number')} / {doc.get('series_year')}"
+                                        if doc.get("document_number") or doc.get("series_year")
+                                        else "Legislative number/year not set",
+                                        size=10,
+                                        color=ft.Colors.BLUE_GREY_600,
+                                    ),
+                                ],
+                                spacing=1,
+                            ),
+                            width=120,
+                            alignment=ft.Alignment.CENTER_LEFT,
+                        )),
                         title_cell,
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
                             ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
@@ -3196,7 +3609,23 @@ def main(page: ft.Page, session=None):
                                 alignment=ft.Alignment.CENTER,
                             )
                         ),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13),
+                                    ft.Text(
+                                        f"No. {doc.get('document_number')} / {doc.get('series_year')}"
+                                        if doc.get("document_number") or doc.get("series_year")
+                                        else "Legislative number/year not set",
+                                        size=10,
+                                        color=ft.Colors.BLUE_GREY_600,
+                                    ),
+                                ],
+                                spacing=1,
+                            ),
+                            width=120,
+                            alignment=ft.Alignment.CENTER_LEFT,
+                        )),
                         title_cell,
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
@@ -3289,7 +3718,23 @@ def main(page: ft.Page, session=None):
                                 alignment=ft.Alignment.CENTER,
                             )
                         ),
-                        ft.DataCell(ft.Container(content=ft.Text(str(doc.get("tracking_number", doc.get("id", "-"))), size=13), width=140, alignment=ft.Alignment.CENTER_LEFT)),
+                        ft.DataCell(ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(str(doc.get("tracking_number", doc.get("id", "-"))), size=13),
+                                    ft.Text(
+                                        f"No. {doc.get('document_number')} / {doc.get('series_year')}"
+                                        if doc.get("document_number") or doc.get("series_year")
+                                        else "Legislative number/year not set",
+                                        size=10,
+                                        color=ft.Colors.BLUE_GREY_600,
+                                    ),
+                                ],
+                                spacing=1,
+                            ),
+                            width=140,
+                            alignment=ft.Alignment.CENTER_LEFT,
+                        )),
                         ft.DataCell(ft.Tooltip(message=archive_title, content=ft.Container(content=ft.Text(archive_title, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=300, padding=ft.Padding(left=4, top=0, right=4, bottom=0), alignment=ft.Alignment.CENTER_LEFT))),
                         ft.DataCell(ft.Container(content=ft.Text(str(doc.get("document_type", "-")), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
                         ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(date_archived), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),

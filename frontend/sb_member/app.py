@@ -110,7 +110,9 @@ def main(page: ft.Page, session=None):
         if not attachment_controls:
             attachment_controls = [ft.Text("No attached file", size=12, color="#64748b")]
         info = [
+            ("System ID", document.get("tracking_number")),
             ("Document Number", document.get("document_number")),
+            ("Series Year", document.get("series_year")),
             ("Document Type", document.get("document_type")),
             ("Date", format_date(document.get("date"))),
             ("Originating Office", document.get("originating_office")),
@@ -180,7 +182,14 @@ def main(page: ft.Page, session=None):
                     if can("download_documents") and document.get("attachments"):
                         actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color="#64748b", on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
                     rows.append(ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(document.get("document_number") or "-", size=12, weight=ft.FontWeight.W_600)),
+                        ft.DataCell(ft.Column([
+                            ft.Text(document.get("document_number") or "-", size=12, weight=ft.FontWeight.W_600),
+                            ft.Text(
+                                f"{document.get('tracking_number') or '-'} / Series {document.get('series_year') or '-'}",
+                                size=10,
+                                color="#64748b",
+                            ),
+                        ], spacing=2)),
                         ft.DataCell(ft.Text(document.get("title") or "-", size=12, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)),
                         ft.DataCell(ft.Text(document.get("document_type") or "-", size=12)),
                         ft.DataCell(ft.Text(format_date(document.get("date")), size=12)),
@@ -188,7 +197,7 @@ def main(page: ft.Page, session=None):
                         ft.DataCell(ft.Row(actions, spacing=0, tight=True)),
                     ]))
                 table_holder.controls = [ft.DataTable(
-                    columns=[ft.DataColumn(ft.Text(label, size=11, weight=ft.FontWeight.BOLD)) for label in ["Document No.", "Title", "Type", "Date", "Status", "Actions"]],
+                    columns=[ft.DataColumn(ft.Text(label, size=11, weight=ft.FontWeight.BOLD)) for label in ["Document No. / ID", "Title", "Type", "Date", "Status", "Actions"]],
                     rows=rows,
                     column_spacing=32,
                         heading_row_height=46,
@@ -308,7 +317,7 @@ def main(page: ft.Page, session=None):
         except Exception as exc:
             return card(ft.Text(str(exc)))
         recent = data.get("recent_documents", [])
-        recent_rows = [ft.ListTile(leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color="#2563eb"), title=ft.Text(item.get("title") or "Untitled", size=12), subtitle=ft.Text(f"{item.get('document_number', '-') } · {format_date(item.get('date'))}", size=11, color="#64748b"), on_click=lambda _, d=item: document_dialog(d)) for item in recent]
+        recent_rows = [ft.ListTile(leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color="#2563eb"), title=ft.Text(item.get("title") or "Untitled", size=12), subtitle=ft.Text(f"{item.get('tracking_number', '-') } · No. {item.get('document_number') or '-'} / {item.get('series_year') or '-'} · {format_date(item.get('date'))}", size=11, color="#64748b"), on_click=lambda _, d=item: document_dialog(d)) for item in recent]
         return ft.Column([
             ft.Row([ft.Column([ft.Text("Good day, " + (user.get("full_name") or user.get("username", "Member")), size=25, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9")), ft.Text("Your legislative document workspace", size=12, color="#64748b")], spacing=3)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Row([stat_card("Available Documents", data.get("total_documents", 0), ft.Icons.FOLDER_COPY_OUTLINED, "#2563eb")], spacing=12, wrap=True),

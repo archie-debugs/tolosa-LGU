@@ -1,5 +1,7 @@
+import json
 import os
 import time
+from itertools import count
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -75,26 +77,223 @@ def bearer_headers(client, username="superuser", password="pw123"):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def test_ordinance_title_extraction_uses_actual_number_and_detects_conflicts():
-    assert documents_routes._extract_ordinance_number("ORDINANCE NO. 32 Series 1993") == 32
-    assert documents_routes._extract_ordinance_number("ORDINANCE NO. 07 Series 1993") == 7
-    assert documents_routes._extract_ordinance_number("OR35DF~1") is None
-
+def test_system_tracking_numbers_use_display_sequence_and_preserve_legacy_ids(monkeypatch):
+    reset_db()
+    sequence_values = count(1)
+    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
     with SessionLocal() as db:
-        db.query(models.Attachment).delete()
-        db.query(models.Document).delete()
-        db.add(models.Document(
+        legacy = models.Document(
             tracking_number="DOC-32",
             title="ORDINANCE NO. 32 Series 1993",
             status="Approved",
             priority="Medium",
+        )
+        db.add(legacy)
+        db.commit()
+        legacy_id = legacy.id
+
+        generated = []
+        for year in (1994, 1995):
+            document = models.Document(
+                tracking_number="pending",
+                title=f"ORDINANCE NO. 04 Series {year}",
+                status="Approved",
+                priority="Medium",
+            )
+            tracking_number = documents_routes._assign_system_tracking_number(db, document)
+            db.commit()
+            generated.append((tracking_number, document.id, document.title))
+
+        db.refresh(legacy)
+        assert legacy.id == legacy_id
+        assert legacy.tracking_number == "DOC-32"
+        assert [number for number, _, _ in generated] == ["DOC-000001", "DOC-000002"]
+        assert all(number != f"DOC-{row_id:06d}" for number, row_id, _ in generated)
+        assert generated[0][0] != generated[1][0]
+        assert [title for _, _, title in generated] == [
+            "ORDINANCE NO. 04 Series 1994",
+            "ORDINANCE NO. 04 Series 1995",
+        ]
+
+
+def test_individual_registration_allows_repeated_number_across_series_years(monkeypatch):
+    reset_db()
+    sequence_values = count(1)
+    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
+    client = TestClient(main.app)
+    admin_headers = bearer_headers(client)
+
+    with SessionLocal() as db:
+        db.add(models.Document(
+            tracking_number="DOC-4",
+            title="ORDINANCE NO. 04 Series 1993",
+            document_number="04",
+            series_year=1993,
+            status="Approved",
+            priority="Medium",
         ))
         db.commit()
-        try:
-            documents_routes._next_tracking_number(db, title="ORDINANCE NO. 32 Series 1993")
-            raise AssertionError("Expected duplicate ordinance assignment to raise a conflict")
-        except ValueError:
-            pass
+
+    registered = []
+    for year in (1993, 1994, 1995):
+        response = client.post(
+            "/documents/register",
+            headers=admin_headers,
+            data={
+                "title": f"ORDINANCE NO. 04 Series {year}",
+                "document_number": "04",
+                "series_year": str(year),
+                "document_type": "Ordinance",
+            },
+        )
+        assert response.status_code == 200, response.text
+        registered.append(response.json())
+
+    assert len({item["tracking_number"] for item in registered}) == 3
+    assert [item["tracking_number"] for item in registered] == ["DOC-000001", "DOC-000002", "DOC-000003"]
+    assert [(item["document_number"], item["series_year"]) for item in registered] == [
+        ("04", 1993),
+        ("04", 1994),
+        ("04", 1995),
+    ]
+    with SessionLocal() as db:
+        public_document = db.query(models.Document).filter(models.Document.id == registered[1]["id"]).one()
+        public_document.is_public = True
+        db.commit()
+
+        qr_match = documents_routes._find_document_by_qr_or_tracking(db, registered[1]["tracking_number"])
+        assert qr_match is not None
+        assert qr_match.id == registered[1]["id"]
+
+    admin_search = client.get("/documents", params={"search": "04", "year": "1994"}, headers=admin_headers)
+    assert admin_search.status_code == 200, admin_search.text
+    assert any(item["id"] == registered[1]["id"] for item in admin_search.json()["items"])
+
+    public_search = client.get("/public/documents", params={"search": "04", "year": "1994"})
+    assert public_search.status_code == 200, public_search.text
+    assert [item["tracking_number"] for item in public_search.json()["items"]] == [registered[1]["tracking_number"]]
+    year_search = client.get("/public/documents", params={"search": "1994"})
+    assert any(item["tracking_number"] == registered[1]["tracking_number"] for item in year_search.json()["items"])
+
+    with SessionLocal() as db:
+        legacy = db.query(models.Document).filter(models.Document.tracking_number == "DOC-4").one()
+        assert legacy.tracking_number == "DOC-4"
+
+
+def test_qr_lookup_prefers_current_tracking_id_then_historical_alias():
+    reset_db()
+    with SessionLocal() as db:
+        current_document = models.Document(
+            tracking_number="DOC-000001",
+            title="Current first record",
+            status="Approved",
+            priority="Medium",
+        )
+        historical_document = models.Document(
+            tracking_number="DOC-000002",
+            title="Historical alias target",
+            status="Approved",
+            priority="Medium",
+        )
+        db.add_all([current_document, historical_document])
+        db.flush()
+        db.add_all([
+            models.DocumentTrackingNumberAlias(document_id=current_document.id, tracking_number="DOC-32"),
+            models.DocumentTrackingNumberAlias(document_id=historical_document.id, tracking_number="DOC-000506"),
+        ])
+        db.commit()
+
+        assert documents_routes._find_document_by_qr_or_tracking(db, "DOC-000001").id == current_document.id
+        assert documents_routes._find_document_by_qr_or_tracking(db, "DOC-32").id == current_document.id
+        assert documents_routes._find_document_by_qr_or_tracking(db, "DOC-000506").id == historical_document.id
+
+
+def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tmp_path, monkeypatch):
+    reset_db()
+    temp_upload_dir = tmp_path / "temporary"
+    upload_dir = tmp_path / "uploads"
+    qr_dir = tmp_path / "qr"
+    temp_upload_dir.mkdir()
+    monkeypatch.setattr(documents_routes, "TEMP_UPLOAD_DIR", str(temp_upload_dir))
+    monkeypatch.setattr(documents_routes, "UPLOAD_DIR", str(upload_dir))
+    monkeypatch.setattr(documents_routes, "QR_IMAGE_DIR", str(qr_dir))
+    sequence_values = count(1)
+    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
+
+    legacy_numbers = (1, 2, 4, 5)
+    with SessionLocal() as db:
+        db.add_all([
+            models.Document(
+                tracking_number=f"DOC-{number}",
+                title=f"ORDINANCE NO. {number:02d} Series 1993",
+                document_number=f"{number:02d}",
+                series_year=1993,
+                status="Approved",
+                priority="Medium",
+            )
+            for number in legacy_numbers
+        ])
+        db.commit()
+
+    filenames = [
+        "ORDINANCE No.01 Series 1994 AN ORDINANCE NAMING THE UNNAME HIGHSCHOOL SPORTS COMPLEX OF TOLOSA.pdf",
+        "ORDINANCE No.02 Series 1994 AN ORDINANCE APPROPRIATING AN AMOUNT OF FIFTY THOUSAND PESOS.pdf",
+        "ORDINANCE No.04 Series 1994 AN ORDINANCE RE-ROUTING THE TRAFFIC FOR PEDICAB.pdf",
+        "ORDINANCE No.05 Series 1994 AN ORDINANCE APPROPRIATING AN AMOUNT OF TWENTY FIVE THOUSAND PESOS.pdf",
+    ]
+    tmp_names = []
+    first_content = b""
+    for index, filename in enumerate(filenames, start=1):
+        tmp_name = f"batch-{index}.pdf"
+        content = f"%PDF-1.4\nUnique test content {index}\n%%EOF".encode()
+        (temp_upload_dir / tmp_name).write_bytes(content)
+        if index == 1:
+            first_content = content
+        (temp_upload_dir / f"{tmp_name}.meta.json").write_text(
+            json.dumps({"original_filename": filename}),
+            encoding="utf-8",
+        )
+        tmp_names.append(tmp_name)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/documents/bulk-register/confirm_tmp",
+        headers=bearer_headers(client),
+        json={"tmp_names": tmp_names},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["registered"] == 4, result.get("errors")
+    assert result["failed"] == 0
+
+    with SessionLocal() as db:
+        created = db.query(models.Document).filter(models.Document.series_year == 1994).order_by(models.Document.document_number).all()
+        assert [document.document_number for document in created] == ["01", "02", "04", "05"]
+        assert [document.tracking_number for document in created] == [
+            "DOC-000001",
+            "DOC-000002",
+            "DOC-000003",
+            "DOC-000004",
+        ]
+        assert len({document.tracking_number for document in created}) == 4
+        assert db.query(models.Document).filter(models.Document.tracking_number.in_(["DOC-1", "DOC-2", "DOC-4", "DOC-5"])).count() == 4
+
+    duplicate_name = "duplicate.pdf"
+    (temp_upload_dir / duplicate_name).write_bytes(first_content)
+    (temp_upload_dir / f"{duplicate_name}.meta.json").write_text(
+        json.dumps({"original_filename": "ORDINANCE No.01 Series 1994 DUPLICATE.pdf"}),
+        encoding="utf-8",
+    )
+    duplicate_response = client.post(
+        "/documents/bulk-register/confirm_tmp",
+        headers=bearer_headers(client),
+        json={"tmp_names": [duplicate_name]},
+    )
+    assert duplicate_response.status_code == 200, duplicate_response.text
+    duplicate_result = duplicate_response.json()
+    assert duplicate_result["registered"] == 0
+    assert duplicate_result["failed"] == 1
+    assert duplicate_result["errors"][0]["duplicate"] is True
 
 
 def test_inactive_user_login_is_rejected():
@@ -992,6 +1191,8 @@ def test_analytics_reports_support_filters_and_csv_export():
     with SessionLocal() as db:
         doc = models.Document(
             tracking_number="DOC-REPORT-001",
+            document_number="04",
+            series_year=1994,
             title="Quarterly Report Document",
             status="Approved",
             priority="High",
@@ -1024,6 +1225,9 @@ def test_analytics_reports_support_filters_and_csv_export():
     assert export.status_code == 200, export.text
     assert "text/csv" in export.headers.get("content-type", "")
     assert "tracking_number" in export.text.lower()
+    assert "document_number" in export.text.lower()
+    assert "series_year" in export.text.lower()
+    assert "DOC-REPORT-001,04,1994" in export.text
 
     employee_headers = bearer_headers(client, "activeuser", "pw123")
     blocked = client.get("/analytics/reports", headers=employee_headers)

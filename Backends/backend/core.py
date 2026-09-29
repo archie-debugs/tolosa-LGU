@@ -179,6 +179,8 @@ def ensure_schema_columns() -> None:
                 _add_column_if_missing(connection, "documents", "date_registered", "ALTER TABLE documents ADD COLUMN date_registered VARCHAR")
                 _add_column_if_missing(connection, "documents", "attachment_name", "ALTER TABLE documents ADD COLUMN attachment_name VARCHAR")
                 _add_column_if_missing(connection, "documents", "qr_code_value", "ALTER TABLE documents ADD COLUMN qr_code_value VARCHAR")
+                _add_column_if_missing(connection, "documents", "document_number", "ALTER TABLE documents ADD COLUMN document_number VARCHAR")
+                _add_column_if_missing(connection, "documents", "series_year", "ALTER TABLE documents ADD COLUMN series_year INTEGER")
                 _add_column_if_missing(connection, "documents", "archived_at", "ALTER TABLE documents ADD COLUMN archived_at DATETIME")
                 _add_column_if_missing(connection, "documents", "archived_by", "ALTER TABLE documents ADD COLUMN archived_by VARCHAR")
         else:
@@ -203,6 +205,8 @@ def ensure_schema_columns() -> None:
                 _add_column_if_missing(connection, "documents", "date_registered", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS date_registered VARCHAR"))
                 _add_column_if_missing(connection, "documents", "attachment_name", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS attachment_name VARCHAR"))
                 _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
+                _add_column_if_missing(connection, "documents", "document_number", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_number VARCHAR"))
+                _add_column_if_missing(connection, "documents", "series_year", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS series_year INTEGER"))
                 _add_column_if_missing(connection, "documents", "archived_at", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP"))
                 _add_column_if_missing(connection, "documents", "archived_by", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_by VARCHAR"))
 

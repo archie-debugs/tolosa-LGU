@@ -1,7 +1,7 @@
 import re
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import or_
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -34,31 +34,39 @@ def list_public_documents(
 
     if search and search.strip():
         tracking_value = _tracking_value(search)
+        like = f"%{search.strip().lower()}%"
+        search_conditions = [
+            models.Document.tracking_number.ilike(like),
+            models.Document.document_number.ilike(like),
+            cast(models.Document.series_year, String).ilike(like),
+            models.Document.title.ilike(like),
+            models.Document.description.ilike(like),
+            models.Document.document_type.ilike(like),
+            models.Document.category.ilike(like),
+            models.Document.current_office.ilike(like),
+            models.Document.status.ilike(like),
+            models.Document.remarks.ilike(like),
+            models.Document.author.ilike(like),
+            models.Document.session.ilike(like),
+        ]
         if tracking_value:
-            query = query.filter(models.Document.tracking_number == tracking_value)
-        else:
-            terms = [term for term in search.lower().split() if term]
-            for term in terms:
-                like = f"%{term}%"
-                query = query.filter(
-                    or_(
-                        models.Document.tracking_number.ilike(like),
-                        models.Document.title.ilike(like),
-                        models.Document.description.ilike(like),
-                        models.Document.document_type.ilike(like),
-                        models.Document.category.ilike(like),
-                        models.Document.originating_office.ilike(like),
-                        models.Document.current_office.ilike(like),
-                        models.Document.status.ilike(like),
-                        models.Document.remarks.ilike(like),
-                        models.Document.author.ilike(like),
-                        models.Document.session.ilike(like),
-                    )
-                )
+            tracking_number = int(tracking_value.removeprefix("DOC-"))
+            search_conditions.extend([
+                models.Document.tracking_number == tracking_value,
+                models.Document.tracking_number == f"DOC-{tracking_number:06d}",
+            ])
+        query = query.filter(or_(*search_conditions))
     if document_type and document_type != "All Types":
         query = query.filter(models.Document.document_type == document_type)
     if year and year != "All Years" and year.isdigit() and len(year) == 4:
-        query = query.filter(models.Document.created_at >= f"{year}-01-01", models.Document.created_at < f"{int(year) + 1}-01-01")
+        query = query.filter(
+            or_(
+                models.Document.series_year == int(year),
+                models.Document.series_year.is_(None)
+                & (models.Document.created_at >= f"{year}-01-01")
+                & (models.Document.created_at < f"{int(year) + 1}-01-01"),
+            )
+        )
 
     total = query.count()
     total_pages = max(1, (total + page_size - 1) // page_size)
@@ -74,6 +82,8 @@ def list_public_documents(
             "id": document.id,
             "number": document.tracking_number,
             "tracking_number": document.tracking_number,
+            "document_number": document.document_number,
+            "series_year": document.series_year,
             "title": document.title,
             "type": document.document_type or "Document",
             "document_type": document.document_type,

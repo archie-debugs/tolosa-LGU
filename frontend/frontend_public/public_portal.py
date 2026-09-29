@@ -93,7 +93,8 @@ def document_matches_search_term(document, term):
             document.get("tracking_number") or document.get("number") or document.get("id")
         )
         search_tracking = normalize_tracking_identifier(query)
-        return document_tracking is not None and document_tracking == search_tracking
+        if document_tracking is not None and document_tracking == search_tracking:
+            return True
 
     fields = [
         document.get("title"), document.get("type"), document.get("document_type"),
@@ -101,6 +102,7 @@ def document_matches_search_term(document, term):
         document.get("originating_office"), document.get("category"), document.get("description"),
         document.get("remarks"), document.get("author"), document.get("session"),
         document.get("tracking_number"), document.get("number"),
+        document.get("document_number"), document.get("series_year"),
     ]
     return any(query in normalize_search_text(field) for field in fields if field is not None)
 
@@ -245,7 +247,7 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
                 ft.Text("Search Documents", size=20, weight=ft.FontWeight.W_700, color=ink),
                 ft.ResponsiveRow(
                     [
-                        ft.Container(content=ft.Column([ft.Text("Search by document number or title", size=12, color=muted), ft.TextField(hint_text="Enter search terms...", prefix_icon=ft.Icons.SEARCH, border_color="#c9d5dd", bgcolor="#ffffff")], spacing=6), col={"xs": 12, "md": 5}),
+                        ft.Container(content=ft.Column([ft.Text("Search by ID, document number, year, or title", size=12, color=muted), ft.TextField(hint_text="Enter search terms...", prefix_icon=ft.Icons.SEARCH, border_color="#c9d5dd", bgcolor="#ffffff")], spacing=6), col={"xs": 12, "md": 5}),
                         ft.Container(content=ft.Column([ft.Text("Document Type", size=12, color=muted), ft.Dropdown(value="All Types", options=[_option("All Types"), _option("Ordinance"), _option("Resolution")], border_color="#c9d5dd", bgcolor="#ffffff")], spacing=6), col={"xs": 12, "sm": 6, "md": 2}),
                         ft.Container(content=ft.Column([ft.Text("Year", size=12, color=muted), ft.Dropdown(value="All Years", options=[_option("All Years"), _option("2026"), _option("2025")], border_color="#c9d5dd", bgcolor="#ffffff")], spacing=6), col={"xs": 12, "sm": 6, "md": 2}),
                         ft.Container(content=ft.Row([_button("Search", ft.Icons.SEARCH), _button("Clear Filters", ft.Icons.REFRESH, outlined=True)], spacing=8, wrap=True), col={"xs": 12, "md": 3}, padding=ft.Padding(0, 24, 0, 0)),
@@ -268,7 +270,7 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
 
     result_count = ft.Text(size=12, color=muted)
     data_table = ft.DataTable(
-        columns=[ft.DataColumn(ft.Text(label, size=13, weight=ft.FontWeight.W_700, color=ink)) for label in ("Document No.", "Title", "Type", "Date", "Status", "Action")],
+        columns=[ft.DataColumn(ft.Text(label, size=13, weight=ft.FontWeight.W_700, color=ink)) for label in ("System ID / Document No.", "Title", "Type", "Date", "Status", "Action")],
         column_spacing=24, horizontal_margin=12, heading_row_height=48, data_row_min_height=64,
         border=ft.border.all(1, border), vertical_lines=ft.border.BorderSide(1, "#edf1f4"),
         horizontal_lines=ft.border.BorderSide(1, "#edf1f4"),
@@ -297,7 +299,17 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
         first_document = ((current_page - 1) * page_size + 1) if total_documents else 0
         data_table.rows = [
             ft.DataRow(cells=[
-                ft.DataCell(ft.Text(document["number"], size=13, weight=ft.FontWeight.W_700, color=navy)),
+                ft.DataCell(ft.Column(
+                    [
+                        ft.Text(document.get("tracking_number") or document.get("number") or "-", size=13, weight=ft.FontWeight.W_700, color=navy),
+                        ft.Text(
+                            f"No. {document.get('document_number') or '-'} / Series {document.get('series_year') or '-'}",
+                            size=10,
+                            color=muted,
+                        ),
+                    ],
+                    spacing=2,
+                )),
                 ft.DataCell(
                     ft.Tooltip(
                         message=document["title"],

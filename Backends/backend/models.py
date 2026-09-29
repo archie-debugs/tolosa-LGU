@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from .database import Base
@@ -39,6 +39,8 @@ class Document(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tracking_number = Column(String, unique=True, index=True, nullable=False)
+    document_number = Column(String, nullable=True)
+    series_year = Column(Integer, nullable=True)
     title = Column(String, nullable=False, index=True)
     description = Column(Text, nullable=True)
 
@@ -134,6 +136,19 @@ class Attachment(Base):
     size = Column(Integer, nullable=True)
     checksum = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class DocumentTrackingNumberAlias(Base):
+    __tablename__ = "document_tracking_number_aliases"
+    __table_args__ = (
+        UniqueConstraint("tracking_number", name="uq_tracking_number_alias_tracking_number"),
+        UniqueConstraint("document_id", "tracking_number", name="uq_tracking_number_alias_document_tracking"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    tracking_number = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class DocumentHistory(Base):

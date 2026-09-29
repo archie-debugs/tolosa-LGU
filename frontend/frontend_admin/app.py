@@ -104,6 +104,7 @@ import json
 import ast
 import re
 import secrets
+import threading
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
@@ -141,6 +142,26 @@ def clear_stale_session_state(state):
     reset["runtime_token"] = None
     reset["refresh_token"] = None
     return reset
+
+
+def _read_selected_file_bytes(selected_file):
+    if selected_file is None:
+        return None
+    try:
+        if hasattr(selected_file, "read"):
+            data = selected_file.read()
+            if data is not None:
+                return data
+    except Exception:
+        pass
+    candidate_path = getattr(selected_file, "path", None)
+    if candidate_path and os.path.exists(candidate_path):
+        try:
+            with open(candidate_path, "rb") as handle:
+                return handle.read()
+        except Exception:
+            pass
+    return None
 
 
 def main(page: ft.Page, session=None):
@@ -1163,6 +1184,7 @@ def main(page: ft.Page, session=None):
     )
     registration_attachment = None
     registration_attachment_label = ft.Text("No file selected", size=12, color=ft.Colors.BLUE_GREY_600)
+    current_file_picker_context = None
     file_picker = ft.FilePicker(on_result=lambda e: None)
     page.overlay.append(file_picker)
 
@@ -1172,11 +1194,14 @@ def main(page: ft.Page, session=None):
             if getattr(e, 'files', None):
                 f = e.files[0]
                 attachment_path = getattr(e, 'path', None) or getattr(f, 'path', None)
+                file_bytes = _read_selected_file_bytes(f)
                 if attachment_path and not os.path.isabs(attachment_path) and not os.path.exists(attachment_path):
                     attachment_path = os.path.abspath(attachment_path)
                 registration_attachment = {
                     "path": attachment_path,
                     "name": getattr(f, 'name', None),
+                    "file_bytes": file_bytes,
+                    "selected_file_source": f,
                 }
                 filename = registration_attachment["name"] or ""
                 registration_attachment_label.value = filename or "No file selected"
@@ -1213,7 +1238,13 @@ def main(page: ft.Page, session=None):
         page.update()
 
     # attach handler to file_picker
-    file_picker.on_result = _on_registration_file
+    file_picker.on_result = lambda e: _route_file_picker_result(
+        current_file_picker_context,
+        e,
+        _on_registration_file,
+        _on_bulk_pick,
+        _on_replacement_file,
+    )
 
     def registration_section(title):
         return ft.Text(
@@ -1369,11 +1400,14 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def close_register_document_dialog():
+        nonlocal current_file_picker_context
+        current_file_picker_context = None
         register_document_dialog.open = False
         page.update()
 
     def open_register_document_dialog(_=None):
-        nonlocal registration_attachment
+        nonlocal registration_attachment, current_file_picker_context
+        current_file_picker_context = "single_registration"
         registration_title.value = ""
         registration_description.value = ""
         registration_category.value = "Legislation"
@@ -1444,6 +1478,48 @@ def main(page: ft.Page, session=None):
         bulk_import_files = [i for i in bulk_import_files if i.get("tmp_name") != tmp_name]
         _render_bulk_selected_list()
 
+    def _start_bulk_uploads():
+        pending_items = [item for item in bulk_import_files if item.get("tmp_name") and item.get("upload_url")]
+        if not pending_items:
+            return
+
+        upload_files = []
+        for item in pending_items:
+            item["status"] = "Queued"
+            item["progress"] = 0.0
+            status_control = item.get("_status_control")
+            progress_control = item.get("_progress_control")
+            if status_control is not None:
+                status_control.value = item["status"]
+                status_control.color = ft.Colors.BLUE_GREY_700
+            if progress_control is not None:
+                progress_control.value = item["progress"]
+            upload_files.append(
+                ft.FilePickerUploadFile(
+                    name=item.get("name") or item.get("upload_name") or item.get("tmp_name"),
+                    upload_url=item.get("upload_url"),
+                    method="PUT",
+                )
+            )
+        try:
+            bulk_file_picker.upload(upload_files)
+            for item in pending_items:
+                item["status"] = "Uploading"
+                item["progress"] = 0.05
+                status_control = item.get("_status_control")
+                progress_control = item.get("_progress_control")
+                if status_control is not None:
+                    status_control.value = item["status"]
+                    status_control.color = ft.Colors.BLUE_GREY_700
+                if progress_control is not None:
+                    progress_control.value = item["progress"]
+            page.update()
+        except Exception as exc:
+            for item in pending_items:
+                item["status"] = f"Error: {exc}"
+                item["progress"] = 0.0
+            page.update()
+
     def _on_bulk_pick(e):
         nonlocal bulk_import_files
         files = getattr(e, "files", None) or []
@@ -1451,32 +1527,60 @@ def main(page: ft.Page, session=None):
             return
         # Request server-generated temporary upload URLs tied to the authenticated user
         files_meta = []
+        selected_file_map = {}
         for f in files:
             name = getattr(f, "name", None) or ""
             size = getattr(f, "size", None) or 0
+            selected_id = getattr(f, "id", None)
+            selected_key = selected_id or name or f"{getattr(f, 'path', '')}:{size}"
+            file_bytes = None
+            try:
+                if hasattr(f, "read"):
+                    file_bytes = f.read()
+            except Exception:
+                file_bytes = None
             files_meta.append({"filename": name, "size": size})
+            selected_file_map[selected_key] = {"size": size, "path": getattr(f, "path", None), "file_bytes": file_bytes, "source": f, "id": selected_id, "key": selected_key}
 
         try:
             resp = requests.post(f"{BACKEND_URL}/documents/uploads/create_tmp_uploads", json={"files": files_meta}, headers=get_admin_headers(), verify=False, timeout=30)
             if resp.status_code != 200:
                 raise Exception(resp.text)
             body = resp.json()
-            upload_items = []
             for info in body.get("files", []):
                 if not info.get("ok"):
-                    bulk_import_files.append({"name": info.get("filename"), "size": 0, "tmp_name": None, "status": f"Rejected: {info.get('reason')}", "progress": 0.0})
+                    bulk_import_files.append({"name": info.get("filename"), "size": 0, "tmp_name": None, "path": None, "file_bytes": None, "selected_file_source": None, "upload_url": None, "upload_token": None, "upload_name": None, "status": f"Rejected: {info.get('reason')}", "progress": 0.0})
                     continue
                 name = info.get("filename")
                 tmp_name = info.get("tmp_name")
                 upload_url = info.get("upload_url")
-                bulk_import_files.append({"name": name, "size": 0, "tmp_name": tmp_name, "status": "Queued", "progress": 0.0})
-                upload_items.append(FilePickerUploadFile(name=name, upload_url=upload_url, method="PUT"))
+                selected_key = next((key for key, value in selected_file_map.items() if value.get("source") is not None and getattr(value.get("source"), "name", None) == name), None)
+                if selected_key is None:
+                    selected_key = name
+                selected = selected_file_map.get(selected_key, {})
+                selected_size = selected.get("size", 0)
+                selected_path = selected.get("path")
+                selected_bytes = selected.get("file_bytes")
+                selected_source = selected.get("source")
+                upload_name = name
+                bulk_import_files.append({
+                    "name": name,
+                    "size": selected_size,
+                    "tmp_name": tmp_name,
+                    "path": selected_path,
+                    "file_bytes": selected_bytes,
+                    "selected_file_source": selected_source,
+                    "upload_url": upload_url,
+                    "upload_token": info.get("upload_token"),
+                    "upload_name": upload_name,
+                    "selected_file_id": selected.get("id"),
+                    "selected_file_key": selected.get("key"),
+                    "status": "Queued",
+                    "progress": 0.0,
+                })
 
             _render_bulk_selected_list()
-            try:
-                bulk_file_picker.upload(upload_items)
-            except Exception as exc:
-                show_document_notice(f"Upload start failed: {exc}")
+            _start_bulk_uploads()
         except Exception as exc:
             show_document_notice(f"Failed to create upload URLs: {exc}")
 
@@ -1486,7 +1590,8 @@ def main(page: ft.Page, session=None):
         progress = getattr(e, "progress", None)
         error = getattr(e, "error", None)
         for item in bulk_import_files:
-            if item.get("name") == fname:
+            item_key = item.get("upload_name") or item.get("tmp_name") or item.get("name")
+            if item_key == fname or item.get("name") == fname:
                 if error:
                     item["status"] = f"Error: {error}"
                     item["progress"] = 0.0
@@ -1500,12 +1605,19 @@ def main(page: ft.Page, session=None):
                 break
         _render_bulk_selected_list()
 
-    bulk_file_picker.on_result = _on_bulk_pick
+    bulk_file_picker.on_result = lambda e: _route_file_picker_result(
+        current_file_picker_context,
+        e,
+        _on_registration_file,
+        _on_bulk_pick,
+        _on_replacement_file,
+    )
     bulk_file_picker.on_upload = _on_bulk_upload
 
     def open_bulk_register_document_dialog(_=None):
         # reset
-        nonlocal bulk_import_files
+        nonlocal bulk_import_files, current_file_picker_context
+        current_file_picker_context = "bulk_registration"
         bulk_import_files = []
         _render_bulk_selected_list()
         bulk_common_title.value = ""
@@ -1596,6 +1708,8 @@ def main(page: ft.Page, session=None):
     page.overlay.append(bulk_register_dialog)
 
     def close_bulk_register_document_dialog():
+        nonlocal current_file_picker_context
+        current_file_picker_context = None
         bulk_register_dialog.open = False
         page.update()
 
@@ -1667,28 +1781,26 @@ def main(page: ft.Page, session=None):
         }
 
         try:
-            # if a file was chosen, send multipart/form-data with file and form fields
-            if registration_attachment and registration_attachment.get("path"):
+            # If a file was chosen, send the actual browser-selected bytes instead of assuming
+            # a local filesystem path exists in Flet web mode.
+            if registration_attachment:
                 data = {k: v for k, v in payload.items() if v is not None}
-                attachment_path = registration_attachment["path"]
-                if not os.path.isabs(attachment_path):
-                    attachment_path = os.path.abspath(attachment_path)
-                with open(attachment_path, "rb") as fh:
-                    files = {
-                        "file": (
-                            registration_attachment.get("name") or os.path.basename(attachment_path),
-                            fh,
-                            mimetypes.guess_type(attachment_path)[0] or "application/octet-stream",
-                        )
-                    }
-                    response = requests.post(
-                        f"{BACKEND_URL}/documents/register",
-                        data=data,
-                        files=files,
-                        headers=get_admin_headers(),
-                        verify=False,
-                        timeout=60,
-                    )
+                filename = registration_attachment.get("name") or "document.pdf"
+                file_bytes = registration_attachment.get("file_bytes")
+                if file_bytes is None:
+                    file_bytes = _read_selected_file_bytes(registration_attachment.get("selected_file_source"))
+                    if file_bytes is None:
+                        raise FileNotFoundError("Selected file not available for upload. Please choose the file again.")
+                mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                files = {"file": (filename, file_bytes, mime)}
+                response = requests.post(
+                    f"{BACKEND_URL}/documents/register",
+                    data=data,
+                    files=files,
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=60,
+                )
             else:
                 response = requests.post(
                     f"{BACKEND_URL}/documents/register",

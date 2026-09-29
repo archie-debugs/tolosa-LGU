@@ -501,6 +501,8 @@ def export_reports_csv(
     fieldnames = [
         "id",
         "tracking_number",
+        "document_number",
+        "series_year",
         "title",
         "document_type",
         "category",
@@ -518,6 +520,8 @@ def export_reports_csv(
             {
                 "id": doc.id,
                 "tracking_number": doc.tracking_number,
+                "document_number": doc.document_number,
+                "series_year": doc.series_year,
                 "title": doc.title,
                 "document_type": doc.document_type,
                 "category": doc.category,
@@ -551,6 +555,8 @@ def export_analytics_csv(
     fieldnames = [
         "id",
         "tracking_number",
+        "document_number",
+        "series_year",
         "title",
         "description",
         "document_type",
@@ -578,6 +584,8 @@ def export_analytics_csv(
             {
                 "id": doc.id,
                 "tracking_number": doc.tracking_number,
+                "document_number": doc.document_number,
+                "series_year": doc.series_year,
                 "title": doc.title,
                 "description": doc.description,
                 "document_type": doc.document_type,
