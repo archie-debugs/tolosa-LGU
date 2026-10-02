@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi import Query
 from sqlalchemy import Integer, String, cast, exc, func, or_, text
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, record_audit_log, require_permis
 from ..auth_jwt import create_preview_token, decode_access_token, decode_preview_token, get_current_user
 import uuid
 import time
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 import hashlib
 import mimetypes
 import os
@@ -26,11 +26,11 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+public_qr_router = APIRouter(tags=["public-qr"])
 
 QR_IMAGE_DIR = os.path.join(UPLOAD_DIR, "qr")
 TITLE_YEAR_PATTERN = r"(?i)series[[:space:]]*:?[[:space:]]*((19|20)[0-9]{2})"
 LEGISLATIVE_NUMBER_PATTERN = re.compile(r"(?i)\b(?:ordinance|resolution)\s+(?:no\.?|number)\s*[:#]?\s*([0-9]+)\b")
-SERIES_YEAR_PATTERN = re.compile(r"(?i)\bseries\s*:?\s*((?:19|20)[0-9]{2})\b")
 
 # bulk registration settings
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -288,6 +288,42 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
     tmp_names = payload.get("tmp_names") or []
     if not isinstance(tmp_names, list) or not tmp_names:
         raise HTTPException(status_code=400, detail="tmp_names list is required")
+    safe_tmp_names = [os.path.basename(tmp or "") for tmp in tmp_names]
+    if any(not name for name in safe_tmp_names) or len(set(safe_tmp_names)) != len(safe_tmp_names):
+        raise HTTPException(status_code=400, detail="Each uploaded document must have a unique temporary file name.")
+
+    year_by_tmp_name = {}
+    document_specs = payload.get("documents")
+    if isinstance(document_specs, list):
+        if len(document_specs) != len(safe_tmp_names):
+            raise HTTPException(status_code=400, detail="Legislative Year is required for every document.")
+        for spec in document_specs:
+            if not isinstance(spec, dict):
+                raise HTTPException(status_code=400, detail="Each document requires a Legislative Year.")
+            safe_name = os.path.basename(spec.get("tmp_name") or "")
+            if safe_name not in safe_tmp_names or safe_name in year_by_tmp_name:
+                raise HTTPException(status_code=400, detail="Document year entries must match the uploaded files.")
+            year_by_tmp_name[safe_name] = _parse_legislative_year(spec.get("series_year"))
+    elif isinstance(payload.get("series_years"), list):
+        years = payload["series_years"]
+        if len(years) != len(safe_tmp_names):
+            raise HTTPException(status_code=400, detail="Legislative Year is required for every document.")
+        year_by_tmp_name = {
+            name: _parse_legislative_year(year)
+            for name, year in zip(safe_tmp_names, years)
+        }
+    elif payload.get("series_year") is not None:
+        common_year = _parse_legislative_year(payload.get("series_year"))
+        year_by_tmp_name = {name: common_year for name in safe_tmp_names}
+    else:
+        raise HTTPException(status_code=400, detail="Legislative Year is required for every document.")
+
+    missing_years = [name for name in safe_tmp_names if year_by_tmp_name.get(name) is None]
+    if missing_years:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A valid Legislative Year is required for: {', '.join(missing_years)}",
+        )
 
     title = payload.get("title")
     description = payload.get("description")
@@ -335,10 +371,9 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
 
             base_title = os.path.splitext(original_filename)[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
-            inferred_number, inferred_year = _extract_legislative_metadata(original_filename or doc_title)
+            inferred_number = _extract_legislative_number(original_filename or doc_title)
             document_number = (payload.get("document_number") or inferred_number or "").strip() or None
-            series_year = payload.get("series_year") or inferred_year
-            series_year = int(series_year) if series_year not in (None, "") else None
+            series_year = year_by_tmp_name[safe_name]
 
             doc = models.Document(
                 tracking_number=f"PENDING-{uuid.uuid4().hex}",
@@ -387,6 +422,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
             if current_office:
                 doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
+                _ensure_document_office_association(db, doc.id, doc.current_office_id)
 
             db.commit()
             db.refresh(att)
@@ -474,6 +510,7 @@ def validate_bulk_register(files: list[UploadFile] = File(...), db: Session = De
 @router.post("/bulk-register/confirm")
 def confirm_bulk_register(files: list[UploadFile] = File(...),
                           title: str | None = Form(None),
+                          series_years: list[int] = Form(...),
                           description: str | None = Form(None),
                           category: str | None = Form(None),
                           document_type: str | None = Form(None),
@@ -487,6 +524,9 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     Returns per-file results and overall summary.
     """
     require_permission(current_user, "register_documents")
+    if len(series_years) != len(files):
+        raise HTTPException(status_code=400, detail="Legislative Year is required for every document.")
+    validated_years = [_require_legislative_year(year) for year in series_years]
     _ensure_upload_dirs()
 
     created = []
@@ -516,10 +556,9 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             # attempt to create document record
             base_title = os.path.splitext(os.path.basename(filename))[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
-            inferred_number, inferred_year = _extract_legislative_metadata(filename or doc_title)
-            document_number = (payload.get("document_number") or inferred_number or "").strip() or None
-            series_year = payload.get("series_year") or inferred_year
-            series_year = int(series_year) if series_year not in (None, "") else None
+            inferred_number = _extract_legislative_number(filename or doc_title)
+            document_number = (inferred_number or "").strip() or None
+            series_year = validated_years[idx - 1]
 
             doc = models.Document(
                 tracking_number=f"PENDING-{uuid.uuid4().hex}",
@@ -565,6 +604,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                 doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
             if current_office:
                 doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
+                _ensure_document_office_association(db, doc.id, doc.current_office_id)
 
             db.commit()
             db.refresh(att)
@@ -600,6 +640,9 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
 
 
 def _next_display_tracking_value(db: Session) -> int:
+    if db.bind and db.bind.dialect.name == "sqlite":
+        max_value = db.execute(text("SELECT COALESCE(MAX(CAST(SUBSTR(tracking_number, 5) AS INTEGER)), 0) FROM documents")).scalar_one()
+        return int(max_value) + 1
     return int(db.execute(text("SELECT nextval('document_tracking_number_seq')")).scalar_one())
 
 
@@ -612,14 +655,30 @@ def _assign_system_tracking_number(db: Session, doc: models.Document) -> str:
     return tracking_number
 
 
-def _extract_legislative_metadata(value: str | None) -> tuple[str | None, int | None]:
-    text = value or ""
-    number_match = LEGISLATIVE_NUMBER_PATTERN.search(text)
-    year_match = SERIES_YEAR_PATTERN.search(text)
-    return (
-        number_match.group(1) if number_match else None,
-        int(year_match.group(1)) if year_match else None,
-    )
+def _extract_legislative_number(value: str | None) -> str | None:
+    match = LEGISLATIVE_NUMBER_PATTERN.search(value or "")
+    return match.group(1) if match else None
+
+
+def _parse_legislative_year(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        year = value
+    elif isinstance(value, str) and re.fullmatch(r"\d{4}", value.strip()):
+        year = int(value.strip())
+    else:
+        return None
+    return year if 1000 <= year <= datetime.now(timezone.utc).year else None
+
+
+def _require_legislative_year(value) -> int:
+    year = _parse_legislative_year(value)
+    if year is not None:
+        return year
+    if value in (None, ""):
+        raise HTTPException(status_code=400, detail="Legislative Year is required.")
+    raise HTTPException(status_code=400, detail="Legislative Year must be a valid four-digit year.")
 
 
 def _documents_with_checksum(db: Session, checksum: str):
@@ -664,6 +723,8 @@ def _serialize_document(doc: models.Document):
     payload = {
         "id": doc.id,
         "tracking_number": doc.tracking_number,
+        "qr_token": getattr(doc, "qr_token", None),
+        "canonical_qr_url": _compute_qr_payload(doc) if getattr(doc, "qr_token", None) else None,
         "document_number": doc.document_number,
         "series_year": doc.series_year,
         "title": doc.title,
@@ -744,6 +805,27 @@ def _serialize_document(doc: models.Document):
     return payload
 
 
+def _extract_qr_token_from_value(qr_value: str | None) -> str | None:
+    if qr_value is None:
+        return None
+    candidate = str(qr_value).strip()
+    if not candidate:
+        return None
+    if "://" in candidate:
+        parsed = urlparse(candidate)
+        path = parsed.path or ""
+        if "/qr/" in path.lower():
+            candidate = path.lower().split("/qr/", 1)[1]
+        else:
+            candidate = path.rsplit("/", 1)[-1]
+    if candidate.startswith("/"):
+        candidate = candidate.lstrip("/")
+    candidate = unquote(candidate).strip().strip("/")
+    if not candidate:
+        return None
+    return candidate
+
+
 def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     if not qr_value:
         return None
@@ -751,6 +833,13 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     if not qr_text:
         return None
     normalized_value = qr_text.upper()
+
+    token_value = _extract_qr_token_from_value(qr_text)
+    if token_value:
+        token_match = db.query(models.Document).filter(models.Document.qr_token == token_value).first()
+        if token_match is not None:
+            return token_match
+
     current = db.query(models.Document).filter(models.Document.tracking_number == normalized_value).first()
     if current is not None:
         return current
@@ -776,27 +865,38 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     return db.query(models.Document).filter(models.Document.id == alias.document_id).first()
 
 
+def _public_qr_base_url() -> str:
+    backend_url = (
+        os.getenv("PUBLIC_BASE_URL")
+        or os.getenv("BACKEND_PUBLIC_URL")
+        or os.getenv("BACKEND_URL")
+        or os.getenv("PUBLIC_BACKEND_URL")
+        or os.getenv("API_BASE_URL")
+        or "http://127.0.0.1:8001"
+    ).strip().rstrip("/")
+    return backend_url or "http://127.0.0.1:8001"
+
+
 def _compute_qr_payload(doc: models.Document) -> str:
-    backend_url = os.getenv("BACKEND_URL") or os.getenv("PUBLIC_BACKEND_URL") or os.getenv("API_BASE_URL") or "http://127.0.0.1:8001"
-    backend_url = backend_url.rstrip("/")
-    tracking = (doc.tracking_number or "").strip()
-    if not tracking:
-        tracking = f"DOC-{doc.id}"
-    return f"{backend_url}/documents/qr/{quote(str(tracking), safe='')}"
+    qr_token = (getattr(doc, "qr_token", None) or "").strip()
+    if not qr_token:
+        raise HTTPException(status_code=500, detail="Document has no stable QR token")
+    return f"{_public_qr_base_url()}/qr/{quote(str(qr_token), safe='')}"
 
 
-def _qr_image_path_for_document(doc: models.Document) -> str:
+def _qr_image_path_for_document(doc: models.Document, payload: str) -> str:
     os.makedirs(QR_IMAGE_DIR, exist_ok=True)
     safe_tracking = (doc.tracking_number or f"DOC-{doc.id}").strip().replace(os.sep, "_").replace("/", "_")
-    return os.path.join(QR_IMAGE_DIR, f"{safe_tracking}.png")
+    payload_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return os.path.join(QR_IMAGE_DIR, f"{safe_tracking}_{payload_digest}.png")
 
 
-def _ensure_qr_png(doc: models.Document, payload: str | None = None) -> str:
+def _ensure_qr_png(doc: models.Document, payload: str | None = None, *, force: bool = False) -> str:
     payload = payload or _compute_qr_payload(doc)
-    image_path = _qr_image_path_for_document(doc)
+    image_path = _qr_image_path_for_document(doc, payload)
     os.makedirs(QR_IMAGE_DIR, exist_ok=True)
     try:
-        if not os.path.exists(image_path):
+        if force or not os.path.exists(image_path):
             qr_img = qrcode.make(payload)
             qr_img.save(image_path, format="PNG")
     except Exception:
@@ -905,6 +1005,17 @@ def _get_or_create_by_name(db: Session, Model, name: str):
         return existing.id if existing else None
 
 
+def _ensure_document_office_association(db: Session, document_id: int, office_id: int | None) -> None:
+    if office_id is None:
+        return
+    existing = db.query(models.DocumentOffice.id).filter(
+        models.DocumentOffice.document_id == document_id,
+        models.DocumentOffice.office_id == office_id,
+    ).first()
+    if existing is None:
+        db.add(models.DocumentOffice(document_id=document_id, office_id=office_id))
+
+
 def _normalize_tracking_query(search: str | None) -> str | None:
     if search is None:
         return None
@@ -946,6 +1057,182 @@ def _is_year_only_filter(value: str) -> bool:
 
 def _is_current_date_filter(value: str) -> bool:
     return str(value).strip().lower() == "current_date"
+
+
+def _serialize_office_document(doc: models.Document):
+    return {
+        "id": doc.id,
+        "tracking_number": doc.tracking_number,
+        "qr_token": doc.qr_token,
+        "canonical_qr_url": _compute_qr_payload(doc) if doc.qr_token else None,
+        "document_number": doc.document_number,
+        "series_year": doc.series_year,
+        "title": doc.title,
+        "description": doc.description,
+        "document_type": doc.document_type,
+        "category": doc.category,
+        "originating_office": doc.originating_office,
+        "date_registered": doc.date_registered,
+        "attachment_name": doc.attachment_name,
+        "qr_code_value": doc.qr_code_value,
+        "archived": bool(doc.archived),
+        "archived_at": doc.archived_at,
+        "created_at": doc.created_at,
+        "updated_at": doc.updated_at,
+    }
+
+
+@router.get("/office", response_model=schemas.PaginatedDocumentResponse)
+@router.get("/my-office", response_model=schemas.PaginatedDocumentResponse)
+def list_office_documents(
+    search: str | None = Query(default=None),
+    status: str | None = None,
+    document_type: str | None = None,
+    year: int | None = Query(default=None, ge=1, le=9999),
+    receipt_status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    sort_by: str = Query(default="created_at"),
+    sort_order: str = Query(default="desc"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+    require_permission(current_user, "view_office_documents")
+
+    if search and not user_has_permission(current_user, "search_office_documents"):
+        raise HTTPException(status_code=403, detail="Permission denied")
+    office_document_ids = db.query(models.DocumentOffice.document_id).filter(
+        models.DocumentOffice.office_id == current_user.office_id
+    )
+    query = db.query(models.Document).filter(
+        models.Document.id.in_(office_document_ids),
+        models.Document.archived.is_(False),
+    )
+
+    if search:
+        normalized_tracking = _normalize_tracking_query(search)
+        like = f"%{search}%"
+        search_conditions = [
+            models.Document.tracking_number.ilike(like),
+            models.Document.document_number.ilike(like),
+            cast(models.Document.series_year, String).ilike(like),
+            models.Document.title.ilike(like),
+            models.Document.document_type.ilike(like),
+        ]
+        if normalized_tracking is not None:
+            search_conditions.extend([
+                models.Document.tracking_number == f"DOC-{int(normalized_tracking)}",
+                models.Document.tracking_number == f"DOC-{int(normalized_tracking):06d}",
+            ])
+        query = query.filter(or_(*search_conditions))
+    if status:
+        query = query.filter(models.Document.status == status)
+    if document_type:
+        query = query.filter(models.Document.document_type == document_type)
+    if year is not None:
+        query = query.filter(models.Document.series_year == year)
+    if receipt_status:
+        normalized_receipt_status = receipt_status.strip().lower().replace(" ", "_")
+        received_ids = db.query(models.DocumentReceipt.document_id).filter(
+            models.DocumentReceipt.office_id == current_user.office_id
+        )
+        if normalized_receipt_status == "received":
+            query = query.filter(models.Document.id.in_(received_ids))
+        elif normalized_receipt_status in {"not_received", "not_yet_received"}:
+            query = query.filter(~models.Document.id.in_(received_ids))
+        else:
+            raise HTTPException(status_code=400, detail="Invalid receipt_status filter")
+
+    sort_columns = {
+        "created_at": models.Document.created_at,
+        "updated_at": models.Document.updated_at,
+        "title": models.Document.title,
+        "tracking_number": models.Document.tracking_number,
+        "status": models.Document.status,
+        "document_type": models.Document.document_type,
+        "series_year": models.Document.series_year,
+    }
+    sort_column = sort_columns.get(sort_by, models.Document.created_at)
+    if sort_by == "tracking_number":
+        sequence_expression = cast(func.substring(models.Document.tracking_number, r"([0-9]+)$"), Integer)
+        sort_expression = sequence_expression.asc() if sort_order.lower() == "asc" else sequence_expression.desc()
+    else:
+        sort_expression = sort_column.asc() if sort_order.lower() == "asc" else sort_column.desc()
+
+    total = query.count()
+    total_pages = (total + page_size - 1) // page_size
+    docs = query.order_by(sort_expression, models.Document.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    document_ids = [doc.id for doc in docs]
+    receipts = db.query(models.DocumentReceipt).filter(
+        models.DocumentReceipt.document_id.in_(document_ids),
+        models.DocumentReceipt.office_id == current_user.office_id,
+    ).all() if document_ids else []
+    receipts_by_document_id = {receipt.document_id: receipt for receipt in receipts}
+    items = []
+    for doc in docs:
+        item = _serialize_office_document(doc)
+        receipt = receipts_by_document_id.get(doc.id)
+        item["office_receipt_status"] = receipt.status if receipt else "Not Yet Received"
+        item["office_receipt_confirmed_at"] = receipt.confirmed_at if receipt else None
+        items.append(item)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "available_years": [],
+    }
+
+
+@router.get("/office/{document_id:int}")
+def get_office_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_office_document_details")
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+    doc = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.id.in_(
+            db.query(models.DocumentOffice.document_id).filter(
+                models.DocumentOffice.office_id == current_user.office_id
+            )
+        ),
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found or not associated with your office")
+    payload = _serialize_office_document(doc)
+    receipt = db.query(models.DocumentReceipt).filter(
+        models.DocumentReceipt.document_id == document_id,
+        models.DocumentReceipt.office_id == current_user.office_id,
+    ).first()
+    payload["office_receipt_status"] = receipt.status if receipt else "Not Yet Received"
+    payload["office_receipt_confirmed_at"] = receipt.confirmed_at if receipt else None
+    return payload
+
+
+@router.get("/office/history")
+def list_office_history(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "view_office_history")
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+    rows = (
+        db.query(models.DocumentReceipt)
+        .join(models.DocumentOffice, models.DocumentOffice.document_id == models.DocumentReceipt.document_id)
+        .filter(models.DocumentReceipt.office_id == current_user.office_id)
+        .filter(models.DocumentOffice.office_id == current_user.office_id)
+        .order_by(models.DocumentReceipt.confirmed_at.desc())
+        .all()
+    )
+    return {
+        "office_id": current_user.office_id,
+        "items": [_serialize_document_receipt(row) for row in rows],
+        "total": len(rows),
+    }
 
 
 @router.get("", response_model=schemas.PaginatedDocumentResponse)
@@ -1160,12 +1447,13 @@ def register_document(
     if not title:
         raise HTTPException(status_code=400, detail="Title is required")
 
+    series_year = _require_legislative_year(series_year)
+
     if (tracking_number or "").strip():
         raise HTTPException(status_code=400, detail="Tracking numbers are generated automatically.")
 
-    inferred_number, inferred_year = _extract_legislative_metadata(file.filename if file and file.filename else title)
+    inferred_number = _extract_legislative_number(file.filename if file and file.filename else title)
     document_number = (document_number or inferred_number or "").strip() or None
-    series_year = series_year if series_year is not None else inferred_year
 
     category = (category or None)
     document_type = (document_type or None)
@@ -1245,6 +1533,7 @@ def register_document(
         doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
     if current_office:
         doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
+        _ensure_document_office_association(db, doc.id, doc.current_office_id)
 
     db.commit()
     db.refresh(doc)
@@ -1259,7 +1548,7 @@ def regenerate_qr(document_id: int, db: Session = Depends(get_db), current_user:
         raise HTTPException(status_code=404, detail="Document not found")
 
     payload = _compute_qr_payload(doc)
-    _ensure_qr_png(doc, payload)
+    _ensure_qr_png(doc, payload, force=True)
     doc.qr_code_value = payload
     db.commit()
     db.refresh(doc)
@@ -1291,7 +1580,10 @@ def get_document_qr_image(document_id: int, db: Session = Depends(get_db), curre
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    payload = doc.qr_code_value or _compute_qr_payload(doc)
+    payload = _compute_qr_payload(doc)
+    if doc.qr_code_value != payload:
+        doc.qr_code_value = payload
+        db.commit()
     image_path = _ensure_qr_png(doc, payload)
     if not os.path.exists(image_path):
         raise HTTPException(status_code=404, detail="QR image not found")
@@ -1361,6 +1653,472 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
         "documents": documents_summary,
         "recent_generated_qrs": recent_generated_summary,
     }
+
+
+@public_qr_router.get("/qr/{qr_value:path}")
+def public_lookup_qr_by_value(qr_value: str, request: Request, db: Session = Depends(get_db)):
+    accepted_types = request.headers.get("accept", "").split(",")
+    for accepted_type in accepted_types:
+        media_type, *parameters = accepted_type.split(";")
+        if media_type.strip().lower() not in {"text/html", "application/xhtml+xml"}:
+            continue
+        quality = 1.0
+        for parameter in parameters:
+            name, separator, value = parameter.partition("=")
+            if name.strip().lower() == "q" and separator:
+                try:
+                    quality = float(value.strip())
+                except ValueError:
+                    quality = 0.0
+                break
+        if quality > 0:
+            frontend_url = os.getenv("FRONTEND_PUBLIC_URL", "").strip().rstrip("/")
+            if not frontend_url:
+                raise HTTPException(status_code=503, detail="Frontend public URL is not configured")
+            frontend_qr_url = f"{frontend_url}/qr/{quote(qr_value, safe='')}"
+            return RedirectResponse(frontend_qr_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    token_value = _extract_qr_token_from_value(qr_value)
+    doc = _find_document_by_qr_or_tracking(db, token_value or qr_value)
+    if not doc:
+        record_audit_log(
+            db,
+            actor="Public QR Scanner",
+            action="QR_SCAN_UNRECOGNIZED",
+            target_type="qr_lookup",
+            target_id=str(qr_value),
+            details="QR identifier was not matched to a document",
+        )
+        raise HTTPException(status_code=404, detail="QR code not recognized")
+
+    record_audit_log(
+        db,
+        actor="Public QR Scanner",
+        action="QR_SCAN_SUCCESS",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"QR lookup resolved to {doc.tracking_number}",
+    )
+
+    return {
+        "document_id": doc.id,
+        "tracking_number": doc.tracking_number,
+        "title": doc.title,
+        "document_type": doc.document_type,
+        "current_office": doc.current_office,
+        "qr_token": doc.qr_token,
+        "qr_payload": doc.qr_code_value or _compute_qr_payload(doc),
+    }
+
+
+def _resolve_office_qr_access(db: Session, current_user: models.User, qr_value: str):
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required for QR access")
+
+    require_permission(current_user, "scan_qr")
+    require_permission(current_user, "view_office_document_details")
+
+    doc = _find_document_by_qr_or_tracking(db, qr_value)
+    if not doc:
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="OFFICE_QR_ACCESS_FAILED",
+            target_type="qr_lookup",
+            target_id=str(qr_value),
+            details="QR identifier was not matched to a document",
+        )
+        raise HTTPException(status_code=404, detail="QR code not recognized")
+
+    pending_handoff = db.query(models.DocumentHandoff).filter(
+        models.DocumentHandoff.document_id == doc.id,
+        models.DocumentHandoff.receiving_office_id == current_user.office_id,
+        models.DocumentHandoff.status == "Pending Receipt",
+    ).first()
+    if pending_handoff is None:
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="OFFICE_QR_ACCESS_DENIED",
+            target_type="document",
+            target_id=str(doc.id),
+            details=f"No pending handoff exists for document {doc.id} at office {current_user.office_id}",
+        )
+        raise HTTPException(status_code=403, detail="This document is not pending receipt at your office")
+
+    office_name = db.query(models.Office.name).filter(models.Office.id == current_user.office_id).scalar()
+    if not office_name:
+        raise HTTPException(status_code=403, detail="This document is not pending receipt at your office")
+
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="OFFICE_QR_ACCESS",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Office-scoped QR access granted for {doc.tracking_number}",
+    )
+
+    return {
+        "document_id": doc.id,
+        "tracking_number": doc.tracking_number,
+        "title": doc.title,
+        "document_type": doc.document_type,
+        "document_number": doc.document_number,
+        "series_year": doc.series_year,
+        "status": doc.status,
+        "description": doc.description,
+        "office_name": office_name,
+        "office_id": current_user.office_id,
+        "assigned_to": doc.assigned_to,
+        "author": doc.author,
+        "qr_token": doc.qr_token,
+        "qr_payload": doc.qr_code_value or _compute_qr_payload(doc),
+    }
+
+
+def _serialize_document_receipt(row: models.DocumentReceipt):
+    from ..database import SessionLocal
+    db_session = SessionLocal()
+    try:
+        user = db_session.query(models.User).filter(models.User.id == row.confirmed_by_user_id).first()
+        office = db_session.query(models.Office).filter(models.Office.id == row.office_id).first()
+    finally:
+        db_session.close()
+    return {
+        "id": row.id,
+        "document_id": row.document_id,
+        "office_id": row.office_id,
+        "handoff_id": row.handoff_id,
+        "office_name": office.name if office else None,
+        "status": row.status,
+        "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        "confirmed_by": {
+            "id": user.id,
+            "full_name": user.full_name or user.username,
+            "username": user.username,
+        } if user else None,
+        "confirmed_by_user_id": row.confirmed_by_user_id,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _serialize_handoff(row: models.DocumentHandoff):
+    sending_office = row.sending_office
+    receiving_office = row.receiving_office
+    sending_employee = row.sending_employee
+    return {
+        "id": row.id,
+        "document_id": row.document_id,
+        "sending_office_id": row.sending_office_id,
+        "receiving_office_id": row.receiving_office_id,
+        "sending_employee_id": row.sending_employee_id,
+        "sending_office_name": sending_office.name if sending_office else None,
+        "receiving_office_name": receiving_office.name if receiving_office else None,
+        "sending_employee_name": sending_employee.full_name or sending_employee.username if sending_employee else None,
+        "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+        "status": row.status,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.post("/{document_id:int}/handoffs")
+def create_document_handoff(
+    document_id: int,
+    payload: schemas.DocumentHandoffCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+    if getattr(current_user, "role", None) is None or "Employee" not in (str(current_user.role).strip(),):
+        raise HTTPException(status_code=403, detail="Employee access required")
+    require_permission(current_user, "pass_office_documents")
+
+    doc = db.query(models.Document).filter(models.Document.id == document_id).with_for_update().first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    sender_office_link = db.query(models.DocumentOffice.id).filter(
+        models.DocumentOffice.document_id == document_id,
+        models.DocumentOffice.office_id == current_user.office_id,
+    ).with_for_update().first()
+    if sender_office_link is None:
+        raise HTTPException(status_code=403, detail="This document is not assigned to your office")
+
+    receiving_office = db.query(models.Office).filter(models.Office.id == payload.receiving_office_id).first()
+    if receiving_office is None:
+        raise HTTPException(status_code=404, detail="Receiving office not found")
+    if not receiving_office.is_active:
+        raise HTTPException(status_code=400, detail="Receiving office is inactive")
+    if receiving_office.id == current_user.office_id:
+        raise HTTPException(status_code=400, detail="Document cannot be handed off to the same office")
+
+    pending = (
+        db.query(models.DocumentHandoff)
+        .filter(models.DocumentHandoff.document_id == document_id, models.DocumentHandoff.status == "Pending Receipt")
+        .with_for_update()
+        .first()
+    )
+    if pending is not None:
+        raise HTTPException(status_code=409, detail="A pending receipt handoff already exists for this document")
+
+    handoff = models.DocumentHandoff(
+        document_id=document_id,
+        sending_office_id=current_user.office_id,
+        receiving_office_id=payload.receiving_office_id,
+        sending_employee_id=current_user.id,
+        sent_at=datetime.now(timezone.utc),
+        status="Pending Receipt",
+    )
+    try:
+        db.add(handoff)
+        db.flush()
+        db.refresh(handoff)
+    except exc.IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A pending receipt handoff already exists for this document") from exc
+
+    result = _serialize_handoff(handoff)
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="DOCUMENT_HANDOFF_CREATED",
+        target_type="document_handoff",
+        target_id=str(handoff.id),
+        details=f"Document {document_id} handed off from office {current_user.office_id} to office {payload.receiving_office_id}",
+    )
+    return result
+
+
+@router.get("/office/handoffs")
+def list_office_handoffs(
+    direction: str = Query(default="incoming"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+    require_permission(current_user, "view_office_documents")
+
+    normalized_direction = (direction or "incoming").strip().lower()
+    if normalized_direction not in {"incoming", "sent"}:
+        raise HTTPException(status_code=400, detail="direction must be 'incoming' or 'sent'")
+
+    query = db.query(models.DocumentHandoff).join(models.Document, models.Document.id == models.DocumentHandoff.document_id)
+    if normalized_direction == "incoming":
+        query = query.filter(models.DocumentHandoff.receiving_office_id == current_user.office_id)
+    else:
+        query = query.filter(models.DocumentHandoff.sending_office_id == current_user.office_id)
+    query = query.order_by(models.DocumentHandoff.sent_at.desc(), models.DocumentHandoff.id.desc())
+
+    total = query.count()
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    items = []
+    for row in rows:
+        payload = _serialize_handoff(row)
+        payload["document_title"] = row.document.title if row.document else None
+        payload["tracking_number"] = row.document.tracking_number if row.document else None
+        payload["other_office_id"] = row.receiving_office_id if row.sending_office_id == current_user.office_id else row.sending_office_id
+        payload["other_office_name"] = row.receiving_office.name if row.sending_office_id == current_user.office_id and row.receiving_office else row.sending_office.name if row.sending_office else None
+        items.append(payload)
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0,
+    }
+
+
+@router.get("/{document_id:int}/handoffs")
+def list_document_handoffs(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "view_office_history")
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    handoff_access = db.query(models.DocumentHandoff.id).filter(
+        models.DocumentHandoff.document_id == document_id,
+    ).filter(
+        (models.DocumentHandoff.sending_office_id == current_user.office_id)
+        | (models.DocumentHandoff.receiving_office_id == current_user.office_id)
+    ).first()
+    if handoff_access is None:
+        office_link = db.query(models.DocumentOffice.id).filter(
+            models.DocumentOffice.document_id == document_id,
+            models.DocumentOffice.office_id == current_user.office_id,
+        ).first()
+        if office_link is None:
+            raise HTTPException(status_code=403, detail="You are not authorized to view handoff history for this document")
+
+    rows = (
+        db.query(models.DocumentHandoff)
+        .filter(models.DocumentHandoff.document_id == document_id)
+        .filter(
+            (models.DocumentHandoff.sending_office_id == current_user.office_id)
+            | (models.DocumentHandoff.receiving_office_id == current_user.office_id)
+        )
+        .order_by(models.DocumentHandoff.sent_at.asc(), models.DocumentHandoff.id.asc())
+        .all()
+    )
+    items = []
+    for row in rows:
+        linked_receipt = (
+            db.query(models.DocumentReceipt)
+            .filter(models.DocumentReceipt.handoff_id == row.id)
+            .first()
+        )
+        item = _serialize_handoff(row)
+        item["linked_receipt"] = None
+        if linked_receipt:
+            item["linked_receipt"] = {
+                "id": linked_receipt.id,
+                "receiving_employee_id": linked_receipt.confirmed_by_user_id,
+                "receiving_employee_name": linked_receipt.confirmed_by.full_name or linked_receipt.confirmed_by.username if linked_receipt.confirmed_by else None,
+                "received_at": linked_receipt.confirmed_at.isoformat() if linked_receipt.confirmed_at else None,
+                "office_id": linked_receipt.office_id,
+            }
+        items.append(item)
+
+    return {
+        "document_id": document_id,
+        "tracking_number": doc.tracking_number,
+        "document_title": doc.title,
+        "items": items,
+        "total": len(items),
+    }
+
+
+@router.post("/qr/{qr_value:path}/receipt")
+def confirm_document_receipt(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "scan_qr")
+    require_permission(current_user, "confirm_document_receipt")
+    require_permission(current_user, "view_office_document_details")
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required for receipt confirmation")
+
+    doc = _find_document_by_qr_or_tracking(db, qr_value)
+    if not doc:
+        raise HTTPException(status_code=404, detail="QR code not recognized")
+
+    handoff = (
+        db.query(models.DocumentHandoff)
+        .filter(
+            models.DocumentHandoff.document_id == doc.id,
+            models.DocumentHandoff.receiving_office_id == current_user.office_id,
+            models.DocumentHandoff.status == "Pending Receipt",
+        )
+        .with_for_update()
+        .first()
+    )
+    if handoff is None:
+        raise HTTPException(status_code=403, detail="This document is not pending receipt at your office")
+
+    existing = (
+        db.query(models.DocumentReceipt)
+        .filter(models.DocumentReceipt.handoff_id == handoff.id)
+        .first()
+    )
+    if existing is not None:
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="DOCUMENT_RECEIPT_ALREADY_CONFIRMED",
+            target_type="document_receipt",
+            target_id=str(existing.id),
+            details=f"Duplicate confirmation blocked for handoff {handoff.id}",
+        )
+        return {"status": "already_confirmed", "receipt": _serialize_document_receipt(existing), "message": "Receipt already confirmed for this handoff."}
+
+    receipt = models.DocumentReceipt(
+        document_id=doc.id,
+        office_id=current_user.office_id,
+        handoff_id=handoff.id,
+        confirmed_by_user_id=current_user.id,
+        status="Received",
+        confirmed_at=datetime.now(timezone.utc),
+    )
+    try:
+        db.add(receipt)
+        db.flush()
+        handoff.status = "Received"
+        handoff.updated_at = datetime.now(timezone.utc)
+        db.flush()
+    except exc.IntegrityError as exc:
+        db.rollback()
+        existing = db.query(models.DocumentReceipt).filter(models.DocumentReceipt.handoff_id == handoff.id).first()
+        if existing is not None:
+            return {"status": "already_confirmed", "receipt": _serialize_document_receipt(existing), "message": "Receipt already confirmed for this handoff."}
+        raise HTTPException(status_code=409, detail="Receipt confirmation could not be completed due to a duplicate handoff confirmation.") from exc
+
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="DOCUMENT_RECEIPT_CONFIRMED",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Document {doc.id} receipt confirmed by office {current_user.office_id} user {current_user.id} via handoff {handoff.id}",
+    )
+
+    return {
+        "status": "confirmed",
+        "receipt": _serialize_document_receipt(receipt),
+        "message": "Receipt confirmed.",
+    }
+
+
+@router.get("/{document_id:int}/receipts")
+def list_document_receipts(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "view_office_history")
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required for receipt history")
+
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    office_link = db.query(models.DocumentOffice.id).filter(
+        models.DocumentOffice.document_id == document_id,
+        models.DocumentOffice.office_id == current_user.office_id,
+    ).first()
+    if office_link is None:
+        raise HTTPException(status_code=403, detail="You are not authorized to view receipt history for this document office")
+
+    rows = (
+        db.query(models.DocumentReceipt)
+        .filter(
+            models.DocumentReceipt.document_id == document_id,
+            models.DocumentReceipt.office_id == current_user.office_id,
+        )
+        .order_by(models.DocumentReceipt.confirmed_at.asc())
+        .all()
+    )
+    return {
+        "document_id": document_id,
+        "document_tracking_number": getattr(doc, "tracking_number", None),
+        "document_title": getattr(doc, "title", None),
+        "office_id": current_user.office_id,
+        "receipts": [_serialize_document_receipt(row) for row in rows],
+    }
+
+
+@router.get("/qr/{qr_value:path}/office")
+@router.get("/qr/{qr_value:path}/office-access")
+def lookup_office_qr_by_value(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return _resolve_office_qr_access(db, current_user, qr_value)
 
 
 @router.get("/qr/{qr_value:path}")

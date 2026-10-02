@@ -60,6 +60,17 @@ EMPLOYEE_PERMISSION_GROUPS = {
     ],
 }
 
+OFFICE_EMPLOYEE_PERMISSION_GROUP = {
+    "Office Workflow": [
+        "View Office Documents",
+        "Search Office Documents",
+        "View Office Document Details",
+        "Scan QR",
+        "Confirm Document Receipt",
+        "View Office History",
+    ],
+}
+
 SB_MEMBER_PERMISSIONS = [
     "View Documents",
     "Search Documents",
@@ -183,6 +194,7 @@ def build_users_roles_table(
                     ),
                     ft.DataCell(ft.Text(username, size=12)),
                     ft.DataCell(_role_badge(role)),
+                    ft.DataCell(ft.Text(user.get("department") or "-", size=12)),
                     ft.DataCell(_status_badge(status)),
                     ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
                     ft.DataCell(ft.Text(last_login, size=12)),
@@ -197,6 +209,7 @@ def build_users_roles_table(
             ft.DataColumn(ft.Text("User", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Office", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Account Status", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Permissions", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Last Login", weight=ft.FontWeight.BOLD, size=12)),
@@ -233,6 +246,42 @@ def build_users_roles_table(
     )
 
 
+def build_offices_table(offices_data, open_edit_office_dialog, view_office_users):
+    rows = []
+    for office in offices_data:
+        actions = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="Office actions",
+            items=[
+                ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, item=office: open_edit_office_dialog(item)),
+                ft.PopupMenuItem(content=ft.Text("View Users"), on_click=lambda _, item=office: view_office_users(item)),
+            ],
+        )
+        rows.append(
+            ft.DataRow(
+                cells=[
+                    ft.DataCell(ft.Text(office.get("name") or "-", size=13)),
+                    ft.DataCell(ft.Text(office.get("office_code") or "-", size=13)),
+                    ft.DataCell(_status_badge("Active" if office.get("is_active") else "Inactive")),
+                    ft.DataCell(ft.Text(str(office.get("user_count", 0)), size=13)),
+                    ft.DataCell(actions),
+                ]
+            )
+        )
+    return ft.DataTable(
+        columns=[
+            ft.DataColumn(ft.Text("Office Name", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Office Code", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Status", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Users", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
+        ],
+        rows=rows,
+        column_spacing=20,
+        heading_row_color=ft.Colors.BLUE_GREY_50,
+    )
+
+
 def build_users_roles_view(
     users_data,
     search_field,
@@ -252,6 +301,12 @@ def build_users_roles_view(
     section_header,
     user_table_holder=None,
     no_users_notice=None,
+    offices_data=None,
+    create_office=None,
+    edit_office=None,
+    view_office_users=None,
+    office_table_holder=None,
+    create_employee=None,
 ):
     user_rows = []
     for user in users_data:
@@ -289,6 +344,7 @@ def build_users_roles_view(
                     ),
                     ft.DataCell(ft.Text(username, size=12)),
                     ft.DataCell(_role_badge(role)),
+                    ft.DataCell(ft.Text(user.get("department") or "-", size=12)),
                     ft.DataCell(_status_badge(status)),
                     ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
                     ft.DataCell(ft.Text(last_login, size=12)),
@@ -303,6 +359,7 @@ def build_users_roles_view(
             ft.DataColumn(ft.Text("User", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Username", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Role", weight=ft.FontWeight.BOLD, size=12)),
+            ft.DataColumn(ft.Text("Office", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Account Status", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Permissions", weight=ft.FontWeight.BOLD, size=12)),
             ft.DataColumn(ft.Text("Last Login", weight=ft.FontWeight.BOLD, size=12)),
@@ -368,6 +425,7 @@ def build_users_roles_view(
                 [
                     role_filter,
                     status_filter,
+                    office_filter,
                     permission_filter,
                 ],
                 spacing=20,
@@ -417,10 +475,53 @@ def build_users_roles_view(
         spacing=10,
     )
 
+    sections = [
+        header,
+        surface_card(table_section, padding=18, expand=False),
+    ]
+    if offices_data is not None:
+        office_table = office_table_holder or build_offices_table(
+            offices_data,
+            edit_office or (lambda _office: None),
+            view_office_users or (lambda _office: None),
+        )
+        sections.append(
+            surface_card(
+                ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Text("Office Management", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                                ft.Row(
+                                    [
+                                        *([ft.Button(
+                                            "+ Create Employee Account",
+                                            on_click=create_employee,
+                                            bgcolor=ft.Colors.BLUE_800,
+                                            color=ft.Colors.WHITE,
+                                        )] if create_employee else []),
+                                        ft.Button(
+                                            "+ Add Office",
+                                            on_click=create_office,
+                                            bgcolor=ft.Colors.BLUE_800,
+                                            color=ft.Colors.WHITE,
+                                        ),
+                                    ],
+                                    spacing=8,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Row([office_table], scroll=ft.ScrollMode.AUTO),
+                    ],
+                    spacing=10,
+                ),
+                padding=18,
+                expand=False,
+            )
+        )
     return ft.Column(
-        [
-            header,
-            surface_card(table_section, padding=18, expand=False),
-        ],
+        sections,
         spacing=12,
     )

@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint, func
+import secrets
+import secrets
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint, Index, func, text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from .database import Base
@@ -16,6 +18,11 @@ class Office(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False, index=True)
+    office_code = Column(String(32), unique=True, index=True, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    users = relationship("User", back_populates="office", foreign_keys="User.office_id")
 
 
 class Category(Base):
@@ -41,6 +48,7 @@ class Document(Base):
     tracking_number = Column(String, unique=True, index=True, nullable=False)
     document_number = Column(String, nullable=True)
     series_year = Column(Integer, nullable=True)
+    qr_token = Column(String(64), unique=True, index=True, nullable=False, default=lambda: secrets.token_urlsafe(32))
     title = Column(String, nullable=False, index=True)
     description = Column(Text, nullable=True)
 
@@ -89,6 +97,57 @@ class Document(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
 
+class DocumentOffice(Base):
+    __tablename__ = "document_offices"
+    __table_args__ = (
+        UniqueConstraint("document_id", "office_id", name="uq_document_offices_document_office"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    office = relationship("Office", foreign_keys=[office_id])
+
+
+class DocumentHandoff(Base):
+    __tablename__ = "document_handoffs"
+    __table_args__ = (
+        CheckConstraint("sending_office_id <> receiving_office_id", name="ck_document_handoffs_sender_receiver_diff"),
+        CheckConstraint("status IN ('Pending Receipt', 'Received')", name="ck_document_handoffs_status"),
+        Index("ix_document_handoffs_document_id", "document_id"),
+        Index("ix_document_handoffs_sending_office_id", "sending_office_id"),
+        Index("ix_document_handoffs_receiving_office_id", "receiving_office_id"),
+        Index("ix_document_handoffs_status", "status"),
+        Index("ix_document_handoffs_sent_at", "sent_at"),
+        Index("ix_document_handoffs_document_status", "document_id", "status"),
+        Index(
+            "uq_document_handoffs_pending_receipt",
+            "document_id",
+            unique=True,
+            sqlite_where=text("status = 'Pending Receipt'"),
+            postgresql_where=text("status = 'Pending Receipt'"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    sending_office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False)
+    receiving_office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False)
+    sending_employee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
+    sent_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    status = Column(String(50), nullable=False, default="Pending Receipt")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    sending_office = relationship("Office", foreign_keys=[sending_office_id])
+    receiving_office = relationship("Office", foreign_keys=[receiving_office_id])
+    sending_employee = relationship("User", foreign_keys=[sending_employee_id])
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -99,7 +158,7 @@ class User(Base):
     full_name = Column(String, nullable=True)
     email = Column(String, nullable=True, index=True)
     office_id = Column(Integer, ForeignKey("offices.id"), nullable=True, index=True)
-    office = relationship("Office", foreign_keys=[office_id])
+    office = relationship("Office", foreign_keys=[office_id], back_populates="users")
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     permissions = Column(Text, nullable=True, default="[]")
     status = Column(String, nullable=False, default="Active", index=True)
@@ -149,6 +208,29 @@ class DocumentTrackingNumberAlias(Base):
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     tracking_number = Column(String, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class DocumentReceipt(Base):
+    __tablename__ = "document_receipts"
+    __table_args__ = (
+        UniqueConstraint("handoff_id", name="uq_document_receipts_handoff"),
+        Index("ix_document_receipts_handoff_id", "handoff_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False, index=True)
+    handoff_id = Column(Integer, ForeignKey("document_handoffs.id", ondelete="SET NULL"), nullable=True)
+    confirmed_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False, index=True)
+    status = Column(String, nullable=False, default="Received", index=True)
+    confirmed_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    office = relationship("Office", foreign_keys=[office_id])
+    handoff = relationship("DocumentHandoff", foreign_keys=[handoff_id])
+    confirmed_by = relationship("User", foreign_keys=[confirmed_by_user_id])
 
 
 class DocumentHistory(Base):

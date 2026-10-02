@@ -139,7 +139,13 @@ from frontend.admin.committees import build_committees_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
-from frontend.admin.users_roles import build_users_roles_table, build_users_roles_view, EMPLOYEE_PERMISSION_GROUPS
+from frontend.admin.users_roles import (
+    OFFICE_EMPLOYEE_PERMISSION_GROUP,
+    EMPLOYEE_PERMISSION_GROUPS,
+    build_offices_table,
+    build_users_roles_table,
+    build_users_roles_view,
+)
 from frontend.admin.reference_data import build_reference_data_view
 from frontend.admin.admin_shell import render_shell
 
@@ -314,6 +320,195 @@ def main(page: ft.Page, session=None):
         except Exception:
             pass
 
+    def get_pending_qr_token():
+        try:
+            if hasattr(page, "client_storage"):
+                return page.client_storage.get("sb_pending_qr_token")
+        except Exception:
+            pass
+        return None
+
+    def clear_pending_qr_token():
+        try:
+            if hasattr(page, "client_storage"):
+                page.client_storage.remove("sb_pending_qr_token")
+        except Exception:
+            pass
+        page_state = page.data if isinstance(page.data, dict) else {}
+        page_state.pop("qr_authorization", None)
+        page.data = page_state
+
+    def _return_to_login_after_qr_details_401():
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
+        pending_qr_token = get_pending_qr_token()
+        current_user = None
+        current_user_role = None
+        current_user_permissions = []
+        runtime_token = None
+        refresh_token = None
+        clear_session_state()
+        if pending_qr_token:
+            _save_qr_authorization_state(pending_qr_token, "login_required")
+        show_login()
+
+    def _qr_authorization_state():
+        page_state = page.data if isinstance(page.data, dict) else {}
+        return page_state, page_state.get("qr_authorization")
+
+    def _save_qr_authorization_state(token, status, document_id=None):
+        page_state, _ = _qr_authorization_state()
+        qr_state = {"token": token, "status": status}
+        if status == "authorized" and document_id is not None:
+            qr_state["document_id"] = document_id
+        page_state["qr_authorization"] = qr_state
+        page.data = page_state
+        return qr_state
+
+    def _require_qr_reauthentication():
+        pending_qr_token = get_pending_qr_token()
+        if pending_qr_token:
+            _save_qr_authorization_state(pending_qr_token, "login_required")
+
+    def _render_qr_authorization_state(qr_state):
+        states = {
+            "checking": ("Checking document access...", ""),
+            "authorized": (
+                "Document Access Authorized",
+                "Your account is authorized to access this document through your assigned office.\nPreparing document details...",
+            ),
+            "no_office": (
+                "Office Access Required",
+                "Your account is not currently assigned to an office. Please contact the system administrator.",
+            ),
+            "permission_denied": (
+                "Access Denied",
+                "You do not have permission to access this document.",
+            ),
+            "wrong_office": (
+                "Access Denied",
+                "This document is not associated with your assigned office.",
+            ),
+            "not_found": (
+                "Document Not Found",
+                "This QR code does not correspond to an available document.",
+            ),
+            "server_error": (
+                "Unable to verify document access.",
+                "Please try again.",
+            ),
+        }
+        title, message = states.get(qr_state.get("status"), states["server_error"])
+        controls = [ft.Text(title, size=20, weight=ft.FontWeight.BOLD)]
+        if message:
+            controls.append(ft.Text(message))
+        page.clean()
+        page.add(ft.Column(controls, spacing=8))
+        page.update()
+
+    def _open_authorized_qr_document(qr_state):
+        document_id = qr_state.get("document_id")
+        if document_id is None:
+            _render_qr_authorization_state(_save_qr_authorization_state(qr_state.get("token"), "server_error"))
+            return True
+        if qr_state.get("details_opened"):
+            _render_qr_authorization_state(qr_state)
+            return True
+
+        qr_state["details_opened"] = True
+        page_state, _ = _qr_authorization_state()
+        page_state["qr_authorization"] = qr_state
+        page.data = page_state
+        _render_qr_authorization_state(qr_state)
+        if not show_document_details({"id": document_id}):
+            qr_state["details_opened"] = False
+            page_state["qr_authorization"] = qr_state
+            page.data = page_state
+        return True
+
+    def show_qr_authenticated_state():
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
+        pending_qr_token = get_pending_qr_token()
+        if not pending_qr_token:
+            return False
+
+        _, saved_qr_state = _qr_authorization_state()
+        if saved_qr_state and saved_qr_state.get("token") == pending_qr_token:
+            if saved_qr_state.get("status") == "authorized":
+                return _open_authorized_qr_document(saved_qr_state)
+            if saved_qr_state.get("status") not in {"login_required", "checking"}:
+                _render_qr_authorization_state(saved_qr_state)
+                return True
+            if saved_qr_state.get("status") == "checking":
+                _render_qr_authorization_state(saved_qr_state)
+                return True
+
+        if not current_user or not runtime_token:
+            _render_qr_authorization_state(_save_qr_authorization_state(pending_qr_token, "login_required"))
+            show_login()
+            return True
+
+        qr_state = _save_qr_authorization_state(pending_qr_token, "checking")
+        _render_qr_authorization_state(qr_state)
+        try:
+            get_admin_headers()
+            if not current_user or not runtime_token:
+                _save_qr_authorization_state(pending_qr_token, "login_required")
+                show_login()
+                return True
+
+            request_url = f"{BACKEND_URL}/documents/qr/{quote(str(pending_qr_token), safe='')}/office"
+            headers = {"Authorization": f"Bearer {runtime_token}"}
+            response = requests.get(request_url, headers=headers, verify=False, timeout=15)
+
+            if response.status_code == 401:
+                refresh_runtime_token_if_needed(force=True)
+                if runtime_token:
+                    headers = {"Authorization": f"Bearer {runtime_token}"}
+                    response = requests.get(request_url, headers=headers, verify=False, timeout=15)
+                if not runtime_token:
+                    _save_qr_authorization_state(pending_qr_token, "login_required")
+                    show_login()
+                    return True
+                if response.status_code == 401:
+                    current_user = None
+                    current_user_role = None
+                    current_user_permissions = []
+                    runtime_token = None
+                    refresh_token = None
+                    clear_session_state()
+                    _save_qr_authorization_state(pending_qr_token, "login_required")
+                    show_login()
+                    return True
+
+            if response.status_code == 200:
+                payload = response.json()
+                document_id = payload.get("document_id") if isinstance(payload, dict) else None
+                status = "authorized" if document_id is not None else "server_error"
+                qr_state = _save_qr_authorization_state(pending_qr_token, status, document_id=document_id)
+                if status == "authorized":
+                    _open_authorized_qr_document(qr_state)
+                else:
+                    _render_qr_authorization_state(qr_state)
+            elif response.status_code == 403:
+                try:
+                    detail = str(response.json().get("detail", "")).strip().lower()
+                except (AttributeError, ValueError):
+                    detail = ""
+                if "office assignment required" in detail:
+                    status = "no_office"
+                elif "not assigned to your office" in detail:
+                    status = "wrong_office"
+                else:
+                    status = "permission_denied"
+                _render_qr_authorization_state(_save_qr_authorization_state(pending_qr_token, status))
+            elif response.status_code == 404:
+                _render_qr_authorization_state(_save_qr_authorization_state(pending_qr_token, "not_found"))
+            else:
+                _render_qr_authorization_state(_save_qr_authorization_state(pending_qr_token, "server_error"))
+        except Exception:
+            _render_qr_authorization_state(_save_qr_authorization_state(pending_qr_token, "server_error"))
+        return True
+
     def refresh_runtime_token_if_needed(force=False):
         nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
         if force:
@@ -365,6 +560,7 @@ def main(page: ft.Page, session=None):
             runtime_token = reset["runtime_token"]
             refresh_token = reset["refresh_token"]
             clear_session_state()
+            _require_qr_reauthentication()
             show_login()
             return
         except Exception:
@@ -381,6 +577,7 @@ def main(page: ft.Page, session=None):
             runtime_token = reset["runtime_token"]
             refresh_token = reset["refresh_token"]
             clear_session_state()
+            _require_qr_reauthentication()
             show_login()
             return
 
@@ -1244,6 +1441,13 @@ def main(page: ft.Page, session=None):
     )
     page.overlay.append(documents_details_dialog)
 
+    pass_document_dialog = ft.AlertDialog(
+        title=ft.Text("Pass Document"),
+        content=ft.Container(content=ft.Text(""), padding=8, width=420),
+        actions=[ft.TextButton("Cancel", on_click=lambda _: close_pass_document_dialog())],
+    )
+    page.overlay.append(pass_document_dialog)
+
     pending_delete_document = None
     documents_delete_dialog = ft.AlertDialog(
         title=ft.Text("Archive Document"),
@@ -1364,9 +1568,25 @@ def main(page: ft.Page, session=None):
     )
     page.overlay.append(qr_label_download_dialog)
 
+    legislative_year_options = [
+        ft.dropdown.Option(str(year))
+        for year in range(datetime.now().year, 1899, -1)
+    ]
+
+    def _parse_legislative_year(value):
+        try:
+            year = int(str(value or "").strip())
+        except (TypeError, ValueError):
+            return None
+        return year if 1000 <= year <= datetime.now().year else None
+
     registration_title = ft.TextField(label="Title", width=680)
     registration_document_number = ft.TextField(label="Legislative Document Number", width=240)
-    registration_series_year = ft.TextField(label="Series Year", width=180)
+    registration_series_year = ft.Dropdown(
+        label="Legislative Year *",
+        width=220,
+        options=legislative_year_options,
+    )
     registration_description = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=3, width=680)
     registration_category = ft.Dropdown(
         label="Category",
@@ -1513,11 +1733,15 @@ def main(page: ft.Page, session=None):
         if not title:
             show_document_notice("Title is required to register a document.")
             return
+        series_year = _parse_legislative_year(registration_series_year.value)
+        if series_year is None:
+            show_document_notice("Legislative Year is required.")
+            return
         payload = {
             "tmp_names": [single_registration_upload["tmp_name"]],
             "title": title,
             "document_number": (registration_document_number.value or "").strip() or None,
-            "series_year": (registration_series_year.value or "").strip() or None,
+            "series_year": series_year,
             "description": (registration_description.value or "").strip() or None,
             "category": (registration_category.value or "").strip() or None,
             "document_type": (registration_document_type.value or "").strip() or None,
@@ -1756,7 +1980,7 @@ def main(page: ft.Page, session=None):
         }
         registration_title.value = ""
         registration_document_number.value = ""
-        registration_series_year.value = ""
+        registration_series_year.value = None
         registration_description.value = ""
         registration_category.value = "Legislation"
         registration_document_type.value = "Ordinance"
@@ -1785,7 +2009,16 @@ def main(page: ft.Page, session=None):
     )
     bulk_common_title = ft.TextField(label="Common Title (optional)", width=320)
     bulk_common_document_number = ft.TextField(label="Legislative Document Number (optional)", width=260)
-    bulk_common_series_year = ft.TextField(label="Series Year (optional)", width=180)
+    bulk_apply_series_year = ft.Dropdown(
+        label="Apply Year to All",
+        width=190,
+        options=legislative_year_options,
+    )
+    bulk_apply_year_button = ft.OutlinedButton(
+        "Apply",
+        icon=ft.Icons.CHECK,
+        on_click=lambda _: _apply_bulk_year_to_all(),
+    )
     bulk_common_description = ft.TextField(label="Common Description", multiline=True, min_lines=2, max_lines=3, width=320)
     bulk_common_category = ft.Dropdown(label="Category", width=210, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")], value="Legislation")
     bulk_common_document_type = ft.Dropdown(label="Document Type", width=210, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")], value="Ordinance")
@@ -1808,13 +2041,25 @@ def main(page: ft.Page, session=None):
             size_bytes = item.get("size")
             size_text = f"{size_bytes / 1024:.0f} KB" if isinstance(size_bytes, (int, float)) and size_bytes > 0 else "Size unavailable"
             status_control = ft.Text(status_text, size=11, color=ft.Colors.GREEN_700 if status_text == "Ready" else ft.Colors.BLUE_GREY_700)
+            def update_file_year(e, target=item):
+                target["series_year"] = e.control.value
+                e.control.error_text = None
+
+            year_control = ft.Dropdown(
+                label="Year *",
+                width=112,
+                options=legislative_year_options,
+                value=str(item.get("series_year") or ""),
+                on_change=update_file_year,
+            )
             row_controls = [
                 ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=18, color=ft.Colors.BLUE_700),
-                ft.Container(content=ft.Text(item.get("name", "-"), size=12, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS), width=190, alignment=ft.Alignment.CENTER_LEFT),
+                ft.Container(content=ft.Text(item.get("name", "-"), size=12, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS), width=140, alignment=ft.Alignment.CENTER_LEFT),
+                year_control,
                 ft.Text(size_text, size=11, color=ft.Colors.BLUE_GREY_600),
                 status_control,
             ]
-            progress_control = ft.ProgressBar(value=item.get("progress", 0.0), width=100)
+            progress_control = ft.ProgressBar(value=item.get("progress", 0.0), width=70)
             row_controls.append(progress_control)
             row_controls.append(ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove file", on_click=lambda e, nm=item.get("tmp_name"): _remove_tmp_file(nm)))
             bulk_selected_list.controls.append(
@@ -1825,12 +2070,22 @@ def main(page: ft.Page, session=None):
                 )
             )
             item["_status_control"] = status_control
+            item["_year_control"] = year_control
             item["_progress_control"] = progress_control
         page.update()
 
     def _remove_tmp_file(tmp_name):
         nonlocal bulk_import_files
         bulk_import_files = [i for i in bulk_import_files if i.get("tmp_name") != tmp_name]
+        _render_bulk_selected_list()
+
+    def _apply_bulk_year_to_all():
+        year = _parse_legislative_year(bulk_apply_series_year.value)
+        if year is None:
+            show_document_notice("Choose a valid Legislative Year to apply.")
+            return
+        for item in bulk_import_files:
+            item["series_year"] = str(year)
         _render_bulk_selected_list()
 
     def _start_bulk_uploads():
@@ -1906,7 +2161,7 @@ def main(page: ft.Page, session=None):
             body = resp.json()
             for info in body.get("files", []):
                 if not info.get("ok"):
-                    bulk_import_files.append({"name": info.get("filename"), "size": 0, "tmp_name": None, "path": None, "file_bytes": None, "selected_file_source": None, "upload_url": None, "upload_token": None, "upload_name": None, "status": f"Rejected: {info.get('reason')}", "progress": 0.0})
+                    bulk_import_files.append({"name": info.get("filename"), "size": 0, "tmp_name": None, "path": None, "file_bytes": None, "selected_file_source": None, "upload_url": None, "upload_token": None, "upload_name": None, "series_year": None, "status": f"Rejected: {info.get('reason')}", "progress": 0.0})
                     continue
                 name = info.get("filename")
                 tmp_name = info.get("tmp_name")
@@ -1940,6 +2195,7 @@ def main(page: ft.Page, session=None):
                     "upload_name": upload_name,
                     "selected_file_id": selected.get("id"),
                     "selected_file_key": selected.get("key"),
+                    "series_year": None,
                     "status": "Queued",
                     "progress": 0.0,
                 })
@@ -1994,7 +2250,7 @@ def main(page: ft.Page, session=None):
         _render_bulk_selected_list()
         bulk_common_title.value = ""
         bulk_common_document_number.value = ""
-        bulk_common_series_year.value = ""
+        bulk_apply_series_year.value = None
         bulk_common_description.value = ""
         bulk_common_assigned_to.value = ""
         bulk_common_author.value = ""
@@ -2063,8 +2319,9 @@ def main(page: ft.Page, session=None):
                 bulk_upload_area,
                 ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
                 bulk_section_label("2. Common Document Information", "These details will be applied to all uploaded documents."),
+                ft.Row([bulk_apply_series_year, bulk_apply_year_button], spacing=8, wrap=True),
                 ft.Row([bulk_common_title, bulk_common_description], spacing=12, wrap=True),
-                ft.Row([bulk_common_document_number, bulk_common_series_year], spacing=12, wrap=True),
+                bulk_common_document_number,
                 ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
                 bulk_section_label("3. Document Details", "Set the classification and assignment for all uploaded documents."),
                 ft.Row([bulk_common_category, bulk_common_document_type, bulk_common_priority], spacing=12, wrap=True),
@@ -2111,16 +2368,47 @@ def main(page: ft.Page, session=None):
         except Exception as exc:
             show_document_notice(f"Bulk validation failed: {exc}")
 
+    def _missing_bulk_year_files():
+        return [
+            item for item in bulk_import_files
+            if _parse_legislative_year(item.get("series_year")) is None
+        ]
+
+    def _show_missing_bulk_years(items):
+        missing_names = []
+        for item in items:
+            name = item.get("name") or "Unnamed file"
+            missing_names.append(name)
+            control = item.get("_year_control")
+            if control is not None:
+                control.error_text = "Required"
+        show_document_notice(
+            "Cannot complete bulk registration.\n\n"
+            "The following documents are missing a Legislative Year:\n"
+            + "\n".join(f"- {name}" for name in missing_names)
+        )
+        page.update()
+
     def _confirm_bulk_register():
         if not bulk_import_files:
             show_document_notice("No files to register")
             return
+        missing_years = _missing_bulk_year_files()
+        if missing_years:
+            _show_missing_bulk_years(missing_years)
+            return
         tmp_names = [i.get("tmp_name") for i in bulk_import_files]
         payload = {
             "tmp_names": tmp_names,
+            "documents": [
+                {
+                    "tmp_name": item.get("tmp_name"),
+                    "series_year": _parse_legislative_year(item.get("series_year")),
+                }
+                for item in bulk_import_files
+            ],
             "title": (bulk_common_title.value or None),
             "document_number": (bulk_common_document_number.value or "").strip() or None,
-            "series_year": (bulk_common_series_year.value or "").strip() or None,
             "description": (bulk_common_description.value or None),
             "category": (bulk_common_category.value or None),
             "document_type": (bulk_common_document_type.value or None),
@@ -2132,7 +2420,11 @@ def main(page: ft.Page, session=None):
         try:
             response = requests.post(f"{BACKEND_URL}/documents/bulk-register/confirm_tmp", json=payload, headers=get_admin_headers(), verify=False, timeout=180)
             if response.status_code != 200:
-                raise Exception(response.text)
+                try:
+                    detail = response.json().get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise Exception(detail)
             result = response.json()
             duplicate_errors = [error for error in result.get("errors", []) if error.get("duplicate")]
             for error in duplicate_errors:
@@ -2166,11 +2458,15 @@ def main(page: ft.Page, session=None):
         if not title:
             show_document_notice("Title is required to register a document.")
             return
+        series_year = _parse_legislative_year(registration_series_year.value)
+        if series_year is None:
+            show_document_notice("Legislative Year is required.")
+            return
 
         payload = {
             "title": title,
             "document_number": (registration_document_number.value or "").strip() or None,
-            "series_year": (registration_series_year.value or "").strip() or None,
+            "series_year": series_year,
             "description": (registration_description.value or "").strip() or None,
             "category": (registration_category.value or "").strip() or None,
             "document_type": (registration_document_type.value or "").strip() or None,
@@ -2758,6 +3054,231 @@ def main(page: ft.Page, session=None):
         page.snack_bar = ft.SnackBar(ft.Text(message), open=True)
         page.update()
 
+    def close_pass_document_dialog():
+        pass_document_dialog.open = False
+        page.update()
+
+    def open_pass_document_dialog(document):
+        if not isinstance(document, dict):
+            show_document_notice("No document selected for handoff.")
+            return
+        if not is_employee() or not has_permission("pass_office_documents"):
+            show_document_notice("You do not have permission to pass this document.")
+            return
+
+        document_id = document.get("id")
+        if not document_id:
+            show_document_notice("This document cannot be passed because it is missing an ID.")
+            return
+
+        office_loading = ft.Text("Loading available offices...", size=12, color=ft.Colors.BLUE_GREY_600)
+        office_error = ft.Text("", size=12, color=ft.Colors.RED_700)
+        office_selector = ft.Dropdown(
+            label="Receiving Office",
+            width=400,
+            disabled=True,
+            options=[],
+            on_change=lambda _: submit_button.update() if False else None,
+        )
+        submit_button = ft.Button(
+            "Pass Document",
+            bgcolor=ft.Colors.BLUE_700,
+            color=ft.Colors.WHITE,
+            disabled=True,
+            on_click=lambda _: None,
+        )
+
+        def refresh_submit_button_state():
+            submit_button.disabled = office_selector.disabled or office_selector.value in (None, "")
+            if hasattr(pass_document_dialog, "update"):
+                pass_document_dialog.update()
+
+        office_selector.on_change = lambda _: refresh_submit_button_state()
+
+        def load_available_offices():
+            office_selector.options = []
+            office_selector.disabled = True
+            office_selector.value = None
+            office_loading.value = "Loading available offices..."
+            office_error.value = ""
+            refresh_submit_button_state()
+            page.update()
+            try:
+                headers = {}
+                if runtime_token:
+                    headers["Authorization"] = f"Bearer {runtime_token}"
+                if not runtime_token:
+                    refresh_runtime_token_if_needed(force=True)
+                    if runtime_token:
+                        headers["Authorization"] = f"Bearer {runtime_token}"
+                if not runtime_token:
+                    raise RuntimeError("Your session has expired. Please sign in again.")
+                response = requests.get(
+                    f"{BACKEND_URL}/offices/available-for-handoff",
+                    headers=headers,
+                    verify=False,
+                    timeout=15,
+                )
+                if response.status_code == 401:
+                    refresh_runtime_token_if_needed(force=True)
+                    if not runtime_token:
+                        raise RuntimeError("Your session has expired. Please sign in again.")
+                    headers = {"Authorization": f"Bearer {runtime_token}"}
+                    response = requests.get(
+                        f"{BACKEND_URL}/offices/available-for-handoff",
+                        headers=headers,
+                        verify=False,
+                        timeout=15,
+                    )
+                if response.status_code != 200:
+                    try:
+                        detail = response.json().get("detail") if response.headers.get("content-type", "").startswith("application/json") else str(response.text)
+                    except Exception:
+                        detail = str(response.text)
+                    raise RuntimeError(detail or "Unable to load available offices.")
+                offices = response.json() or []
+                options = []
+                for item in offices:
+                    office_name = item.get("name") or "Unknown Office"
+                    office_code = item.get("office_code")
+                    label = office_name if not office_code else f"{office_name} ({office_code})"
+                    options.append(ft.dropdown.Option(key=str(item.get("id")), text=label))
+                office_selector.options = options
+                office_selector.disabled = False
+                if not options:
+                    office_loading.value = "No receiving offices are available for this document."
+                    office_selector.value = None
+                    submit_button.disabled = True
+                else:
+                    office_loading.value = f"{len(options)} office(s) available for handoff."
+                    office_selector.value = None
+                    submit_button.disabled = True
+                page.update()
+            except Exception as exc:
+                office_error.value = str(exc) if str(exc) else "Unable to load receiving offices."
+                office_loading.value = ""
+                office_selector.options = []
+                office_selector.disabled = True
+                office_selector.value = None
+                submit_button.disabled = True
+                page.update()
+
+        def submit_handoff(_):
+            selected_office_id = office_selector.value
+            if selected_office_id in (None, ""):
+                office_error.value = "Please select a receiving office before continuing."
+                page.update()
+                return
+            if not isinstance(document, dict):
+                office_error.value = "This document is no longer available to pass."
+                page.update()
+                return
+
+            selected_office_name = next(
+                (option.text for option in office_selector.options if str(option.key) == str(selected_office_id)),
+                "the selected office",
+            )
+            submit_button.disabled = True
+            office_loading.value = "Submitting handoff..."
+            office_error.value = ""
+            page.update()
+            try:
+                headers = {}
+                if runtime_token:
+                    headers["Authorization"] = f"Bearer {runtime_token}"
+                if not runtime_token:
+                    refresh_runtime_token_if_needed(force=True)
+                    if runtime_token:
+                        headers["Authorization"] = f"Bearer {runtime_token}"
+                if not runtime_token:
+                    raise RuntimeError("Your session has expired. Please sign in again.")
+                response = requests.post(
+                    f"{BACKEND_URL}/documents/{document_id}/handoffs",
+                    json={"receiving_office_id": int(selected_office_id)},
+                    headers=headers,
+                    verify=False,
+                    timeout=20,
+                )
+                if response.status_code == 401:
+                    refresh_runtime_token_if_needed(force=True)
+                    if not runtime_token:
+                        raise RuntimeError("Your session has expired. Please sign in again.")
+                    headers = {"Authorization": f"Bearer {runtime_token}"}
+                    response = requests.post(
+                        f"{BACKEND_URL}/documents/{document_id}/handoffs",
+                        json={"receiving_office_id": int(selected_office_id)},
+                        headers=headers,
+                        verify=False,
+                        timeout=20,
+                    )
+                if response.status_code == 200:
+                    close_pass_document_dialog()
+                    show_document_notice(
+                        f"Document {document.get('tracking_number') or document_id} has been passed to {selected_office_name}. Status: Pending Receipt"
+                    )
+                    try:
+                        if callable(office_dashboard_refresh):
+                            office_dashboard_refresh()
+                    except Exception:
+                        pass
+                    try:
+                        show_document_details(document)
+                    except Exception:
+                        pass
+                    return
+
+                try:
+                    payload = response.json()
+                    detail = str(payload.get("detail") or payload.get("message") or response.text)
+                except Exception:
+                    detail = str(response.text)
+                lower_detail = detail.lower()
+                if response.status_code == 403:
+                    office_error.value = detail or "You are not authorized to pass this document."
+                elif response.status_code == 404:
+                    office_error.value = "The selected document or receiving office could not be found."
+                elif response.status_code == 409:
+                    if "pending" in lower_detail or "already exists" in lower_detail:
+                        office_error.value = "This document already has a pending handoff and cannot be passed again until it is received."
+                    else:
+                        office_error.value = detail or "The selected receiving office is not available for this handoff."
+                else:
+                    office_error.value = detail or "Unable to pass the document right now. Please try again."
+                office_loading.value = ""
+                submit_button.disabled = False
+                page.update()
+            except Exception as exc:
+                office_error.value = str(exc) or "Unable to pass the document right now. Please try again."
+                office_loading.value = ""
+                submit_button.disabled = False
+                page.update()
+
+        submit_button.on_click = submit_handoff
+        pass_document_dialog.title = ft.Text("Pass Document")
+        pass_document_dialog.content = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(f"Document: {document.get('tracking_number') or document.get('id') or '—'}", size=12, weight=ft.FontWeight.W_600),
+                    ft.Text(f"Title: {document.get('title') or '—'}", size=12, color=ft.Colors.BLUE_GREY_700),
+                    office_loading,
+                    office_error,
+                    office_selector,
+                    ft.Text("Review the receiving office and confirm before sending the handoff.", size=11, color=ft.Colors.BLUE_GREY_600),
+                ],
+                spacing=8,
+                tight=True,
+            ),
+            padding=8,
+            width=440,
+        )
+        pass_document_dialog.actions = [
+            ft.TextButton("Cancel", on_click=lambda _: close_pass_document_dialog()),
+            submit_button,
+        ]
+        pass_document_dialog.open = True
+        load_available_offices()
+        page.update()
+
     # File selection for attachment inside Register Document form
     # Uses inline FilePicker coroutine (no overlay append, no separate page)
 
@@ -2962,20 +3483,54 @@ def main(page: ft.Page, session=None):
             show_document_notice(f"QR label download failed: {exc}")
 
     def show_document_details(doc):
+        nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
+        details_endpoint = "/documents/office/" if is_employee() else "/documents/"
+        details_url = f"{BACKEND_URL}{details_endpoint}{doc.get('id')}"
         try:
-            response = requests.get(f"{BACKEND_URL}/documents/{doc.get('id')}", headers=get_admin_headers(), verify=False, timeout=10)
+            headers = get_admin_headers()
+            if is_employee() and not runtime_token:
+                _return_to_login_after_qr_details_401()
+                return False
+            response = requests.get(details_url, headers=headers, verify=False, timeout=10)
+            if is_employee() and response.status_code == 401:
+                refresh_runtime_token_if_needed(force=True)
+                if not runtime_token:
+                    _return_to_login_after_qr_details_401()
+                    return False
+                response = requests.get(
+                    details_url,
+                    headers={"Authorization": f"Bearer {runtime_token}"},
+                    verify=False,
+                    timeout=10,
+                )
+                if response.status_code == 401:
+                    _return_to_login_after_qr_details_401()
+                    return False
             if response.status_code == 200:
-                doc = normalize_document(response.json())
+                response_document = response.json()
+                doc = normalize_document(response_document)
+                if is_employee():
+                    for field in (
+                        "qr_token",
+                        "document_number",
+                        "series_year",
+                        "office_receipt_status",
+                        "office_receipt_confirmed_at",
+                    ):
+                        doc[field] = response_document.get(field)
             else:
                 raise Exception(response.text)
         except Exception as exc:
             show_document_notice(f"Unable to load document details: {exc}")
-            return
+            return False
 
         qr_image = ft.Image(width=220, height=220, fit=ft.ImageFit.CONTAIN)
 
         def update_qr_image(document_id: int | None):
             if not document_id:
+                qr_image.src_base64 = ""
+                return
+            if is_employee() and not has_permission("view_qr_tracking"):
                 qr_image.src_base64 = ""
                 return
             try:
@@ -2994,6 +3549,119 @@ def main(page: ft.Page, session=None):
 
         update_qr_image(doc.get("id"))
         status_color, status_bg = get_document_status_style(doc.get("status", "Pending"))
+        receipt_history_panel = ft.Column([
+            ft.Text("Loading receipt history...", size=12, color=ft.Colors.BLUE_GREY_600),
+        ], spacing=8)
+        confirmed_at = doc.get("office_receipt_confirmed_at")
+        if confirmed_at:
+            try:
+                confirmed_at = datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
+            except ValueError:
+                confirmed_at = str(confirmed_at)
+        receipt_status_text = ft.Text(
+            f"Receipt Status: {doc.get('office_receipt_status') or 'Not Yet Received'}"
+            + (f" · {confirmed_at}" if confirmed_at else ""),
+            size=12,
+            weight=ft.FontWeight.BOLD,
+            color=ft.Colors.GREEN_700 if doc.get("office_receipt_status") not in (None, "Not Yet Received") else ft.Colors.BLUE_GREY_700,
+        )
+
+        def load_receipt_history(document_id: int | None):
+            has_history_access = has_permission("view_office_history")
+            if not document_id or not has_history_access:
+                receipt_history_panel.controls = [
+                    ft.Text("No receipt history available for this account.", size=12, color=ft.Colors.BLUE_GREY_600),
+                ]
+                return
+            headers = get_admin_headers()
+            try:
+                response = requests.get(f"{BACKEND_URL}/documents/{document_id}/receipts", headers=headers, verify=False, timeout=15)
+                if response.status_code != 200:
+                    raise Exception(response.text)
+                items = response.json().get("receipts") or []
+                if not items:
+                    receipt_history_panel.controls = [
+                        ft.Text("No Receipt History", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                        ft.Text("This document has not yet been received by your office.", size=12, color=ft.Colors.BLUE_GREY_600),
+                    ]
+                    return
+                rows = []
+                for item in items:
+                    confirmed_by = item.get("confirmed_by") or {}
+                    confirmed_at = item.get("confirmed_at")
+                    try:
+                        if confirmed_at:
+                            parsed = datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00"))
+                            confirmed_label = parsed.strftime("%b %d, %Y %I:%M %p")
+                        else:
+                            confirmed_label = "—"
+                    except Exception:
+                        confirmed_label = str(confirmed_at) if confirmed_at else "—"
+                    rows.append(
+                        ft.Column([
+                            ft.Text((item.get("status") or "Received").title(), size=12, weight=ft.FontWeight.W_600, color=ft.Colors.GREEN_700),
+                            ft.Row([
+                                ft.Text("Confirmed By", size=11, color=ft.Colors.BLUE_GREY_600, width=120),
+                                ft.Text(str(confirmed_by.get("full_name") or confirmed_by.get("username") or "Unknown user"), size=12),
+                            ], vertical_alignment=ft.CrossAxisAlignment.START),
+                            ft.Row([
+                                ft.Text("Office", size=11, color=ft.Colors.BLUE_GREY_600, width=120),
+                                ft.Text(str(item.get("office_name") or "—"), size=12),
+                            ], vertical_alignment=ft.CrossAxisAlignment.START),
+                            ft.Row([
+                                ft.Text("Confirmed", size=11, color=ft.Colors.BLUE_GREY_600, width=120),
+                                ft.Text(confirmed_label, size=12),
+                            ], vertical_alignment=ft.CrossAxisAlignment.START),
+                        ], spacing=4)
+                    )
+                receipt_history_panel.controls = [
+                    ft.Text("Receipt History", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                    *rows,
+                ]
+            except Exception:
+                receipt_history_panel.controls = [
+                    ft.Text("Unable to load receipt history.", size=12, color=ft.Colors.RED_700),
+                ]
+
+        def confirm_receipt(_):
+            qr_token = doc.get("qr_token")
+            if not qr_token:
+                show_document_notice("This document does not have a valid QR identity.")
+                return
+            try:
+                response = requests.post(
+                    f"{BACKEND_URL}/documents/qr/{quote(str(qr_token), safe='')}/receipt",
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=15,
+                )
+                if response.status_code != 200:
+                    raise Exception("Receipt confirmation was denied.")
+                show_document_details(doc)
+            except Exception:
+                show_document_notice("Unable to confirm receipt.")
+
+        receipt_action = ft.FilledButton(
+            "Confirm Receipt",
+            icon=ft.Icons.CHECK_CIRCLE_OUTLINE,
+            on_click=confirm_receipt,
+        ) if (
+            is_employee()
+            and has_permission("confirm_document_receipt")
+            and has_permission("scan_qr")
+            and doc.get("office_receipt_status") in (None, "Not Yet Received")
+        ) else None
+
+        pass_document_action = ft.OutlinedButton(
+            "Pass Document",
+            icon=ft.Icons.SEND_OUTLINED,
+            on_click=lambda _: open_pass_document_dialog(doc),
+        ) if (
+            is_employee()
+            and has_permission("pass_office_documents")
+            and doc.get("office_receipt_status") not in ("Pending Receipt", "Received")
+        ) else None
+
         details_content = ft.Column(
             [
                 ft.Row(
@@ -3018,6 +3686,8 @@ def main(page: ft.Page, session=None):
                 ),
                 ft.Divider(height=1),
                 ft.Text(doc.get("description", "No description provided."), size=13, color=ft.Colors.BLUE_GREY_700),
+                receipt_status_text,
+                *([ft.Row([pass_document_action, receipt_action] if pass_document_action and receipt_action else ([pass_document_action] if pass_document_action else [receipt_action]), spacing=8)] if (pass_document_action or receipt_action) else []),
                 ft.Row(
                     [
                         ft.Column([ft.Text("Legislative Document Number", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("document_number") or "-", size=13)], spacing=2, expand=True),
@@ -3032,27 +3702,27 @@ def main(page: ft.Page, session=None):
                     ],
                     spacing=16,
                 ),
-                ft.Row(
+                *([] if is_employee() else [ft.Row(
                     [
                         ft.Column([ft.Text("Originating Office", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("originating_office", "-"), size=13)], spacing=2, expand=True),
                         ft.Column([ft.Text("Current Office", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("current_office", "-"), size=13)], spacing=2, expand=True),
                     ],
                     spacing=16,
-                ),
-                ft.Row(
+                )]),
+                *([] if is_employee() else [ft.Row(
                     [
                         ft.Column([ft.Text("Assigned User", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("assigned_to", "-"), size=13)], spacing=2, expand=True),
                         ft.Column([ft.Text("Priority", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("priority", "-"), size=13)], spacing=2, expand=True),
                     ],
                     spacing=16,
-                ),
+                )]),
                 ft.Row(
                     [
-                        ft.Column([ft.Text("QR Code", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("qr_code_value", "-"), size=13)], spacing=2, expand=True),
+                        ft.Column([ft.Text("QR Code", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("canonical_qr_url") or doc.get("qr_code_value", "-"), size=13)], spacing=2, expand=True),
                     ],
                     spacing=16,
                 ),
-                ft.Row(
+                *([] if is_employee() and not has_permission("view_qr_tracking") else [ft.Row(
                     [
                         ft.Column(
                             [
@@ -3073,33 +3743,43 @@ def main(page: ft.Page, session=None):
                         ),
                     ],
                     spacing=16,
-                ),
-                ft.Row(
+                )]),
+                *([] if is_employee() else [ft.Row(
                     [
                         ft.Column([ft.Text("Author", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("author", "-"), size=13)], spacing=2, expand=True),
                         ft.Column([ft.Text("Session", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("session", "-"), size=13)], spacing=2, expand=True),
                     ],
                     spacing=16,
-                ),
+                )]),
                 ft.Row(
                     [
                         ft.Column([ft.Text("Date Registered", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("date_registered", doc.get("date_received", "-")), size=13)], spacing=2, expand=True),
-                        ft.Column([ft.Text("Created By", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("created_by", "-"), size=13)], spacing=2, expand=True),
+                        *([] if is_employee() else [ft.Column([ft.Text("Created By", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("created_by", "-"), size=13)], spacing=2, expand=True)]),
                     ],
                     spacing=16,
                 ),
-                ft.Row(
+                *([] if is_employee() else [ft.Row(
                     [
                         ft.Column([ft.Text("Attachment", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("attachment_name", "-"), size=13)], spacing=2, expand=True),
                         ft.Column([ft.Text("Updated Date", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("last_updated", "-"), size=13)], spacing=2, expand=True),
                     ],
                     spacing=16,
-                ),
-                ft.Row(
+                )]),
+                *([] if is_employee() else [ft.Row(
                     [
                         ft.Column([ft.Text("Public Visibility", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text("Public" if doc.get("is_public") else "Private", size=13)], spacing=2, expand=True),
                     ],
                     spacing=16,
+                )]),
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text("Receipt History", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                        receipt_history_panel,
+                    ], spacing=8),
+                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                    border_radius=12,
+                    padding=12,
+                    bgcolor=ft.Colors.BLUE_GREY_50,
                 ),
             ],
             spacing=12,
@@ -3107,7 +3787,9 @@ def main(page: ft.Page, session=None):
         )
         documents_details_dialog.content = ft.Container(content=details_content, padding=8, width=540)
         documents_details_dialog.open = True
+        load_receipt_history(doc.get("id"))
         page.update()
+        return True
 
     # QR generation/print functionality removed from frontend.
 
@@ -3181,6 +3863,7 @@ def main(page: ft.Page, session=None):
             "author": doc.get("author") or "-",
             "session": doc.get("session") or "-",
             "date_registered": doc.get("date_registered") or doc.get("created_at") or "-",
+            "canonical_qr_url": doc.get("canonical_qr_url") or doc.get("qr_code_value") or "-",
             "attachment_name": doc.get("attachment_name") or "-",
             "remarks": doc.get("remarks") or "",
             "attachments": doc.get("attachments") or [],
@@ -3513,18 +4196,26 @@ def main(page: ft.Page, session=None):
                             content=ft.Column(
                                 [
                                     ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13),
-                                    ft.Text(
-                                        f"No. {doc.get('document_number')} / {doc.get('series_year')}"
+                                    *(
+                                        [
+                                            ft.Text(
+                                                f"No. {doc.get('document_number')} / {doc.get('series_year')}",
+                                                size=10,
+                                                color=ft.Colors.BLUE_GREY_600,
+                                            )
+                                        ]
                                         if doc.get("document_number") or doc.get("series_year")
-                                        else "Legislative number/year not set",
-                                        size=10,
-                                        color=ft.Colors.BLUE_GREY_600,
+                                        else []
                                     ),
                                 ],
                                 spacing=1,
+                                height=32,
+                                alignment=ft.MainAxisAlignment.START,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                width=120,
                             ),
                             width=120,
-                            alignment=ft.Alignment.CENTER_LEFT,
+                            alignment=ft.Alignment.CENTER,
                         )),
                         title_cell,
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
@@ -3613,18 +4304,26 @@ def main(page: ft.Page, session=None):
                             content=ft.Column(
                                 [
                                     ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13),
-                                    ft.Text(
-                                        f"No. {doc.get('document_number')} / {doc.get('series_year')}"
+                                    *(
+                                        [
+                                            ft.Text(
+                                                f"No. {doc.get('document_number')} / {doc.get('series_year')}",
+                                                size=10,
+                                                color=ft.Colors.BLUE_GREY_600,
+                                            )
+                                        ]
                                         if doc.get("document_number") or doc.get("series_year")
-                                        else "Legislative number/year not set",
-                                        size=10,
-                                        color=ft.Colors.BLUE_GREY_600,
+                                        else []
                                     ),
                                 ],
                                 spacing=1,
+                                height=32,
+                                alignment=ft.MainAxisAlignment.START,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                width=120,
                             ),
                             width=120,
-                            alignment=ft.Alignment.CENTER_LEFT,
+                            alignment=ft.Alignment.CENTER,
                         )),
                         title_cell,
                         ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
@@ -3722,18 +4421,26 @@ def main(page: ft.Page, session=None):
                             content=ft.Column(
                                 [
                                     ft.Text(str(doc.get("tracking_number", doc.get("id", "-"))), size=13),
-                                    ft.Text(
-                                        f"No. {doc.get('document_number')} / {doc.get('series_year')}"
+                                    *(
+                                        [
+                                            ft.Text(
+                                                f"No. {doc.get('document_number')} / {doc.get('series_year')}",
+                                                size=10,
+                                                color=ft.Colors.BLUE_GREY_600,
+                                            )
+                                        ]
                                         if doc.get("document_number") or doc.get("series_year")
-                                        else "Legislative number/year not set",
-                                        size=10,
-                                        color=ft.Colors.BLUE_GREY_600,
+                                        else []
                                     ),
                                 ],
                                 spacing=1,
+                                height=32,
+                                alignment=ft.MainAxisAlignment.START,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                width=140,
                             ),
                             width=140,
-                            alignment=ft.Alignment.CENTER_LEFT,
+                            alignment=ft.Alignment.CENTER,
                         )),
                         ft.DataCell(ft.Tooltip(message=archive_title, content=ft.Container(content=ft.Text(archive_title, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=300, padding=ft.Padding(left=4, top=0, right=4, bottom=0), alignment=ft.Alignment.CENTER_LEFT))),
                         ft.DataCell(ft.Container(content=ft.Text(str(doc.get("document_type", "-")), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
@@ -4720,6 +5427,7 @@ def main(page: ft.Page, session=None):
         )
 
     office_options = []
+    office_management_data = []
 
     def load_office_options():
         nonlocal office_options
@@ -4737,9 +5445,25 @@ def main(page: ft.Page, session=None):
             office_options = []
             page.snack_bar = ft.SnackBar(ft.Text(f"Unable to load offices: {exc}"), open=True)
 
+    def load_office_management_data():
+        nonlocal office_management_data
+        try:
+            response = requests.get(
+                f"{BACKEND_URL}/offices",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=20,
+            )
+            if response.status_code != 200:
+                raise Exception(response.text)
+            office_management_data = response.json() if response.content else []
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Unable to load office management: {exc}"), open=True)
+
     def refresh_office_filter_options():
         selected = user_office_filter.value or "All"
-        names = [item.get("name") for item in office_options if item.get("name")]
+        source = office_management_data or office_options
+        names = [item.get("name") for item in source if item.get("name")]
         user_office_filter.options = [ft.dropdown.Option("All")] + [ft.dropdown.Option(name) for name in names]
         user_office_filter.value = selected if selected == "All" or selected in names else "All"
 
@@ -4770,6 +5494,7 @@ def main(page: ft.Page, session=None):
     user_management_data = []
 
     user_table_holder = ft.Container(width="100%")
+    office_table_holder = ft.Container(width="100%")
     user_no_users_notice = ft.Container(width="100%", visible=False)
 
     def update_users_role_view(_=None):
@@ -4781,11 +5506,17 @@ def main(page: ft.Page, session=None):
             lambda item=None: open_reset_password_dialog(item or visible_users[0] if visible_users else {}),
             lambda item=None: delete_user(item or visible_users[0] if visible_users else {}),
         )
+        office_table_holder.content = build_offices_table(
+            office_management_data,
+            open_edit_office_dialog,
+            open_view_office_users_dialog,
+        )
         user_no_users_notice.visible = len(visible_users) == 0
         page.update()
 
     def refresh_user_management_data(_=None):
         load_office_options()
+        load_office_management_data()
         refresh_office_filter_options()
         load_user_management_data()
 
@@ -4908,6 +5639,7 @@ def main(page: ft.Page, session=None):
 
     def users_roles_view():
         load_office_options()
+        load_office_management_data()
         refresh_office_filter_options()
         load_user_management_data()
         visible_users = filter_user_data()
@@ -4938,17 +5670,153 @@ def main(page: ft.Page, session=None):
             section_header,
             user_table_holder,
             user_no_users_notice,
+            offices_data=office_management_data,
+            create_office=open_create_office_dialog,
+            edit_office=open_edit_office_dialog,
+            view_office_users=open_view_office_users_dialog,
+            office_table_holder=office_table_holder,
+            create_employee=lambda _: open_create_user_dialog(employee_only=True),
         )
         update_users_role_view()
         return view
 
-    def open_create_user_dialog():
+    def refresh_office_data():
+        load_office_options()
+        load_office_management_data()
+        refresh_office_filter_options()
+        load_user_management_data()
+
+    def open_office_form_dialog(office=None):
+        editing = office is not None
+        office_name = ft.TextField(label="Office Name", value=(office or {}).get("name", ""), autofocus=True)
+        office_code = ft.TextField(label="Office Code", value=(office or {}).get("office_code", ""))
+        office_status = ft.Dropdown(
+            label="Status",
+            options=[ft.dropdown.Option("Active"), ft.dropdown.Option("Inactive")],
+            value="Active" if not editing or office.get("is_active") else "Inactive",
+        )
+        error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
+
+        def save_office(_):
+            if not office_name.value or not office_name.value.strip() or not office_code.value or not office_code.value.strip():
+                error_message.value = "Office name and office code are required."
+                page.update()
+                return
+            payload = {
+                "name": office_name.value.strip(),
+                "office_code": office_code.value.strip(),
+                "is_active": office_status.value == "Active",
+            }
+            try:
+                response = requests.put(
+                    f"{BACKEND_URL}/offices/{office.get('id')}",
+                    json=payload,
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=20,
+                ) if editing else requests.post(
+                    f"{BACKEND_URL}/offices",
+                    json=payload,
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=20,
+                )
+                if response.status_code not in (200, 201):
+                    try:
+                        detail = response.json().get("detail", response.text)
+                    except Exception:
+                        detail = response.text
+                    raise Exception(detail)
+                close_dialog(dialog)
+                refresh_office_data()
+            except Exception as exc:
+                error_message.value = f"Unable to {'update' if editing else 'create'} office: {exc}"
+                page.update()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Edit Office" if editing else "Add Office"),
+            content=ft.Column([office_name, office_code, office_status, error_message], tight=True, spacing=10),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                ft.Button(
+                    "Save Changes" if editing else "Create Office",
+                    on_click=save_office,
+                    bgcolor=ft.Colors.BLUE_800,
+                    color=ft.Colors.WHITE,
+                ),
+            ],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def open_create_office_dialog(_=None):
+        open_office_form_dialog()
+
+    def open_edit_office_dialog(office):
+        open_office_form_dialog(office)
+
+    def open_view_office_users_dialog(office):
+        try:
+            response = requests.get(
+                f"{BACKEND_URL}/offices/{office.get('id')}/users",
+                headers=get_admin_headers(),
+                verify=False,
+                timeout=20,
+            )
+            if response.status_code != 200:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise Exception(detail)
+            office_users = response.json() if response.content else []
+        except Exception as exc:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Unable to load office users: {exc}"), open=True)
+            page.update()
+            return
+        user_rows = [
+            ft.DataRow(
+                cells=[
+                    ft.DataCell(ft.Text(user.get("full_name") or user.get("username") or "-")),
+                    ft.DataCell(ft.Text(user.get("username") or "-")),
+                    ft.DataCell(ft.Text(user.get("role") or "-")),
+                    ft.DataCell(ft.Text(user.get("status") or "-")),
+                ]
+            )
+            for user in office_users
+        ]
+        content = (
+            ft.Row(
+                [
+                    ft.DataTable(
+                        columns=[ft.DataColumn(ft.Text(label)) for label in ("Name", "Username", "Role", "Status")],
+                        rows=user_rows,
+                    )
+                ],
+                scroll=ft.ScrollMode.AUTO,
+            )
+            if office_users
+            else ft.Text("No users are assigned to this office.", size=13, color=ft.Colors.BLUE_GREY_600)
+        )
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Users in {office.get('name') or 'Office'}"),
+            content=ft.Container(content=content, width=760),
+            actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def open_create_user_dialog(employee_only=False):
         full_name = ft.TextField(label="Full Name")
         username = ft.TextField(label="Username")
         email = ft.TextField(label="Email")
         password = ft.TextField(label="Temporary Password", password=True, can_reveal_password=True)
         confirm_password = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True)
-        role_choice = ft.Dropdown(
+        role_choice = None if employee_only else ft.Dropdown(
             label="Role",
             options=[
                 ft.dropdown.Option("Employee"),
@@ -4956,41 +5824,89 @@ def main(page: ft.Page, session=None):
             ],
             value="Employee",
         )
+        office_placeholder = "Select an office" if employee_only else "Unassigned"
         office_choice = ft.Dropdown(
             label="Department/Office",
-            options=[ft.dropdown.Option("Unassigned")] + [
+            options=[ft.dropdown.Option(office_placeholder)] + [
                 ft.dropdown.Option(item["name"])
                 for item in office_options
                 if item.get("name")
             ],
-            value="Unassigned",
+            value=office_placeholder,
         )
 
         permission_area = ft.Column([], spacing=8)
         selected_create_permissions = set()
         create_master_check = ft.Checkbox(label="Select All Permissions", tristate=True, scale=1.05)
+        office_permission_labels = OFFICE_EMPLOYEE_PERMISSION_GROUP["Office Workflow"]
+
+        def selected_role():
+            return "Employee" if employee_only else role_choice.value
 
         def create_permission_key(label):
             return label.strip().lower().replace(" ", "_")
 
+        def create_permission_groups():
+            groups = dict(EMPLOYEE_PERMISSION_GROUPS)
+            if selected_role() == "Employee" and office_choice.value != office_placeholder:
+                groups.update(OFFICE_EMPLOYEE_PERMISSION_GROUP)
+            return groups
+
         def update_create_master():
-            total = sum(len(items) for items in EMPLOYEE_PERMISSION_GROUPS.values())
-            count = len(selected_create_permissions)
+            groups = create_permission_groups()
+            total = sum(len(items) for items in groups.values())
+            count = sum(
+                create_permission_key(label) in selected_create_permissions
+                for labels in groups.values()
+                for label in labels
+            )
             create_master_check.value = True if count == total else None if count else False
 
         def set_all_create_permissions(event):
             selected_create_permissions.clear()
             if event.control.value:
-                selected_create_permissions.update(create_permission_key(label) for labels in EMPLOYEE_PERMISSION_GROUPS.values() for label in labels)
+                selected_create_permissions.update(
+                    create_permission_key(label)
+                    for labels in create_permission_groups().values()
+                    for label in labels
+                )
             render_permission_section()
 
         def render_permission_section():
             permission_area.controls.clear()
-            if role_choice.value == "Employee":
+            office_choice.visible = employee_only or selected_role() == "Employee"
+            if not office_choice.visible:
+                office_choice.value = office_placeholder
+            if employee_only:
+                has_office = office_choice.value != office_placeholder
+                permission_area.controls.extend([
+                    ft.Text("Office Access", weight=ft.FontWeight.BOLD, size=14, color=ft.Colors.BLUE_GREY_800),
+                    ft.Text(
+                        "This employee will automatically receive access to:" if has_office else "Select an office to automatically assign the standard office permissions.",
+                        size=12,
+                        color=ft.Colors.BLUE_GREY_600,
+                    ),
+                ])
+                if has_office:
+                    permission_area.controls.append(ft.Column([
+                        ft.Row([
+                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.GREEN_700),
+                            ft.Text(label, size=12, color=ft.Colors.BLUE_GREY_800),
+                        ], spacing=8)
+                        for label in office_permission_labels
+                    ], spacing=4))
+            elif selected_role() == "Employee":
+                permission_groups = create_permission_groups()
+                permission_count = sum(len(items) for items in permission_groups.values())
                 permission_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=16, color=ft.Colors.BLUE_GREY_800))
                 permission_area.controls.append(ft.Text("Control access to the features available to this employee.", size=12, color=ft.Colors.BLUE_GREY_600))
-                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{len(selected_create_permissions)} of {sum(len(items) for items in EMPLOYEE_PERMISSION_GROUPS.values())} permissions selected", size=12)], spacing=12))
-                for section_name, perms in EMPLOYEE_PERMISSION_GROUPS.items():
+                selected_count = sum(
+                    create_permission_key(label) in selected_create_permissions
+                    for labels in permission_groups.values()
+                    for label in labels
+                )
+                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{selected_count} of {permission_count} permissions selected", size=12)], spacing=12))
+                for section_name, perms in permission_groups.items():
                     group_key = section_name
                     group_count = sum(create_permission_key(perm) in selected_create_permissions for perm in perms)
                     group_check = ft.Checkbox(label=f"Select All  •  {group_count} of {len(perms)} selected", tristate=True, value=True if group_count == len(perms) else None if group_count else False, on_change=lambda event, name=group_key: set_create_group(name, event))
@@ -5032,7 +5948,7 @@ def main(page: ft.Page, session=None):
             render_permission_section()
 
         def set_create_group(group_name, event):
-            for label in EMPLOYEE_PERMISSION_GROUPS[group_name]:
+            for label in create_permission_groups()[group_name]:
                 key = create_permission_key(label)
                 if event.control.value:
                     selected_create_permissions.add(key)
@@ -5041,7 +5957,9 @@ def main(page: ft.Page, session=None):
             update_create_master()
             render_permission_section()
 
-        role_choice.on_change = lambda _: render_permission_section()
+        if role_choice is not None:
+            role_choice.on_change = lambda _: render_permission_section()
+        office_choice.on_change = lambda _: render_permission_section()
         create_master_check.on_change = set_all_create_permissions
         render_permission_section()
 
@@ -5051,13 +5969,25 @@ def main(page: ft.Page, session=None):
                 page.update()
                 return
 
-            if password.value != confirm_password.value:
-                error_message.value = "Passwords do not match."
+            if not password.value:
+                error_message.value = "Password is required."
                 page.update()
                 return
 
-            if not password.value:
-                error_message.value = "Password is required."
+            selected_office = next(
+                (
+                    item for item in office_options
+                    if selected_role() == "Employee" and item.get("name") == office_choice.value
+                ),
+                None,
+            )
+            if employee_only and selected_office is None:
+                error_message.value = "Please select a Department/Office."
+                page.update()
+                return
+
+            if password.value != confirm_password.value:
+                error_message.value = "Passwords do not match."
                 page.update()
                 return
 
@@ -5066,23 +5996,23 @@ def main(page: ft.Page, session=None):
                 page.update()
                 return
 
-            permissions = sorted(selected_create_permissions)
-
             payload = {
                 "username": username.value.strip(),
                 "password": password.value,
                 "full_name": full_name.value.strip(),
                 "email": email.value.strip(),
-                "role": role_choice.value,
+                "role": selected_role(),
             }
-            selected_office = next(
-                (item for item in office_options if item.get("name") == office_choice.value),
-                None,
-            )
             if selected_office:
                 payload["office_id"] = selected_office.get("id")
-            if permissions:
-                payload["permissions"] = str(permissions)
+            available_permissions = {
+                create_permission_key(label)
+                for labels in create_permission_groups().values()
+                for label in labels
+            }
+            permissions = sorted(selected_create_permissions & available_permissions)
+            if not employee_only and (permissions or selected_office):
+                payload["permissions"] = permissions
 
             try:
                 response = requests.post(
@@ -5105,17 +6035,17 @@ def main(page: ft.Page, session=None):
                     "full_name": full_name.value,
                     "username": body.get("username", username.value.strip()),
                     "email": email.value,
-                    "role": body.get("role", role_choice.value),
+                    "role": body.get("role") or selected_role(),
                     "office_id": body.get("office_id"),
                     "department": office_choice.value if selected_office else None,
                     "status": "Active",
-                    "permissions": permissions,
+                    "permissions": body.get("permissions", permissions),
                     "last_login": "—",
                     "created": date.today().strftime("%Y-%m-%d"),
                 }
                 user_management_data.append(created_user)
                 close_dialog(dialog)
-                update_users_role_view()
+                refresh_office_data()
             except Exception as exc:
                 error_message.value = f"Account creation failed: {exc}"
                 page.update()
@@ -5125,7 +6055,7 @@ def main(page: ft.Page, session=None):
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Create User Account"),
+            title=ft.Text("Create Employee Account" if employee_only else "Create User Account"),
             content=ft.Container(
                 content=ft.Column([
                     full_name,
@@ -5133,7 +6063,7 @@ def main(page: ft.Page, session=None):
                     email,
                     password,
                     confirm_password,
-                    role_choice,
+                    *([role_choice] if role_choice is not None else []),
                     office_choice,
                     permission_area,
                     error_message,
@@ -5196,6 +6126,17 @@ def main(page: ft.Page, session=None):
         username = ft.TextField(label="Username", value=user.get("username", ""), width=270)
         email = ft.TextField(label="Email", value=user.get("email", ""), width=270)
         is_super_admin = user.get("role") == "Super Administrator"
+        edit_office_options = list(office_options)
+        current_office = next(
+            (item for item in office_management_data if item.get("id") == user.get("office_id")),
+            None,
+        )
+        if current_office and all(item.get("id") != current_office.get("id") for item in edit_office_options):
+            edit_office_options.append(current_office)
+        selected_office = next(
+            (item for item in edit_office_options if item.get("id") == user.get("office_id")),
+            None,
+        )
         role_choice = ft.Dropdown(
             label="Role",
             value=user.get("role", "Employee"),
@@ -5208,10 +6149,10 @@ def main(page: ft.Page, session=None):
             label="Department/Office",
             options=[ft.dropdown.Option("Unassigned")] + [
                 ft.dropdown.Option(item["name"])
-                for item in office_options
+                for item in edit_office_options
                 if item.get("name")
             ],
-            value=user.get("department") or "Unassigned",
+            value=(selected_office or {}).get("name") or user.get("department") or "Unassigned",
             width=270,
             autofocus=False,
         )
@@ -5224,7 +6165,9 @@ def main(page: ft.Page, session=None):
         )
         permissions_area = ft.Column([], spacing=8)
         error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
-        permission_groups = EMPLOYEE_PERMISSION_GROUPS
+        permission_groups = dict(EMPLOYEE_PERMISSION_GROUPS)
+        if user.get("role") == "Employee" and user.get("office_id") is not None:
+            permission_groups.update(OFFICE_EMPLOYEE_PERMISSION_GROUP)
         group_descriptions = {
             "Dashboard": "Control access to dashboard information.",
             "Documents": "Control actions employees can perform on legislative documents.",
@@ -5235,6 +6178,7 @@ def main(page: ft.Page, session=None):
             "Audit Logs": "Control access to system activity records.",
             "Analytics": "Control access to analytics and reports.",
             "Settings": "Control access to system configuration.",
+            "Office Workflow": "Control this employee's access to future office document functions.",
         }
         permission_key = lambda label: label.strip().lower().replace(" ", "_")
         raw_permissions = user.get("permissions") or []
@@ -5573,7 +6517,7 @@ def main(page: ft.Page, session=None):
             if is_super_admin:
                 payload["permissions"] = ["*"]
             selected_office = next(
-                (item for item in office_options if item.get("name") == office_choice.value),
+                (item for item in edit_office_options if item.get("name") == office_choice.value),
                 None,
             )
             payload["office_id"] = selected_office.get("id") if selected_office else None
@@ -5593,7 +6537,7 @@ def main(page: ft.Page, session=None):
                         pass
                     raise Exception(detail)
                 close_dialog(dialog)
-                load_user_management_data()
+                refresh_office_data()
             except Exception as exc:
                 error_message.value = f"Unable to save user: {exc}"
                 page.update()
@@ -5752,6 +6696,7 @@ def main(page: ft.Page, session=None):
         runtime_token = None
         refresh_token = None
         clear_session_state()
+        clear_pending_qr_token()
         show_login()
 
     def archived_documents_view():
@@ -6355,9 +7300,10 @@ def main(page: ft.Page, session=None):
 
     def show_login():
         page.clean()
-        page.scroll = None
+        mobile_scroll = (page.width or 1024) <= 600
+        page.scroll = ft.ScrollMode.AUTO if mobile_scroll else None
         page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-        page.vertical_alignment = ft.MainAxisAlignment.CENTER
+        page.vertical_alignment = ft.MainAxisAlignment.START if mobile_scroll else ft.MainAxisAlignment.CENTER
         page.bgcolor = ft.Colors.BLUE_GREY_50
         page.padding = 24
 
@@ -6387,6 +7333,8 @@ def main(page: ft.Page, session=None):
                     current_user_role = role
                     current_user_permissions = payload.get("permissions") or []
                     save_session_state()
+                    if show_qr_authenticated_state():
+                        return
                     if role == "SB Member":
                         from frontend.sb_member.app import main as sb_member_main
                         sb_member_main(page, session=payload)
@@ -6413,6 +7361,10 @@ def main(page: ft.Page, session=None):
                 page.update()
 
         def go_back(_=None):
+            if get_pending_qr_token():
+                clear_pending_qr_token()
+                page.go("/")
+                return
             page.clean()
             page.overlay.clear()
             page.scroll = None
@@ -6473,7 +7425,7 @@ def main(page: ft.Page, session=None):
                     run_spacing=0,
                 ),
                 width=920,
-                height=540,
+                height=None if mobile_scroll else 540,
                 border_radius=18,
                 clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
                 shadow=ft.BoxShadow(blur_radius=24, spread_radius=1, color="#102a3a26", offset=ft.Offset(0, 10)),
@@ -6481,13 +7433,346 @@ def main(page: ft.Page, session=None):
         )
         page.update()
 
+    office_dashboard_refresh = lambda: None
+
+    def office_dashboard_view():
+        nonlocal office_dashboard_refresh
+        if not has_permission("view_office_documents"):
+            return ft.Column([ft.Text("You do not have access to the office dashboard.")])
+        if not current_user or not getattr(current_user, "strip", lambda: "")():
+            return ft.Column([ft.Text("Please log in to view your office dashboard.")])
+
+        office_notice = ft.Text("Loading office documents...", size=12, color=ft.Colors.BLUE_GREY_600)
+        pending_receipt_indicator = ft.Text("Pending Receipts: 0", size=12, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_700)
+        incoming_handoff_notice = ft.Text("Loading incoming handoffs...", size=12, color=ft.Colors.BLUE_GREY_600)
+        sent_handoff_notice = ft.Text("Loading sent handoffs...", size=12, color=ft.Colors.BLUE_GREY_600)
+        table = ft.DataTable(columns=[
+            ft.DataColumn(ft.Text("Tracking No.")),
+            ft.DataColumn(ft.Text("Title")),
+            ft.DataColumn(ft.Text("Document Type")),
+            ft.DataColumn(ft.Text("Legislative Year")),
+            ft.DataColumn(ft.Text("Receipt Status")),
+            ft.DataColumn(ft.Text("Confirmed")),
+            *([ft.DataColumn(ft.Text("Action"))] if has_permission("view_office_document_details") or has_permission("pass_office_documents") else []),
+        ], rows=[])
+        incoming_handoff_table = ft.DataTable(columns=[
+            ft.DataColumn(ft.Text("Tracking No.")),
+            ft.DataColumn(ft.Text("Document")),
+            ft.DataColumn(ft.Text("From")),
+            ft.DataColumn(ft.Text("To")),
+            ft.DataColumn(ft.Text("Sent")),
+            ft.DataColumn(ft.Text("Status")),
+            ft.DataColumn(ft.Text("Action")),
+        ], rows=[])
+        sent_handoff_table = ft.DataTable(columns=[
+            ft.DataColumn(ft.Text("Tracking No.")),
+            ft.DataColumn(ft.Text("Document")),
+            ft.DataColumn(ft.Text("From")),
+            ft.DataColumn(ft.Text("To")),
+            ft.DataColumn(ft.Text("Sent")),
+            ft.DataColumn(ft.Text("Status")),
+            ft.DataColumn(ft.Text("Action")),
+        ], rows=[])
+        page_size = 10
+        current_page = 1
+        total_pages = 0
+        search_field = ft.TextField(
+            label="Search office documents",
+            prefix_icon=ft.Icons.SEARCH,
+            expand=True,
+            on_submit=lambda _: load_office_documents(1),
+        ) if has_permission("search_office_documents") else None
+        receipt_status_filter = ft.Dropdown(
+            label="Receipt Status",
+            width=190,
+            value="all",
+            options=[
+                ft.dropdown.Option("all", "All statuses"),
+                ft.dropdown.Option("received", "Received"),
+                ft.dropdown.Option("not_yet_received", "Not Yet Received"),
+            ],
+            on_change=lambda _: load_office_documents(1),
+        )
+        page_label = ft.Text("Page 1 of 0", size=12, color=ft.Colors.BLUE_GREY_600)
+
+        def render_handoff_status(status_value):
+            status_text = str(status_value or "Unknown").strip() or "Unknown"
+            if status_text == "Pending Receipt":
+                color = ft.Colors.ORANGE_700
+                bgcolor = ft.Colors.ORANGE_50
+            elif status_text == "Received":
+                color = ft.Colors.GREEN_700
+                bgcolor = ft.Colors.GREEN_50
+            else:
+                color = ft.Colors.BLUE_GREY_700
+                bgcolor = ft.Colors.BLUE_GREY_50
+            return ft.Container(
+                content=ft.Text(status_text, size=11, weight=ft.FontWeight.W_600, color=color),
+                padding=ft.Padding(8, 4, 8, 4),
+                bgcolor=bgcolor,
+                border_radius=8,
+                alignment=ft.Alignment.CENTER,
+            )
+
+        def load_handoff_sections():
+            nonlocal pending_receipt_indicator
+            pending_count = 0
+
+            def fetch_direction(direction_name):
+                headers = {}
+                if runtime_token:
+                    headers["Authorization"] = f"Bearer {runtime_token}"
+                try:
+                    response = requests.get(
+                        f"{BACKEND_URL}/documents/office/handoffs",
+                        params={"direction": direction_name, "page": 1, "page_size": 100},
+                        headers=headers,
+                        verify=False,
+                        timeout=20,
+                    )
+                    if response.status_code == 401:
+                        refresh_runtime_token_if_needed(force=True)
+                        if runtime_token:
+                            headers["Authorization"] = f"Bearer {runtime_token}"
+                            response = requests.get(
+                                f"{BACKEND_URL}/documents/office/handoffs",
+                                params={"direction": direction_name, "page": 1, "page_size": 100},
+                                headers=headers,
+                                verify=False,
+                                timeout=20,
+                            )
+                    if response.status_code != 200:
+                        try:
+                            detail = response.json().get("detail") if response.headers.get("content-type", "").startswith("application/json") else str(response.text)
+                        except Exception:
+                            detail = str(response.text)
+                        raise RuntimeError(detail or "Unable to load handoff records.")
+                    payload = response.json()
+                    return payload.get("items", []) or []
+                except Exception:
+                    return None
+
+            incoming_items = fetch_direction("incoming")
+            sent_items = fetch_direction("sent")
+            if incoming_items is None:
+                incoming_handoff_notice.value = "Unable to load incoming handoffs."
+                incoming_handoff_table.rows = []
+            else:
+                incoming_rows = []
+                for item in incoming_items:
+                    status_text = str(item.get("status") or "Unknown")
+                    if status_text == "Pending Receipt":
+                        pending_count += 1
+                    document_title = item.get("document_title") or item.get("title") or "Untitled document"
+                    tracking_number = item.get("tracking_number") or str(item.get("document_id") or "—")
+                    sent_at = item.get("sent_at")
+                    try:
+                        if sent_at:
+                            sent_at = datetime.fromisoformat(str(sent_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
+                    except ValueError:
+                        pass
+                    doc_summary = {"id": item.get("document_id"), "tracking_number": tracking_number, "title": document_title}
+                    incoming_rows.append(ft.DataRow(cells=[
+                        ft.DataCell(ft.Text(str(tracking_number))),
+                        ft.DataCell(ft.Text(str(document_title)[:65] + ("..." if len(str(document_title)) > 65 else ""))),
+                        ft.DataCell(ft.Text(str(item.get("sending_office_name") or "—"))),
+                        ft.DataCell(ft.Text(str(item.get("receiving_office_name") or "—"))),
+                        ft.DataCell(ft.Text(str(sent_at or "—"))),
+                        ft.DataCell(render_handoff_status(status_text)),
+                        ft.DataCell(ft.IconButton(
+                            icon=ft.Icons.VISIBILITY_OUTLINED,
+                            tooltip="View Document",
+                            on_click=lambda _, document=doc_summary: show_document_details(document),
+                        )),
+                    ]))
+                incoming_handoff_table.rows = incoming_rows
+                incoming_handoff_notice.value = "No incoming document handoffs." if not incoming_rows else ""
+
+            if sent_items is None:
+                sent_handoff_notice.value = "Unable to load sent handoffs."
+                sent_handoff_table.rows = []
+            else:
+                sent_rows = []
+                for item in sent_items:
+                    status_text = str(item.get("status") or "Unknown")
+                    document_title = item.get("document_title") or item.get("title") or "Untitled document"
+                    tracking_number = item.get("tracking_number") or str(item.get("document_id") or "—")
+                    sent_at = item.get("sent_at")
+                    try:
+                        if sent_at:
+                            sent_at = datetime.fromisoformat(str(sent_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
+                    except ValueError:
+                        pass
+                    doc_summary = {"id": item.get("document_id"), "tracking_number": tracking_number, "title": document_title}
+                    sent_rows.append(ft.DataRow(cells=[
+                        ft.DataCell(ft.Text(str(tracking_number))),
+                        ft.DataCell(ft.Text(str(document_title)[:65] + ("..." if len(str(document_title)) > 65 else ""))),
+                        ft.DataCell(ft.Text(str(item.get("sending_office_name") or "—"))),
+                        ft.DataCell(ft.Text(str(item.get("receiving_office_name") or "—"))),
+                        ft.DataCell(ft.Text(str(sent_at or "—"))),
+                        ft.DataCell(render_handoff_status(status_text)),
+                        ft.DataCell(ft.IconButton(
+                            icon=ft.Icons.VISIBILITY_OUTLINED,
+                            tooltip="View Document",
+                            on_click=lambda _, document=doc_summary: show_document_details(document),
+                        )),
+                    ]))
+                sent_handoff_table.rows = sent_rows
+                sent_handoff_notice.value = "No documents have been passed by this office." if not sent_rows else ""
+
+            pending_receipt_indicator.value = f"Pending Receipts: {pending_count}"
+            page.update()
+
+        def load_office_documents(requested_page=None):
+            nonlocal table, office_notice, current_page, total_pages
+            if requested_page is not None:
+                current_page = requested_page
+            headers = {}
+            if runtime_token:
+                headers["Authorization"] = f"Bearer {runtime_token}"
+            params = {"page": current_page, "page_size": page_size}
+            if search_field and (search_field.value or "").strip():
+                params["search"] = search_field.value.strip()
+            if receipt_status_filter.value != "all":
+                params["receipt_status"] = receipt_status_filter.value
+            try:
+                response = requests.get(f"{BACKEND_URL}/documents/office", params=params, headers=headers, verify=False, timeout=20)
+                if response.status_code == 200:
+                    payload = response.json()
+                    items = payload.get("items", [])
+                    total_pages = payload.get("total_pages", 0)
+                    current_page = payload.get("page", current_page)
+                    office_notice.value = f"{payload.get('total', 0)} document(s) associated with your office"
+                    data_rows = []
+                    for item in items:
+                        confirmed_at = item.get("office_receipt_confirmed_at")
+                        if confirmed_at:
+                            try:
+                                confirmed_at = datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
+                            except ValueError:
+                                pass
+                        cells = [
+                            ft.DataCell(ft.Text(item.get("tracking_number") or "—")),
+                            ft.DataCell(ft.Text(item.get("title") or "Untitled document")),
+                            ft.DataCell(ft.Text(item.get("document_type") or "—")),
+                            ft.DataCell(ft.Text(str(item.get("series_year") or "—"))),
+                            ft.DataCell(ft.Text(item.get("office_receipt_status") or "Not Yet Received")),
+                            ft.DataCell(ft.Text(confirmed_at or "—")),
+                        ]
+                        if has_permission("view_office_document_details") or has_permission("pass_office_documents"):
+                            action_controls = []
+                            if has_permission("view_office_document_details"):
+                                action_controls.append(ft.IconButton(
+                                    icon=ft.Icons.VISIBILITY_OUTLINED,
+                                    tooltip="View Details",
+                                    on_click=lambda _, document=item: show_document_details(document),
+                                ))
+                            if has_permission("pass_office_documents") and item.get("office_receipt_status") not in ("Pending Receipt", "Received"):
+                                action_controls.append(ft.IconButton(
+                                    icon=ft.Icons.SEND_OUTLINED,
+                                    tooltip="Pass Document",
+                                    on_click=lambda _, document=item: open_pass_document_dialog(document),
+                                ))
+                            if action_controls:
+                                cells.append(ft.DataCell(ft.Row(action_controls, spacing=4, alignment=ft.MainAxisAlignment.START)))
+                            else:
+                                cells.append(ft.DataCell(ft.Text("—")))
+                        data_rows.append(ft.DataRow(cells=cells))
+                    table.rows = data_rows
+                    if not items:
+                        office_notice.value = "No Documents Found. There are currently no documents associated with your office."
+                else:
+                    detail = ""
+                    try:
+                        detail = str(response.json().get("detail", ""))
+                    except (ValueError, AttributeError):
+                        pass
+                    office_notice.value = (
+                        "No Office Assigned. Your account has not been assigned to an office. Please contact the administrator."
+                        if "Office assignment required" in detail
+                        else "Unable to load office documents."
+                    )
+                    table.rows = []
+                    total_pages = 0
+                page.update()
+            except Exception:
+                office_notice.value = "Unable to load office documents."
+                table.rows = []
+                total_pages = 0
+                page.update()
+            page_label.value = f"Page {current_page} of {total_pages}"
+            previous_button.disabled = current_page <= 1
+            next_button.disabled = current_page >= total_pages
+            if callable(load_handoff_sections):
+                load_handoff_sections()
+            page.update()
+
+        def refresh_dashboard():
+            load_office_documents(current_page)
+            load_handoff_sections()
+
+        office_dashboard_refresh = refresh_dashboard
+
+        previous_button = ft.IconButton(
+            icon=ft.Icons.CHEVRON_LEFT,
+            tooltip="Previous page",
+            disabled=True,
+            on_click=lambda _: load_office_documents(max(1, current_page - 1)),
+        )
+        next_button = ft.IconButton(
+            icon=ft.Icons.CHEVRON_RIGHT,
+            tooltip="Next page",
+            disabled=True,
+            on_click=lambda _: load_office_documents(min(total_pages, current_page + 1)),
+        )
+
+        load_office_documents()
+        load_handoff_sections()
+        return ft.Column([
+            section_header("Office Dashboard", "Documents associated with your office.", ft.Icons.LOCATION_CITY_OUTLINED, ft.Colors.BLUE_700),
+            ft.Row([
+                *([search_field] if search_field else []),
+                receipt_status_filter,
+                ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Refresh", on_click=lambda _: refresh_dashboard()),
+            ], alignment=ft.MainAxisAlignment.END),
+            office_notice,
+            ft.Container(content=table, border=ft.border.all(1, ft.Colors.BLUE_GREY_200), border_radius=10, padding=10),
+            ft.Row([previous_button, page_label, next_button], alignment=ft.MainAxisAlignment.END),
+            ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text("Handoff Activity", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
+                        pending_receipt_indicator,
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Column([
+                        ft.Text("Incoming Handoffs", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_800),
+                        incoming_handoff_notice,
+                        ft.Container(content=incoming_handoff_table, border=ft.border.all(1, ft.Colors.BLUE_GREY_200), border_radius=10, padding=10),
+                    ], spacing=8),
+                    ft.Column([
+                        ft.Text("Sent / Passed Documents", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_800),
+                        sent_handoff_notice,
+                        ft.Container(content=sent_handoff_table, border=ft.border.all(1, ft.Colors.BLUE_GREY_200), border_radius=10, padding=10),
+                    ], spacing=8),
+                ], spacing=12),
+                padding=10,
+                border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
+                border_radius=10,
+            ),
+        ], spacing=12)
+
     def build_nav_items():
         items = []
 
+        if is_employee() and has_permission("view_office_documents"):
+            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view()))
         if has_permission("view_dashboard"):
             items.append((ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view()))
         if has_permission("view_analytics"):
             items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view()))
+
+        if has_permission("view_office_documents") and not is_employee():
+            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view()))
 
         if has_permission("view_documents"):
             items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()))
@@ -6530,6 +7815,11 @@ def main(page: ft.Page, session=None):
                 current_user_permissions = json.loads(saved_permissions) if saved_permissions else []
             except Exception:
                 current_user_permissions = []
+            if get_pending_qr_token():
+                refresh_runtime_token_if_needed(force=True)
+                if runtime_token:
+                    show_qr_authenticated_state()
+                return True
             if current_user_role.strip().lower() == "sb member":
                 from frontend.sb_member.app import main as sb_member_main
                 sb_member_main(page, session={
@@ -6555,6 +7845,10 @@ def main(page: ft.Page, session=None):
         current_user_role = session.get("role") or "Employee"
         current_user_permissions = session.get("permissions") or []
         refresh_runtime_token_if_needed(force=True)
+        if get_pending_qr_token():
+            if runtime_token:
+                show_qr_authenticated_state()
+            return
         nav_items[:] = build_nav_items()
         initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
         render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)

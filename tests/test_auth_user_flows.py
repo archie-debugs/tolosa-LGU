@@ -3,6 +3,7 @@ import os
 import time
 from itertools import count
 from datetime import datetime, timedelta, timezone
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -30,6 +31,9 @@ models.Base.metadata.create_all(bind=engine)
 
 def reset_db():
     with SessionLocal() as db:
+        db.query(models.DocumentTrackingNumberAlias).delete()
+        db.query(models.DocumentOffice).delete()
+        db.query(models.DocumentReceipt).delete()
         db.query(models.Attachment).delete()
         db.query(models.Document).delete()
         db.query(models.UserSession).delete()
@@ -208,6 +212,86 @@ def test_qr_lookup_prefers_current_tracking_id_then_historical_alias():
         assert documents_routes._find_document_by_qr_or_tracking(db, "DOC-000506").id == historical_document.id
 
 
+def test_document_registration_creates_stable_qr_token_and_public_qr_lookup(monkeypatch):
+    reset_db()
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://192.168.1.8:8001")
+    client = TestClient(main.app)
+    headers = bearer_headers(client)
+    response = client.post(
+        "/documents/register",
+        headers=headers,
+        data={
+            "title": "Stable QR document",
+            "document_number": "07",
+            "series_year": "2026",
+            "document_type": "Ordinance",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["qr_token"]
+    assert len(body["qr_token"]) >= 20
+    assert body["canonical_qr_url"] == f"http://192.168.1.8:8001/qr/{body['qr_token']}"
+    assert body["qr_code_value"] == body["canonical_qr_url"]
+
+    public_lookup = client.get(f"/qr/{body['qr_token']}")
+    assert public_lookup.status_code == 200, public_lookup.text
+    assert public_lookup.json()["document_id"] == body["id"]
+    assert public_lookup.json()["tracking_number"] == body["tracking_number"]
+    assert set(public_lookup.json()) == {
+        "document_id",
+        "tracking_number",
+        "title",
+        "document_type",
+        "current_office",
+        "qr_token",
+        "qr_payload",
+    }
+
+    monkeypatch.setenv("FRONTEND_PUBLIC_URL", "http://192.168.1.8:8550")
+    browser_entry = client.get(
+        f"/qr/{body['qr_token']}",
+        headers={"Accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert browser_entry.status_code == 307
+    assert browser_entry.headers["location"] == f"http://192.168.1.8:8550/qr/{body['qr_token']}"
+
+
+def test_qr_png_cache_tracks_payload_and_explicit_regeneration_rewrites(tmp_path, monkeypatch):
+    qr_dir = tmp_path / "qr"
+    monkeypatch.setattr(documents_routes, "QR_IMAGE_DIR", str(qr_dir))
+    document = models.Document(
+        id=15,
+        tracking_number="DOC-000015",
+        title="QR Cache Test",
+        qr_token="stable-qr-cache-token",
+    )
+    old_payload = "http://127.0.0.1:8001/qr/stable-qr-cache-token"
+    current_payload = "http://192.168.1.8:8001/qr/stable-qr-cache-token"
+
+    old_path = documents_routes._ensure_qr_png(document, old_payload)
+    current_path = documents_routes._ensure_qr_png(document, current_payload)
+
+    assert old_path != current_path
+    assert os.path.exists(old_path)
+    assert os.path.exists(current_path)
+
+    import qrcode
+
+    with open(current_path, "rb") as generated_file:
+        correct_png = generated_file.read()
+    qrcode.make(old_payload).save(current_path, format="PNG")
+    with open(current_path, "rb") as stale_file:
+        before_regeneration = stale_file.read()
+    assert before_regeneration != correct_png
+
+    documents_routes._ensure_qr_png(document, current_payload, force=True)
+    with open(current_path, "rb") as regenerated_file:
+        after_regeneration = regenerated_file.read()
+    assert after_regeneration == correct_png
+
+
 def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tmp_path, monkeypatch):
     reset_db()
     temp_upload_dir = tmp_path / "temporary"
@@ -259,7 +343,13 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
     response = client.post(
         "/documents/bulk-register/confirm_tmp",
         headers=bearer_headers(client),
-        json={"tmp_names": tmp_names},
+        json={
+            "tmp_names": tmp_names,
+            "documents": [
+                {"tmp_name": tmp_name, "series_year": 1994}
+                for tmp_name in tmp_names
+            ],
+        },
     )
     assert response.status_code == 200, response.text
     result = response.json()
@@ -287,7 +377,10 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
     duplicate_response = client.post(
         "/documents/bulk-register/confirm_tmp",
         headers=bearer_headers(client),
-        json={"tmp_names": [duplicate_name]},
+        json={
+            "tmp_names": [duplicate_name],
+            "documents": [{"tmp_name": duplicate_name, "series_year": 1994}],
+        },
     )
     assert duplicate_response.status_code == 200, duplicate_response.text
     duplicate_result = duplicate_response.json()
@@ -350,20 +443,165 @@ def test_register_user_success_and_login_workflow():
     assert login.json()["username"] == "newuser"
 
 
-def test_uploaded_documents_are_created_as_approved():
+def test_uploaded_documents_are_created_as_approved(monkeypatch):
     reset_db()
+    sequence_values = count(1)
+    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
     client = TestClient(main.app)
     admin_headers = bearer_headers(client)
 
     response = client.post(
         "/documents/register",
         headers=admin_headers,
-        data={"title": "Approved upload", "description": "test"},
+        data={"title": "Approved upload", "description": "test", "series_year": "1994"},
         files={"file": ("sample.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")},
     )
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "Approved"
+    assert response.json()["series_year"] == 1994
+
+
+def test_single_pdf_registration_rejects_missing_legislative_year():
+    reset_db()
+    client = TestClient(main.app)
+    headers = bearer_headers(client)
+    with SessionLocal() as db:
+        documents_before = db.query(models.Document).count()
+        attachments_before = db.query(models.Attachment).count()
+
+    response = client.post(
+        "/documents/register",
+        headers=headers,
+        data={"title": "ORDINANCE NO. 04 Series 1994"},
+        files={"file": ("ORDINANCE NO. 04 Series 1994.pdf", b"%PDF-1.4 test", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Legislative Year is required."
+    with SessionLocal() as db:
+        assert db.query(models.Document).count() == documents_before
+        assert db.query(models.Attachment).count() == attachments_before
+
+
+@pytest.mark.parametrize("file_count", [2, 5, 10])
+def test_bulk_registration_requires_explicit_per_file_years(tmp_path, monkeypatch, file_count):
+    reset_db()
+    temp_upload_dir = tmp_path / "temporary"
+    upload_dir = tmp_path / "uploads"
+    qr_dir = tmp_path / "qr"
+    temp_upload_dir.mkdir()
+    monkeypatch.setattr(documents_routes, "TEMP_UPLOAD_DIR", str(temp_upload_dir))
+    monkeypatch.setattr(documents_routes, "UPLOAD_DIR", str(upload_dir))
+    monkeypatch.setattr(documents_routes, "QR_IMAGE_DIR", str(qr_dir))
+    sequence_values = count(1)
+    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
+
+    years = [1993 + index % 3 for index in range(file_count)]
+    tmp_names = []
+    for index, year in enumerate(years, start=1):
+        tmp_name = f"bulk-{file_count}-{index}.pdf"
+        (temp_upload_dir / tmp_name).write_bytes(f"%PDF-1.4\nunique-{file_count}-{index}\n%%EOF".encode())
+        (temp_upload_dir / f"{tmp_name}.meta.json").write_text(
+            json.dumps({"original_filename": f"ORDINANCE No.{index:02d} Series 2026.pdf"}),
+            encoding="utf-8",
+        )
+        tmp_names.append(tmp_name)
+
+    client = TestClient(main.app)
+    documents = [
+        {"tmp_name": tmp_name, "series_year": year}
+        for tmp_name, year in zip(tmp_names, years)
+    ]
+    response = client.post(
+        "/documents/bulk-register/confirm_tmp",
+        headers=bearer_headers(client),
+        json={"tmp_names": tmp_names, "documents": documents},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["registered"] == file_count
+    assert result["failed"] == 0
+
+    with SessionLocal() as db:
+        created = db.query(models.Document).order_by(models.Document.id).all()
+        assert [document.series_year for document in created] == years
+        assert [document.tracking_number for document in created] == [
+            f"DOC-{index:06d}" for index in range(1, file_count + 1)
+        ]
+
+
+def test_bulk_registration_rejects_any_missing_legislative_year(tmp_path, monkeypatch):
+    reset_db()
+    temp_upload_dir = tmp_path / "temporary"
+    temp_upload_dir.mkdir()
+    monkeypatch.setattr(documents_routes, "TEMP_UPLOAD_DIR", str(temp_upload_dir))
+    sequence_calls = []
+    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: sequence_calls.append(1) or 1)
+
+    tmp_names = ["has-year.pdf", "missing-year.pdf"]
+    for tmp_name in tmp_names:
+        (temp_upload_dir / tmp_name).write_bytes(b"%PDF-1.4 unique")
+        (temp_upload_dir / f"{tmp_name}.meta.json").write_text(
+            json.dumps({"original_filename": tmp_name}),
+            encoding="utf-8",
+        )
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/documents/bulk-register/confirm_tmp",
+        headers=bearer_headers(client),
+        json={
+            "tmp_names": tmp_names,
+            "documents": [
+                {"tmp_name": tmp_names[0], "series_year": 1994},
+                {"tmp_name": tmp_names[1], "series_year": None},
+            ],
+        },
+    )
+    assert response.status_code == 400
+    assert "missing-year.pdf" in response.json()["detail"]
+    assert sequence_calls == []
+    with SessionLocal() as db:
+        assert db.query(models.Document).count() == 0
+
+
+def test_multipart_bulk_registration_requires_and_stores_each_year(tmp_path, monkeypatch):
+    reset_db()
+    upload_dir = tmp_path / "uploads"
+    qr_dir = tmp_path / "qr"
+    monkeypatch.setattr(documents_routes, "UPLOAD_DIR", str(upload_dir))
+    monkeypatch.setattr(documents_routes, "QR_IMAGE_DIR", str(qr_dir))
+    sequence_values = count(1)
+    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
+    client = TestClient(main.app)
+    headers = bearer_headers(client)
+    files = [
+        ("files", ("first.pdf", b"%PDF-1.4 first", "application/pdf")),
+        ("files", ("second.pdf", b"%PDF-1.4 second", "application/pdf")),
+    ]
+
+    missing_year = client.post(
+        "/documents/bulk-register/confirm",
+        headers=headers,
+        files=files,
+    )
+    assert missing_year.status_code == 422
+    with SessionLocal() as db:
+        assert db.query(models.Document).count() == 0
+
+    response = client.post(
+        "/documents/bulk-register/confirm",
+        headers=headers,
+        data={"series_years": ["1993", "1995"]},
+        files=files,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["registered"] == 2
+    with SessionLocal() as db:
+        created = db.query(models.Document).order_by(models.Document.tracking_number).all()
+        assert [document.series_year for document in created] == [1993, 1995]
+        assert [document.tracking_number for document in created] == ["DOC-000001", "DOC-000002"]
 
 
 def test_authorized_admin_can_reset_employee_password_and_audits_without_plaintext():
@@ -481,6 +719,7 @@ def test_user_offices_support_assignment_update_and_unassigned_users():
             "email": "office@example.com",
             "role": "Employee",
             "office_id": office_id,
+            "permissions": ["register_documents", "manage_permissions", "view_office_documents"],
         },
     )
     assert created.status_code == 200, created.text
@@ -488,6 +727,15 @@ def test_user_offices_support_assignment_update_and_unassigned_users():
     office_user = next(item for item in client.get("/auth/users", headers=admin_headers).json() if item["username"] == "officeuser")
     assert office_user["office_id"] == office_id
     assert office_user["department"] == "SB Secretariat"
+    office_permissions = office_user["permissions"]
+    assert set(office_permissions) == {
+        "view_office_documents",
+        "search_office_documents",
+        "view_office_document_details",
+        "scan_qr",
+        "confirm_document_receipt",
+        "view_office_history",
+    }
 
     updated = client.put(
         f"/auth/users/{office_user['id']}",
@@ -498,13 +746,19 @@ def test_user_offices_support_assignment_update_and_unassigned_users():
             "email": "office@example.com",
             "role": "Employee",
             "status": "Active",
-            "permissions": [],
+            "permissions": office_permissions,
             "office_id": mayor_id,
         },
     )
     assert updated.status_code == 200, updated.text
     updated_user = next(item for item in client.get("/auth/users", headers=admin_headers).json() if item["username"] == "officeuser")
     assert updated_user["department"] == "Office of the Mayor"
+    assert updated_user["permissions"] == office_permissions
+    with SessionLocal() as db:
+        assert db.query(models.AuditLog).filter(
+            models.AuditLog.action == "USER_OFFICE_CHANGED",
+            models.AuditLog.target_id == str(office_user["id"]),
+        ).count() == 1
 
 
 def test_user_office_id_must_reference_an_existing_office():
@@ -524,6 +778,609 @@ def test_user_office_id_must_reference_an_existing_office():
         },
     )
     assert response.status_code == 400
+
+
+def test_office_workflow_permissions_require_employee_and_office_assignment():
+    office_permissions = [
+        "view_office_documents",
+        "search_office_documents",
+        "view_office_document_details",
+        "scan_qr",
+        "confirm_document_receipt",
+        "view_office_history",
+    ]
+    from Backends.backend.core import validate_permissions
+
+    assert set(validate_permissions(office_permissions)) == set(office_permissions)
+    assert not set(office_permissions) & set(get_default_permissions_for_role("Employee"))
+    assert not set(office_permissions) & set(get_default_permissions_for_role("SB Member"))
+    assigned_employee = models.User(role="Employee", office_id=12, permissions=str(office_permissions))
+    unassigned_employee = models.User(role="Employee", office_id=None, permissions=str(office_permissions))
+    office_assigned_sb_member = models.User(role="SB Member", office_id=12, permissions=str(office_permissions))
+    super_admin = models.User(role="Super Administrator", office_id=None, permissions="['*']")
+
+    for permission in office_permissions:
+        require_permission(assigned_employee, permission)
+        require_permission(super_admin, permission)
+        for user in (unassigned_employee, office_assigned_sb_member):
+            with pytest.raises(HTTPException) as denied:
+                require_permission(user, permission)
+            assert denied.value.status_code == 403
+
+    with pytest.raises(HTTPException) as unknown:
+        validate_permissions(["office_admin_all"])
+    assert unknown.value.status_code == 400
+
+
+def test_employee_office_document_list_is_scoped_by_office_and_permission():
+    reset_db()
+    client = TestClient(main.app)
+    admin_headers = bearer_headers(client)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Office of the Mayor - Office List", office_code="MAYLIST")
+        office_b = models.Office(name="Treasury Office - Office List", office_code="TRSLIST")
+        db.add_all([office_a, office_b])
+        db.commit()
+        db.refresh(office_a)
+        db.refresh(office_b)
+
+        doc_a_1 = models.Document(
+            tracking_number="DOC-000901",
+            title="Office List Document A1",
+            status="Approved",
+            priority="Medium",
+            current_office_id=office_a.id,
+            current_office="Office of the Mayor - Office List",
+            qr_token="office-list-a-1",
+            qr_code_value="https://example.test/qr/office-list-a-1",
+        )
+        doc_a_2 = models.Document(
+            tracking_number="DOC-000902",
+            title="Office List Document A2",
+            status="Pending",
+            priority="High",
+            current_office_id=office_a.id,
+            current_office="Office of the Mayor - Office List",
+            qr_token="office-list-a-2",
+            qr_code_value="https://example.test/qr/office-list-a-2",
+        )
+        doc_b = models.Document(
+            tracking_number="DOC-000903",
+            title="Treasury Office Document B",
+            status="Approved",
+            priority="Medium",
+            current_office_id=office_b.id,
+            current_office="Treasury Office - Office List",
+            qr_token="office-list-b-1",
+            qr_code_value="https://example.test/qr/office-list-b-1",
+        )
+        db.add_all([doc_a_1, doc_a_2, doc_b])
+        db.commit()
+        db.refresh(doc_a_1)
+        db.refresh(doc_a_2)
+        db.refresh(doc_b)
+        office_a_id = office_a.id
+        office_b_id = office_b.id
+        office_a_doc_ids = {doc_a_1.id, doc_a_2.id}
+        for document_id, office_id in (
+            (doc_a_1.id, office_a.id),
+            (doc_a_2.id, office_a.id),
+            (doc_b.id, office_b.id),
+        ):
+            existing_link = db.query(models.DocumentOffice).filter(
+                models.DocumentOffice.document_id == document_id,
+                models.DocumentOffice.office_id == office_id,
+            ).first()
+            if existing_link is None:
+                db.add(models.DocumentOffice(document_id=document_id, office_id=office_id))
+        db.commit()
+
+        office_user = models.User(
+            username="officelister",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_a.id,
+            permissions="['view_office_documents', 'search_office_documents', 'view_office_document_details']",
+            status="Active",
+            is_active=True,
+        )
+        unassigned_user = models.User(
+            username="unassignedofficelister",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=None,
+            permissions="['view_office_documents', 'search_office_documents', 'view_office_document_details']",
+            status="Active",
+            is_active=True,
+        )
+        office_readonly_user = models.User(
+            username="officereadonly",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_a.id,
+            permissions="['view_office_documents']",
+            status="Active",
+            is_active=True,
+        )
+        office_denied_user = models.User(
+            username="officedenied",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_a.id,
+            permissions="[]",
+            status="Active",
+            is_active=True,
+        )
+        db.add_all([office_user, unassigned_user, office_readonly_user, office_denied_user])
+        db.commit()
+
+    office_headers = bearer_headers(client, "officelister", "pw123")
+    response = client.get("/documents/office", headers=office_headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 2
+    ids = {item["id"] for item in payload["items"]}
+    assert office_a_doc_ids == ids
+    assert all(item["office_receipt_status"] == "Not Yet Received" for item in payload["items"])
+    assert all(item.get("current_office") is None and item.get("priority") is None and not item.get("history_rows") for item in payload["items"])
+    assert payload["total_pages"] == 1
+    supplied_office = client.get(f"/documents/office?office_id={office_b_id}", headers=office_headers)
+    assert {item["id"] for item in supplied_office.json()["items"]} == office_a_doc_ids
+    page_one = client.get("/documents/office?page=1&page_size=1", headers=office_headers).json()
+    page_two = client.get("/documents/office?page=2&page_size=1", headers=office_headers).json()
+    assert page_one["total"] == 2 and page_one["total_pages"] == 2 and len(page_one["items"]) == 1
+    assert page_two["page"] == 2 and page_two["items"][0]["id"] != page_one["items"][0]["id"]
+    searched = client.get("/documents/office?search=A1", headers=office_headers)
+    assert searched.status_code == 200 and searched.json()["total"] == 1
+    assert client.get(f"/documents/office/{next(iter({item['id'] for item in payload['items']}))}", headers=office_headers).status_code == 200
+    assert client.get(f"/documents/office/{max(office_a_doc_ids) + 1}", headers=office_headers).status_code in {403, 404}
+
+    denied = client.get("/documents/office", headers=bearer_headers(client, "unassignedofficelister", "pw123"))
+    assert denied.status_code == 403, denied.text
+    assert client.get("/documents/office?search=Ordinance", headers=bearer_headers(client, "officereadonly", "pw123")).status_code == 403
+    assert client.get("/documents/office", headers=bearer_headers(client, "officedenied", "pw123")).status_code == 403
+    assert client.get(
+        f"/documents/{next(iter(office_a_doc_ids))}/receipts",
+        headers=bearer_headers(client, "officereadonly", "pw123"),
+    ).status_code == 403
+
+
+def test_office_qr_lookup_requires_matching_office_assignment():
+    reset_db()
+    client = TestClient(main.app)
+    admin_headers = bearer_headers(client)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Office of the Mayor - QR Test", office_code="MAYQR")
+        office_b = models.Office(name="Treasury Office - QR Test", office_code="TRSQR")
+        db.add_all([office_a, office_b])
+        db.commit()
+        db.refresh(office_a)
+        db.refresh(office_b)
+
+        doc = models.Document(
+            tracking_number="DOC-000900",
+            title="City Budget Ordinance",
+            status="Approved",
+            priority="Medium",
+            current_office_id=office_a.id,
+            current_office="Office of the Mayor - QR Test",
+            qr_token="office-access-token-123",
+            qr_code_value="https://example.test/qr/office-access-token-123",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        if not db.query(models.DocumentOffice).filter(
+            models.DocumentOffice.document_id == doc.id,
+            models.DocumentOffice.office_id == office_a.id,
+        ).first():
+            db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+            db.commit()
+        document_id = doc.id
+        qr_token = doc.qr_token
+
+        office_user = models.User(
+            username="mayorstaff",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_a.id,
+            permissions="['scan_qr', 'view_office_documents', 'view_office_document_details']",
+            status="Active",
+            is_active=True,
+        )
+        other_user = models.User(
+            username="treasurystaff",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_b.id,
+            permissions="['scan_qr', 'view_office_documents', 'view_office_document_details']",
+            status="Active",
+            is_active=True,
+        )
+        no_office_user = models.User(
+            username="unassignedstaff",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=None,
+            permissions="['scan_qr', 'view_office_document_details']",
+            status="Active",
+            is_active=True,
+        )
+        missing_permission_user = models.User(
+            username="limitedstaff",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_a.id,
+            permissions="[]",
+            status="Active",
+            is_active=True,
+        )
+        db.add_all([office_user, other_user, no_office_user, missing_permission_user])
+        db.commit()
+        db.refresh(office_user)
+        db.refresh(other_user)
+
+    office_headers = bearer_headers(client, "mayorstaff", "pw123")
+    allowed = client.get(f"/documents/qr/{qr_token}/office", headers=office_headers)
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["document_id"] == document_id
+
+    other_headers = bearer_headers(client, "treasurystaff", "pw123")
+    denied = client.get(f"/documents/qr/{qr_token}/office", headers=other_headers)
+    assert denied.status_code == 403, denied.text
+    assert "not assigned to your office" in denied.json()["detail"].lower()
+
+    no_office_headers = bearer_headers(client, "unassignedstaff", "pw123")
+    no_office = client.get(f"/documents/qr/{qr_token}/office", headers=no_office_headers)
+    assert no_office.status_code == 403, no_office.text
+    assert no_office.json()["detail"] == "Office assignment required for QR access"
+
+    missing_permission_headers = bearer_headers(client, "limitedstaff", "pw123")
+    missing_permission = client.get(f"/documents/qr/{qr_token}/office", headers=missing_permission_headers)
+    assert missing_permission.status_code == 403, missing_permission.text
+    assert missing_permission.json()["detail"] == "Permission denied"
+
+    not_found = client.get("/documents/qr/unknown-office-qr-token/office", headers=office_headers)
+    assert not_found.status_code == 404, not_found.text
+    assert not_found.json()["detail"] == "QR code not recognized"
+
+
+def test_document_receipt_confirmation_and_history_are_office_scoped():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office_a = db.query(models.Office).filter(models.Office.name == "SB Secretariat").first()
+        office_b = db.query(models.Office).filter(models.Office.name == "Office of the Mayor").first()
+        office_a_id = office_a.id
+        office_b_id = office_b.id
+
+        doc = models.Document(
+            tracking_number="DOC-000700",
+            title="Receipt Test Ordinance",
+            status="Approved",
+            priority="Medium",
+            current_office_id=office_a_id,
+            current_office="SB Secretariat",
+            qr_token="receipt-confirmation-token-001",
+            qr_code_value="https://example.test/qr/receipt-confirmation-token-001",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        if not db.query(models.DocumentOffice).filter(
+            models.DocumentOffice.document_id == doc.id,
+            models.DocumentOffice.office_id == office_a_id,
+        ).first():
+            db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a_id))
+            db.commit()
+        qr_token = doc.qr_token
+        document_id = doc.id
+
+        employee_a = models.User(
+            username="receiptusera",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_a_id,
+            permissions="['scan_qr', 'confirm_document_receipt', 'view_office_documents', 'view_office_document_details', 'view_office_history']",
+            status="Active",
+            is_active=True,
+        )
+        employee_b = models.User(
+            username="receiptuserb",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_b_id,
+            permissions="['scan_qr', 'confirm_document_receipt', 'view_office_documents', 'view_office_document_details', 'view_office_history']",
+            status="Active",
+            is_active=True,
+        )
+        db.add_all([employee_a, employee_b])
+        db.commit()
+
+    office_a_headers = bearer_headers(client, "receiptusera", "pw123")
+    confirm = client.post(f"/documents/qr/{qr_token}/receipt", headers=office_a_headers)
+    assert confirm.status_code == 200, confirm.text
+    assert confirm.json()["status"] == "confirmed"
+    assert confirm.json()["receipt"]["office_id"] == office_a_id
+    assert confirm.json()["receipt"]["document_id"] == document_id
+
+    repeat = client.post(f"/documents/qr/{qr_token}/receipt", headers=office_a_headers)
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.json()["status"] == "already_confirmed"
+
+    office_b_headers = bearer_headers(client, "receiptuserb", "pw123")
+    deny = client.post(f"/documents/qr/{qr_token}/receipt", headers=office_b_headers)
+    assert deny.status_code == 403, deny.text
+    assert "not assigned to your office" in deny.json()["detail"].lower()
+
+    history = client.get(f"/documents/{document_id}/receipts", headers=office_a_headers)
+    assert history.status_code == 200, history.text
+    assert len(history.json()["receipts"]) == 1
+    assert history.json()["receipts"][0]["office_id"] == office_a_id
+    office_history = client.get("/documents/office/history", headers=office_a_headers)
+    assert office_history.status_code == 200 and office_history.json()["total"] == 1
+    office_list_after_confirm = client.get("/documents/office", headers=office_a_headers).json()
+    assert next(item for item in office_list_after_confirm["items"] if item["id"] == document_id)["office_receipt_status"] == "Received"
+    received_filter = client.get("/documents/office?receipt_status=received", headers=office_a_headers).json()
+    not_received_filter = client.get("/documents/office?receipt_status=not_yet_received", headers=office_a_headers).json()
+    assert received_filter["total"] == 1 and received_filter["items"][0]["id"] == document_id
+    assert not_received_filter["total"] == 0
+
+    forbidden_history = client.get(f"/documents/{document_id}/receipts", headers=office_b_headers)
+    assert forbidden_history.status_code == 403, forbidden_history.text
+
+    with SessionLocal() as db:
+        db.add(models.DocumentOffice(document_id=document_id, office_id=office_b_id))
+        db.commit()
+    office_b_confirm = client.post(f"/documents/qr/{qr_token}/receipt", headers=office_b_headers)
+    assert office_b_confirm.status_code == 200, office_b_confirm.text
+    assert office_b_confirm.json()["receipt"]["office_id"] == office_b_id
+    office_b_history = client.get(f"/documents/{document_id}/receipts", headers=office_b_headers)
+    assert office_b_history.status_code == 200
+    assert [row["office_id"] for row in office_b_history.json()["receipts"]] == [office_b_id]
+    office_b_documents = client.get("/documents/office", headers=office_b_headers).json()
+    assert office_b_documents["items"][0]["office_receipt_status"] == "Received"
+
+
+def test_super_admin_office_management_and_inactive_assignment_retention():
+    reset_db()
+    client = TestClient(main.app)
+    admin_headers = bearer_headers(client)
+
+    created_office = client.post(
+        "/offices",
+        headers=admin_headers,
+        json={"name": "Municipal Planning Office", "office_code": "mpo"},
+    )
+    assert created_office.status_code == 200, created_office.text
+    office = created_office.json()
+    assert office["office_code"] == "MPO"
+    assert office["is_active"] is True
+
+    duplicate_code = client.post(
+        "/offices",
+        headers=admin_headers,
+        json={"name": "Planning and Development Office", "office_code": "MPO"},
+    )
+    assert duplicate_code.status_code == 409
+    duplicate_name = client.post(
+        "/offices",
+        headers=admin_headers,
+        json={"name": "Municipal Planning Office", "office_code": "MPO-2"},
+    )
+    assert duplicate_name.status_code == 409
+
+    created_user = client.post(
+        "/auth/register",
+        headers=admin_headers,
+        json={
+            "username": "mpoemployee",
+            "password": "securepass",
+            "full_name": "MPO Employee",
+            "email": "mpo@example.com",
+            "role": "Employee",
+            "office_id": office["id"],
+        },
+    )
+    assert created_user.status_code == 200, created_user.text
+    assert created_user.json()["office_id"] == office["id"]
+    assert created_user.json()["permissions"] == []
+
+    internal_user = client.post(
+        "/auth/register",
+        headers=admin_headers,
+        json={
+            "username": "internalemployee",
+            "password": "securepass",
+            "full_name": "Internal Employee",
+            "email": "internal@example.com",
+            "role": "Employee",
+        },
+    )
+    assert internal_user.status_code == 200, internal_user.text
+    assert internal_user.json()["office_id"] is None
+    assert "edit_documents" in internal_user.json()["permissions"]
+
+    permission_account = client.post(
+        "/auth/register",
+        headers=admin_headers,
+        json={
+            "username": "officepermissionuser",
+            "password": "securepass",
+            "full_name": "Office Permission User",
+            "email": "office-permissions@example.com",
+            "role": "Employee",
+            "office_id": office["id"],
+            "permissions": ["view_office_documents", "scan_qr"],
+        },
+    )
+    assert permission_account.status_code == 200, permission_account.text
+    assert permission_account.json()["permissions"] == ["scan_qr", "view_office_documents"]
+    assert "edit_documents" not in permission_account.json()["permissions"]
+
+    listed_offices = client.get("/offices", headers=admin_headers)
+    assert listed_offices.status_code == 200, listed_offices.text
+    assert next(item for item in listed_offices.json() if item["id"] == office["id"])["user_count"] == 2
+
+    renamed_office = client.put(
+        f"/offices/{office['id']}",
+        headers=admin_headers,
+        json={"name": "Municipal Planning and Development Office", "office_code": "MPDO", "is_active": True},
+    )
+    assert renamed_office.status_code == 200, renamed_office.text
+    assert renamed_office.json()["name"] == "Municipal Planning and Development Office"
+    assert renamed_office.json()["office_code"] == "MPDO"
+
+    updated_office = client.put(
+        f"/offices/{office['id']}",
+        headers=admin_headers,
+        json={"name": "Municipal Planning and Development Office", "office_code": "MPDO", "is_active": False},
+    )
+    assert updated_office.status_code == 200, updated_office.text
+    assert updated_office.json()["is_active"] is False
+    assert office["id"] not in [item["id"] for item in client.get("/auth/offices", headers=admin_headers).json()]
+
+    office_users = client.get(f"/offices/{office['id']}/users", headers=admin_headers)
+    assert office_users.status_code == 200, office_users.text
+    assert [item["username"] for item in office_users.json()] == ["mpoemployee", "officepermissionuser"]
+
+    inactive_assignment = client.post(
+        "/auth/register",
+        headers=admin_headers,
+        json={
+            "username": "inactiveofficeemployee",
+            "password": "securepass",
+            "full_name": "Inactive Office Employee",
+            "email": "inactive-office@example.com",
+            "role": "Employee",
+            "office_id": office["id"],
+        },
+    )
+    assert inactive_assignment.status_code == 400
+
+    updated_user = client.put(
+        f"/auth/users/{created_user.json()['id']}",
+        headers=admin_headers,
+        json={
+            "full_name": "MPO Employee Updated",
+            "username": "mpoemployee",
+            "email": "mpo@example.com",
+            "role": "Employee",
+            "status": "Active",
+            "permissions": ["view_office_documents", "scan_qr"],
+        },
+    )
+    assert updated_user.status_code == 200, updated_user.text
+    saved_user = next(item for item in client.get("/auth/users", headers=admin_headers).json() if item["username"] == "mpoemployee")
+    assert saved_user["office_id"] == office["id"]
+    assert saved_user["permissions"] == ["scan_qr", "view_office_documents"]
+
+    removed_permissions = client.put(
+        f"/auth/users/{created_user.json()['id']}",
+        headers=admin_headers,
+        json={
+            "full_name": "MPO Employee Updated",
+            "username": "mpoemployee",
+            "email": "mpo@example.com",
+            "role": "Employee",
+            "status": "Active",
+            "permissions": [],
+        },
+    )
+    assert removed_permissions.status_code == 200, removed_permissions.text
+    saved_user = next(item for item in client.get("/auth/users", headers=admin_headers).json() if item["username"] == "mpoemployee")
+    assert saved_user["office_id"] == office["id"]
+    assert saved_user["permissions"] == []
+
+    with SessionLocal() as db:
+        assert db.query(models.AuditLog).filter(models.AuditLog.action == "OFFICE_CREATED").count() == 1
+        assert db.query(models.AuditLog).filter(models.AuditLog.action == "OFFICE_UPDATED").count() == 2
+        assert db.query(models.AuditLog).filter(models.AuditLog.action == "USER_OFFICE_ASSIGNED").count() == 2
+        assert db.query(models.AuditLog).filter(models.AuditLog.action == "USER_PERMISSIONS_CHANGED").count() == 2
+
+
+def test_non_super_admin_cannot_manage_offices_or_assign_office():
+    reset_db()
+    client = TestClient(main.app)
+    admin_headers = bearer_headers(client)
+    with SessionLocal() as db:
+        office = models.Office(name="Planning Office", office_code="PLAN")
+        manager = models.User(
+            username="officemanager",
+            hashed_password=get_password_hash("managerpass"),
+            role="Employee",
+            permissions="['view_users', 'create_users', 'edit_users']",
+            status="Active",
+            is_active=True,
+        )
+        target = models.User(
+            username="office-target",
+            hashed_password=get_password_hash("targetpass"),
+            role="Employee",
+            permissions="['view_documents']",
+            status="Active",
+            is_active=True,
+        )
+        db.add_all([office, manager, target])
+        db.commit()
+        office_id = office.id
+        manager_id = manager.id
+        target_id = target.id
+
+    manager_headers = bearer_headers(client, "officemanager", "managerpass")
+    assert client.get("/offices", headers=manager_headers).status_code == 403
+    assert client.post(
+        "/offices",
+        headers=manager_headers,
+        json={"name": "Unauthorized Office", "office_code": "NOPE"},
+    ).status_code == 403
+
+    self_assignment = client.put(
+        f"/auth/users/{manager_id}",
+        headers=manager_headers,
+        json={
+            "full_name": "Office Manager",
+            "username": "officemanager",
+            "email": "manager@example.com",
+            "role": "Employee",
+            "status": "Active",
+            "permissions": ["view_users", "create_users", "edit_users"],
+            "office_id": office_id,
+        },
+    )
+    assert self_assignment.status_code == 403, self_assignment.text
+
+    assignment = client.put(
+        f"/auth/users/{target_id}",
+        headers=manager_headers,
+        json={
+            "full_name": "Office Target",
+            "username": "office-target",
+            "email": "target@example.com",
+            "role": "Employee",
+            "status": "Active",
+            "permissions": ["view_documents"],
+            "office_id": office_id,
+        },
+    )
+    assert assignment.status_code == 403, assignment.text
+
+    account_assignment = client.post(
+        "/auth/register",
+        headers=manager_headers,
+        json={
+            "username": "managed-office-target",
+            "password": "securepass",
+            "full_name": "Managed Office Target",
+            "email": "managed-target@example.com",
+            "role": "Employee",
+            "office_id": office_id,
+        },
+    )
+    assert account_assignment.status_code == 403, account_assignment.text
 
 
 def test_super_admin_can_edit_identity_and_office_but_keeps_full_access():

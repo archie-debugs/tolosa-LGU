@@ -179,6 +179,12 @@ def ensure_schema_columns() -> None:
                 _add_column_if_missing(connection, "documents", "date_registered", "ALTER TABLE documents ADD COLUMN date_registered VARCHAR")
                 _add_column_if_missing(connection, "documents", "attachment_name", "ALTER TABLE documents ADD COLUMN attachment_name VARCHAR")
                 _add_column_if_missing(connection, "documents", "qr_code_value", "ALTER TABLE documents ADD COLUMN qr_code_value VARCHAR")
+                _add_column_if_missing(connection, "documents", "qr_token", "ALTER TABLE documents ADD COLUMN qr_token VARCHAR(64)")
+                for row in connection.exec_driver_sql("SELECT id FROM documents WHERE qr_token IS NULL OR qr_token = ''").fetchall():
+                    token = secrets.token_urlsafe(32)
+                    while connection.execute(text("SELECT 1 FROM documents WHERE qr_token = :token"), {"token": token}).fetchone() is not None:
+                        token = secrets.token_urlsafe(32)
+                    connection.execute(text("UPDATE documents SET qr_token = :token WHERE id = :id"), {"token": token, "id": row[0]})
                 _add_column_if_missing(connection, "documents", "document_number", "ALTER TABLE documents ADD COLUMN document_number VARCHAR")
                 _add_column_if_missing(connection, "documents", "series_year", "ALTER TABLE documents ADD COLUMN series_year INTEGER")
                 _add_column_if_missing(connection, "documents", "archived_at", "ALTER TABLE documents ADD COLUMN archived_at DATETIME")
@@ -205,6 +211,12 @@ def ensure_schema_columns() -> None:
                 _add_column_if_missing(connection, "documents", "date_registered", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS date_registered VARCHAR"))
                 _add_column_if_missing(connection, "documents", "attachment_name", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS attachment_name VARCHAR"))
                 _add_column_if_missing(connection, "documents", "qr_code_value", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_code_value VARCHAR"))
+                _add_column_if_missing(connection, "documents", "qr_token", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS qr_token VARCHAR(64)"))
+                for row in connection.execute(text("SELECT id FROM documents WHERE qr_token IS NULL OR qr_token = ''")).fetchall():
+                    token = secrets.token_urlsafe(32)
+                    while connection.execute(text("SELECT 1 FROM documents WHERE qr_token = :token"), {"token": token}).fetchone() is not None:
+                        token = secrets.token_urlsafe(32)
+                    connection.execute(text("UPDATE documents SET qr_token = :token WHERE id = :id"), {"token": token, "id": row[0]})
                 _add_column_if_missing(connection, "documents", "document_number", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_number VARCHAR"))
                 _add_column_if_missing(connection, "documents", "series_year", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS series_year INTEGER"))
                 _add_column_if_missing(connection, "documents", "archived_at", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP"))
@@ -239,6 +251,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "search_documents",
         "filter_documents",
         "view_document_details",
+        "pass_office_documents",
         "edit_documents",
         "register_documents",
         "archive_documents",
@@ -292,12 +305,21 @@ UI_PERMISSIONS = {
     "modify_system_settings",
     "manage_public_visibility",
 }
+OFFICE_WORKFLOW_PERMISSIONS = {
+    "view_office_documents",
+    "search_office_documents",
+    "view_office_document_details",
+    "scan_qr",
+    "pass_office_documents",
+    "confirm_document_receipt",
+    "view_office_history",
+}
 VALID_PERMISSIONS = {
     permission
     for permissions in DEFAULT_ROLE_PERMISSIONS.values()
     for permission in permissions
     if permission != "*"
-} | USER_MANAGEMENT_PERMISSIONS | UI_PERMISSIONS
+} | USER_MANAGEMENT_PERMISSIONS | UI_PERMISSIONS | OFFICE_WORKFLOW_PERMISSIONS
 
 DEFAULT_SYSTEM_SETTINGS = {
     "organization_name": "LGU Tolosa",
@@ -397,10 +419,14 @@ def user_has_permission(user: models.User, permission: str) -> bool:
     role = normalize_user_role(getattr(user, "role", None))
     if role == "Super Administrator":
         return True
+    normalized_permission = normalize_permission_name(permission)
+    if normalized_permission in OFFICE_WORKFLOW_PERMISSIONS and (
+        role != "Employee" or getattr(user, "office_id", None) is None
+    ):
+        return False
     permissions = normalize_permissions(getattr(user, "permissions", None))
     if "*" in permissions:
         return True
-    normalized_permission = normalize_permission_name(permission)
     return normalized_permission in permissions
 
 

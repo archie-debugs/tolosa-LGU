@@ -15,6 +15,7 @@ from ..core import (
     normalize_permissions,
     validate_permissions,
     get_default_permissions_for_role,
+    OFFICE_WORKFLOW_PERMISSIONS,
     require_permission,
     require_user_management_permission,
     get_current_user_for_user_management,
@@ -82,10 +83,12 @@ async def register_user(
     if existing_user:
         raise HTTPException(status_code=409, detail=f"Username '{username}' already exists")
 
-    permission_list = []
-    if permissions:
+    office_assignment_requested = office_id not in (None, "")
+    if "permissions" in data:
         permission_list = validate_permissions(permissions)
-    if not permission_list:
+    elif normalized_role == "Employee" and office_assignment_requested:
+        permission_list = []
+    else:
         permission_list = get_default_permissions_for_role(normalized_role)
     if normalized_role == "Super Administrator":
         if normalize_user_role(current_admin.role) != "Super Administrator":
@@ -94,12 +97,17 @@ async def register_user(
 
     office = None
     if office_id not in (None, ""):
+        if normalize_user_role(current_admin.role) != "Super Administrator":
+            raise HTTPException(status_code=403, detail="Only a Super Administrator can assign an office")
         try:
             office = db.query(models.Office).filter(models.Office.id == int(office_id)).first()
         except (TypeError, ValueError):
             office = None
-        if not office:
-            raise HTTPException(status_code=400, detail="Office not found")
+        if not office or not office.is_active:
+            raise HTTPException(status_code=400, detail="An active office is required")
+
+    if normalized_role == "Employee" and office is not None:
+        permission_list = sorted(OFFICE_WORKFLOW_PERMISSIONS)
 
     try:
         new_user = models.User(
@@ -128,6 +136,15 @@ async def register_user(
         target_id=str(new_user.id),
         details=f"{current_admin.username} created account {new_user.username} for role {normalized_role}",
     )
+    if new_user.office_id is not None:
+        record_audit_log(
+            db,
+            actor=current_admin.username,
+            action="USER_OFFICE_ASSIGNED",
+            target_type="User",
+            target_id=str(new_user.id),
+            details=f"{current_admin.username} assigned {new_user.username} to office {new_user.office_id}",
+        )
 
     return {
         "message": "User registered successfully",
@@ -136,6 +153,7 @@ async def register_user(
         "full_name": new_user.full_name,
         "email": new_user.email,
         "role": new_user.role,
+        "office_id": new_user.office_id,
         "permissions": permission_list,
     }
 
@@ -182,8 +200,11 @@ def list_user_offices(
     current_admin: models.User = Depends(require_user_management_permission("view_users")),
 ):
     return [
-        {"id": office.id, "name": office.name}
-        for office in db.query(models.Office).order_by(models.Office.name.asc()).all()
+        {"id": office.id, "name": office.name, "office_code": office.office_code}
+        for office in db.query(models.Office)
+        .filter(models.Office.is_active.is_(True))
+        .order_by(models.Office.name.asc())
+        .all()
     ]
 
 
@@ -218,11 +239,22 @@ def update_user(
     if not target_is_super_admin and set(requested_permissions) != normalize_permissions(user.permissions):
         require_permission(current_admin, "manage_permissions")
 
-    office = None
-    if payload.office_id is not None:
-        office = db.query(models.Office).filter(models.Office.id == payload.office_id).first()
-        if not office:
-            raise HTTPException(status_code=400, detail="Office not found")
+    office_fields = getattr(payload, "model_fields_set", None)
+    if office_fields is None:
+        office_fields = getattr(payload, "__fields_set__", set())
+    office_id_supplied = "office_id" in office_fields
+    next_office_id = payload.office_id if office_id_supplied else user.office_id
+    office_changed = next_office_id != user.office_id
+    office = user.office if not office_changed else None
+    if office_changed:
+        if normalize_user_role(current_admin.role) != "Super Administrator":
+            raise HTTPException(status_code=403, detail="Only a Super Administrator can change an office assignment")
+        if next_office_id is not None:
+            office = db.query(models.Office).filter(models.Office.id == next_office_id).first()
+            if not office:
+                raise HTTPException(status_code=400, detail="Office not found")
+            if not office.is_active:
+                raise HTTPException(status_code=400, detail="Inactive offices cannot be assigned")
 
     duplicate = db.query(models.User).filter(models.User.username == payload.username.strip(), models.User.id != user_id).first()
     if duplicate:
@@ -230,6 +262,7 @@ def update_user(
 
     previous_role = normalize_user_role(user.role)
     previous_permissions = normalize_permissions(user.permissions)
+    previous_office_id = user.office_id
     user.full_name = payload.full_name.strip()
     user.username = payload.username.strip()
     user.email = payload.email.strip()
@@ -239,6 +272,15 @@ def update_user(
     user.status = normalized_status
     user.is_active = normalized_status == "Active"
     db.commit()
+    if previous_office_id != user.office_id:
+        record_audit_log(
+            db,
+            actor=current_admin.username,
+            action="USER_OFFICE_CHANGED",
+            target_type="User",
+            target_id=str(user.id),
+            details=f"{current_admin.username} changed {user.username} office from {previous_office_id} to {user.office_id}",
+        )
     if normalized_role != previous_role:
         record_audit_log(
             db,

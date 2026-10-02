@@ -95,13 +95,15 @@ def main():
                 print(f"Port {sb_backend_port} is already in use. SB Member backend was not launched.")
 
             frontend_port = int(os.getenv("FRONTEND_PORT", "8550"))
-            frontend_host = "127.0.0.1"
-            if not check_port_available(frontend_host, frontend_port):
+            frontend_host = os.getenv("FRONTEND_HOST", "")
+            frontend_bind_host = frontend_host or "0.0.0.0"
+            if not check_port_available(frontend_bind_host, frontend_port):
                 print(f"Port {frontend_port} is already in use. Frontend cannot start.")
                 print("Backend started, but the frontend was not launched.")
             elif "--no-frontend" not in args:
                 frontend_env = os.environ.copy()
                 frontend_env["FRONTEND_PORT"] = str(frontend_port)
+                frontend_env["FRONTEND_HOST"] = frontend_host
                 start_process("frontend", FRONTEND, env=frontend_env)
                 print("All processes started. Press Ctrl+C to stop.")
             else:

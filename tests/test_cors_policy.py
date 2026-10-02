@@ -9,3 +9,7 @@ def test_cors_allows_only_trusted_origins():
     assert "*" not in origins
     assert "http://localhost:3000" in origins
     assert "http://127.0.0.1:3000" in origins
+    assert "http://127.0.0.1:8550" in origins
+    assert "http://localhost:8550" in origins
+    assert "http://192.168.1.8:8550" in origins
+    assert "http://192.168.1.13:8550" not in origins

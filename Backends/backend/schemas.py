@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 class DocumentCreate(BaseModel):
     tracking_number: str = Field(..., min_length=1)
     document_number: Optional[str] = None
-    series_year: Optional[int] = None
+    series_year: int = Field(..., ge=1000, le=9999)
     title: str = Field(..., min_length=1)
     description: Optional[str] = None
     document_type: Optional[str] = None
@@ -30,7 +30,7 @@ class DocumentCreate(BaseModel):
 class DocumentRegistration(BaseModel):
     title: str = Field(..., min_length=1)
     document_number: Optional[str] = None
-    series_year: Optional[int] = None
+    series_year: int = Field(..., ge=1000, le=9999)
     description: Optional[str] = None
     document_type: Optional[str] = None
     current_office: Optional[str] = None
@@ -65,6 +65,8 @@ class DocumentUpdate(BaseModel):
 class DocumentResponse(BaseModel):
     id: int
     tracking_number: str
+    qr_token: Optional[str] = None
+    canonical_qr_url: Optional[str] = None
     document_number: Optional[str] = None
     series_year: Optional[int] = None
     title: str
@@ -94,6 +96,8 @@ class DocumentResponse(BaseModel):
     archived: bool
     archived_at: Optional[datetime] = None
     archived_by: Optional[str] = None
+    office_receipt_status: Optional[str] = None
+    office_receipt_confirmed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -108,3 +112,37 @@ class PaginatedDocumentResponse(BaseModel):
     page_size: int
     total_pages: int
     available_years: list[int] = Field(default_factory=list)
+
+
+class DocumentHandoffCreate(BaseModel):
+    receiving_office_id: int = Field(..., gt=0)
+
+
+class DocumentHandoffResponse(BaseModel):
+    id: int
+    document_id: int
+    sending_office_id: int
+    receiving_office_id: int
+    sending_employee_id: int
+    sent_at: datetime
+    status: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    sending_office_name: Optional[str] = None
+    receiving_office_name: Optional[str] = None
+    sending_employee_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class OfficeCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=160)
+    office_code: str = Field(..., min_length=1, max_length=32)
+    is_active: bool = True
+
+
+class OfficeUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=160)
+    office_code: str = Field(..., min_length=1, max_length=32)
+    is_active: bool
