@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -134,6 +134,26 @@ class DocumentHandoffResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DocumentActionCreate(BaseModel):
+    action_type: Literal["Received", "Signed", "Reviewed", "Approved", "Noted", "Other"]
+    notes: Optional[str] = None
+
+
+class DocumentActionResponse(BaseModel):
+    id: int
+    document_id: int
+    office_id: int
+    employee_id: Optional[int] = None
+    handoff_id: int
+    action_type: str
+    notes: Optional[str] = None
+    office_name: Optional[str] = None
+    employee_name: Optional[str] = None
+    performed_at: datetime
+    created_at: datetime
+    message: Optional[str] = None
 
 
 class OfficeCreate(BaseModel):

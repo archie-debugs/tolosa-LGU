@@ -70,8 +70,8 @@ def list_available_offices_for_handoff(
     if getattr(current_user, "office_id", None) is None:
         raise HTTPException(status_code=403, detail="Office assignment required")
     require_permission(current_user, "pass_office_documents")
-    if normalize_user_role(getattr(current_user, "role", None)) != "Employee":
-        raise HTTPException(status_code=403, detail="Employee access required")
+    if normalize_user_role(getattr(current_user, "role", None)) not in {"Employee", "Super Administrator"}:
+        raise HTTPException(status_code=403, detail="Employee or Super Administrator access required")
 
     offices = (
         db.query(models.Office)

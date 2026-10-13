@@ -233,6 +233,39 @@ class DocumentReceipt(Base):
     confirmed_by = relationship("User", foreign_keys=[confirmed_by_user_id])
 
 
+class DocumentAction(Base):
+    __tablename__ = "document_actions"
+    __table_args__ = (
+        CheckConstraint(
+            "action_type IN ('Received', 'Signed', 'Reviewed', 'Approved', 'Noted', 'Other')",
+            name="ck_document_actions_action_type",
+        ),
+        Index("ix_document_actions_document_id", "document_id"),
+        Index("ix_document_actions_office_id", "office_id"),
+        Index("ix_document_actions_employee_id", "employee_id"),
+        Index("ix_document_actions_handoff_id", "handoff_id"),
+        Index("ix_document_actions_performed_at", "performed_at"),
+        Index("ix_document_actions_action_type", "action_type"),
+        Index("ix_document_actions_created_at", "created_at"),
+        Index("ix_document_actions_document_performed", "document_id", "performed_at", "id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False)
+    employee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    handoff_id = Column(Integer, ForeignKey("document_handoffs.id"), nullable=False)
+    action_type = Column(String(50), nullable=False)
+    notes = Column(Text, nullable=True)
+    performed_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    office = relationship("Office", foreign_keys=[office_id])
+    employee = relationship("User", foreign_keys=[employee_id])
+    handoff = relationship("DocumentHandoff", foreign_keys=[handoff_id])
+
+
 class DocumentHistory(Base):
     __tablename__ = "document_history"
 

@@ -26,6 +26,7 @@ def reset_db():
     with SessionLocal() as db:
         db.query(models.DocumentTrackingNumberAlias).delete()
         db.query(models.DocumentHandoff).delete()
+        db.query(models.DocumentAction).delete()
         db.query(models.DocumentOffice).delete()
         db.query(models.DocumentReceipt).delete()
         db.query(models.Attachment).delete()
@@ -87,6 +88,7 @@ def test_handoff_creation_and_pending_receipt_flow():
         db.add(doc)
         db.commit()
         db.refresh(doc)
+        document_id = doc.id
         db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
         db.commit()
 
@@ -145,6 +147,139 @@ def test_handoff_creation_and_pending_receipt_flow():
     assert len(items) == 1
     assert items[0]["status"] == "Received"
     assert items[0]["receiving_office_id"] == office_b_id
+
+
+def test_super_admin_handoff_uses_assigned_office_and_requires_assignment():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Main SB Office", office_code="MAIN")
+        office_b = models.Office(name="Receiving Office", office_code="RECV")
+        office_c = models.Office(name="Arbitrary Office", office_code="ARBT")
+        db.add_all([office_a, office_b, office_c])
+        db.commit()
+        db.refresh(office_a)
+        db.refresh(office_b)
+        db.refresh(office_c)
+
+        doc = models.Document(
+            tracking_number="DOC-500010",
+            title="Super Administrator Handoff",
+            status="Approved",
+            priority="Medium",
+            qr_token="handoff-super-admin-token-010",
+            qr_code_value="https://example.test/qr/handoff-super-admin-token-010",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+        assigned_admin = models.User(
+            username="assigned-super-admin",
+            hashed_password=get_password_hash("pw123"),
+            role="Super Administrator",
+            office_id=office_a.id,
+            permissions="['*']",
+            status="Active",
+            is_active=True,
+        )
+        unassigned_admin = models.User(
+            username="unassigned-super-admin",
+            hashed_password=get_password_hash("pw123"),
+            role="Super Administrator",
+            office_id=None,
+            permissions="['*']",
+            status="Active",
+            is_active=True,
+        )
+        db.add_all([assigned_admin, unassigned_admin])
+        db.commit()
+        document_id = doc.id
+        office_a_id = office_a.id
+        office_b_id = office_b.id
+        office_c_id = office_c.id
+
+    denied = client.post(
+        f"/documents/{document_id}/handoffs",
+        json={"receiving_office_id": office_b_id},
+        headers=bearer_headers(client, "unassigned-super-admin", "pw123"),
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Office assignment required"
+
+    created = client.post(
+        f"/documents/{document_id}/handoffs",
+        json={"receiving_office_id": office_b_id, "sending_office_id": office_c_id},
+        headers=bearer_headers(client, "assigned-super-admin", "pw123"),
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["sending_office_id"] == office_a_id
+    assert created.json()["receiving_office_id"] == office_b_id
+
+
+def test_super_admin_can_monitor_selected_office_without_changing_assignment():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Assigned Office", office_code="ASGN")
+        office_b = models.Office(name="Monitored Office", office_code="MONI")
+        db.add_all([office_a, office_b])
+        db.commit()
+        db.refresh(office_a)
+        db.refresh(office_b)
+        doc = models.Document(
+            tracking_number="DOC-500011",
+            title="Monitored Document",
+            status="Approved",
+            priority="Medium",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        db.add(models.DocumentOffice(document_id=doc.id, office_id=office_b.id))
+        admin = models.User(
+            username="monitoring-super-admin",
+            hashed_password=get_password_hash("pw123"),
+            role="Super Administrator",
+            office_id=office_a.id,
+            permissions="['*']",
+            status="Active",
+            is_active=True,
+        )
+        db.add(admin)
+        db.commit()
+        monitored_office_id = office_b.id
+        document_id = doc.id
+
+    headers = bearer_headers(client, "monitoring-super-admin", "pw123")
+    documents = client.get(
+        "/documents/office",
+        params={"office_id": monitored_office_id},
+        headers=headers,
+    )
+    assert documents.status_code == 200, documents.text
+    assert [item["id"] for item in documents.json()["items"]] == [document_id]
+
+    incoming = client.get(
+        "/documents/office/handoffs",
+        params={"office_id": monitored_office_id, "direction": "incoming"},
+        headers=headers,
+    )
+    assert incoming.status_code == 200, incoming.text
+
+    history = client.get(
+        "/documents/office/history",
+        params={"office_id": monitored_office_id},
+        headers=headers,
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()["office_id"] == monitored_office_id
+
+    with SessionLocal() as db:
+        admin = db.query(models.User).filter(models.User.username == "monitoring-super-admin").one()
+        assert admin.office_id != monitored_office_id
 
 
 def test_handoff_lists_are_office_scoped_and_history_is_ordered():
@@ -261,11 +396,10 @@ def test_qr_office_access_requires_matching_pending_handoff_for_receiving_office
         db.add(doc)
         db.commit()
         db.refresh(doc)
+        document_id = doc.id
 
         db.add_all([
             models.DocumentOffice(document_id=doc.id, office_id=office_a.id),
-            models.DocumentOffice(document_id=doc.id, office_id=office_b.id),
-            models.DocumentOffice(document_id=doc.id, office_id=office_c.id),
         ])
 
         sender_a = create_employee(db, "repeat_sender_a", office_a.id, permissions=["pass_office_documents", "view_office_documents", "scan_qr", "view_office_document_details", "view_office_history"])
@@ -307,10 +441,20 @@ def test_qr_office_access_requires_matching_pending_handoff_for_receiving_office
 
     allowed = client.get(f"/documents/qr/{qr_token}/office", headers=office_c_headers)
     assert allowed.status_code == 200, allowed.text
+    allowed_details = client.get(
+        f"/documents/office/{document_id}",
+        headers=office_c_headers,
+    )
+    assert allowed_details.status_code == 200, allowed_details.text
 
-    denied_b = client.get(f"/documents/qr/{qr_token}/office", headers=office_b_headers)
-    assert denied_b.status_code == 403, denied_b.text
-    assert "pending receipt" in denied_b.json()["detail"].lower()
+    received_b = client.get(f"/documents/qr/{qr_token}/office", headers=office_b_headers)
+    assert received_b.status_code == 200, received_b.text
+    assert received_b.json()["handoff_status"] == "Received"
+    received_b_details = client.get(
+        f"/documents/office/{document_id}",
+        headers=office_b_headers,
+    )
+    assert received_b_details.status_code == 200, received_b_details.text
 
     denied_a = client.get(f"/documents/qr/{qr_token}/office", headers=office_a_headers)
     assert denied_a.status_code == 403, denied_a.text
@@ -369,3 +513,369 @@ def test_receipt_confirmation_requires_matching_pending_handoff():
     denied = client.post(f"/documents/qr/{qr_token}/receipt", headers=receiver_headers)
     assert denied.status_code == 403, denied.text
     assert "not pending receipt" in denied.json()["detail"].lower()
+
+
+def test_received_document_can_record_multiple_actions_and_list_history():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Action Sender Office", office_code="ACTA")
+        office_b = models.Office(name="Action Receiver Office", office_code="ACTB")
+        db.add_all([office_a, office_b])
+        db.commit()
+        db.refresh(office_a)
+        db.refresh(office_b)
+
+        doc = models.Document(
+            tracking_number="DOC-ACTION-001",
+            title="Action Test Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="action-test-token-001",
+            qr_code_value="https://example.test/qr/action-test-token-001",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+        sender = create_employee(
+            db,
+            "action_sender",
+            office_a.id,
+            permissions=["pass_office_documents"],
+        )
+        employee = create_employee(
+            db,
+            "action_receiver",
+            office_b.id,
+            permissions=["scan_qr", "view_office_document_details", "view_office_history"],
+        )
+        handoff = models.DocumentHandoff(
+            document_id=doc.id,
+            sending_office_id=office_a.id,
+            receiving_office_id=office_b.id,
+            sending_employee_id=sender.id,
+            status="Received",
+        )
+        db.add(handoff)
+        db.commit()
+        db.refresh(handoff)
+        db.add(models.DocumentReceipt(
+            document_id=doc.id,
+            office_id=office_b.id,
+            handoff_id=handoff.id,
+            confirmed_by_user_id=employee.id,
+            status="Received",
+        ))
+        db.commit()
+        document_id = doc.id
+        office_b_id = office_b.id
+        employee_id = employee.id
+        handoff_id = handoff.id
+
+    headers = bearer_headers(client, "action_receiver")
+    first = client.post(
+        f"/documents/qr/action-test-token-001/actions",
+        json={"action_type": "Signed", "notes": "Signed by reviewer"},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert first_payload["document_id"] == document_id
+    assert first_payload["office_id"] == office_b_id
+    assert first_payload["employee_id"] == employee_id
+    assert first_payload["handoff_id"] == handoff_id
+    assert first_payload["action_type"] == "Signed"
+
+    second = client.post(
+        f"/documents/qr/action-test-token-001/actions",
+        json={"action_type": "Reviewed"},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    third = client.post(
+        f"/documents/qr/action-test-token-001/actions",
+        json={"action_type": "Received", "notes": "Document received and acknowledged."},
+        headers=headers,
+    )
+    assert third.status_code == 200, third.text
+    third_payload = third.json()
+    assert third_payload["document_id"] == document_id
+    assert third_payload["office_id"] == office_b_id
+    assert third_payload["employee_id"] == employee_id
+    assert third_payload["handoff_id"] == handoff_id
+    assert third_payload["action_type"] == "Received"
+    assert third_payload["performed_at"]
+    history = client.get(f"/documents/{document_id}/actions", headers=headers)
+    assert history.status_code == 200, history.text
+    assert [item["action_type"] for item in history.json()["items"]] == ["Signed", "Reviewed", "Received"]
+
+    with SessionLocal() as db:
+        rows = db.query(models.DocumentAction).filter(models.DocumentAction.document_id == document_id).all()
+        assert len(rows) == 3
+        received = next(row for row in rows if row.action_type == "Received")
+        assert received.document_id == document_id
+        assert received.office_id == office_b_id
+        assert received.employee_id == employee_id
+        assert received.handoff_id == handoff_id
+        assert received.performed_at is not None
+
+
+def test_pending_receipt_cannot_record_document_action():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Pending Action Sender", office_code="PASA")
+        office_b = models.Office(name="Pending Action Receiver", office_code="PASB")
+        db.add_all([office_a, office_b])
+        db.commit()
+        db.refresh(office_a)
+        db.refresh(office_b)
+        doc = models.Document(
+            tracking_number="DOC-ACTION-002",
+            title="Pending Action Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="action-test-token-002",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+        receiver = create_employee(
+            db,
+            "pending_action_receiver",
+            office_b.id,
+            permissions=["scan_qr", "view_office_document_details"],
+        )
+        db.add(models.DocumentHandoff(
+            document_id=doc.id,
+            sending_office_id=office_a.id,
+            receiving_office_id=office_b.id,
+            sending_employee_id=receiver.id,
+            status="Pending Receipt",
+        ))
+        db.commit()
+
+    response = client.post(
+        "/documents/qr/action-test-token-002/actions",
+        json={"action_type": "Received"},
+        headers=bearer_headers(client, "pending_action_receiver"),
+    )
+    assert response.status_code == 403, response.text
+    with SessionLocal() as db:
+        assert db.query(models.DocumentAction).count() == 0
+
+
+def test_wrong_office_cannot_record_document_action():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Wrong Action Sender", office_code="WASA")
+        office_b = models.Office(name="Wrong Action Receiver", office_code="WASB")
+        office_c = models.Office(name="Wrong Action Office", office_code="WASC")
+        db.add_all([office_a, office_b, office_c])
+        db.commit()
+        db.refresh(office_a)
+        db.refresh(office_b)
+        db.refresh(office_c)
+        doc = models.Document(
+            tracking_number="DOC-ACTION-003",
+            title="Wrong Office Action Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="action-test-token-003",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+        receiver = create_employee(
+            db,
+            "correct_action_receiver",
+            office_b.id,
+            permissions=["scan_qr", "view_office_document_details"],
+        )
+        wrong_office = create_employee(
+            db,
+            "wrong_action_office",
+            office_c.id,
+            permissions=["scan_qr", "view_office_document_details"],
+        )
+        db.add(models.DocumentHandoff(
+            document_id=doc.id,
+            sending_office_id=office_a.id,
+            receiving_office_id=office_b.id,
+            sending_employee_id=receiver.id,
+            status="Received",
+        ))
+        db.commit()
+        handoff = db.query(models.DocumentHandoff).filter(
+            models.DocumentHandoff.document_id == doc.id
+        ).one()
+        db.add(models.DocumentReceipt(
+            document_id=doc.id,
+            office_id=office_b.id,
+            handoff_id=handoff.id,
+            confirmed_by_user_id=receiver.id,
+            status="Received",
+        ))
+        db.commit()
+
+    response = client.post(
+        "/documents/qr/action-test-token-003/actions",
+        json={"action_type": "Received"},
+        headers=bearer_headers(client, "wrong_action_office"),
+    )
+    assert response.status_code == 403, response.text
+    with SessionLocal() as db:
+        assert db.query(models.DocumentAction).count() == 0
+
+
+def test_received_office_document_count_uses_completed_receipts_without_duplicates():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office_a = models.Office(name="Count Sender Office", office_code="CSA")
+        office_b = models.Office(name="Count Receiver Office", office_code="CSB")
+        office_c = models.Office(name="Count Other Office", office_code="CSC")
+        db.add_all([office_a, office_b, office_c])
+        db.commit()
+        for office in (office_a, office_b, office_c):
+            db.refresh(office)
+
+        employee_a = create_employee(db, "count_employee_a", office_a.id, ["view_office_documents"])
+        employee_b = create_employee(db, "count_employee_b", office_b.id, ["view_office_documents"])
+        employee_c = create_employee(db, "count_employee_c", office_c.id, ["view_office_documents"])
+
+        received_doc = models.Document(
+            tracking_number="DOC-COUNT-001",
+            title="Received Count Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="count-test-token-001",
+        )
+        pending_doc = models.Document(
+            tracking_number="DOC-COUNT-002",
+            title="Pending Count Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="count-test-token-002",
+        )
+        sent_doc = models.Document(
+            tracking_number="DOC-COUNT-003",
+            title="Sent Count Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="count-test-token-003",
+        )
+        current_doc = models.Document(
+            tracking_number="DOC-COUNT-004",
+            title="Current Office Count Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="count-test-token-004",
+            current_office_id=office_a.id,
+        )
+        archived_doc = models.Document(
+            tracking_number="DOC-COUNT-005",
+            title="Archived Count Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="count-test-token-005",
+            current_office_id=office_a.id,
+            archived=True,
+        )
+        db.add_all([received_doc, pending_doc, sent_doc, current_doc, archived_doc])
+        db.commit()
+        for document in (received_doc, pending_doc, sent_doc, current_doc, archived_doc):
+            db.refresh(document)
+
+        db.add_all([
+            models.DocumentOffice(document_id=received_doc.id, office_id=office_a.id),
+            models.DocumentOffice(document_id=pending_doc.id, office_id=office_a.id),
+        ])
+        received_handoff_one = models.DocumentHandoff(
+            document_id=received_doc.id,
+            sending_office_id=office_a.id,
+            receiving_office_id=office_b.id,
+            sending_employee_id=employee_a.id,
+            status="Received",
+        )
+        received_handoff_two = models.DocumentHandoff(
+            document_id=received_doc.id,
+            sending_office_id=office_a.id,
+            receiving_office_id=office_b.id,
+            sending_employee_id=employee_a.id,
+            status="Received",
+        )
+        pending_handoff = models.DocumentHandoff(
+            document_id=pending_doc.id,
+            sending_office_id=office_a.id,
+            receiving_office_id=office_b.id,
+            sending_employee_id=employee_a.id,
+            status="Pending Receipt",
+        )
+        sent_handoff = models.DocumentHandoff(
+            document_id=sent_doc.id,
+            sending_office_id=office_b.id,
+            receiving_office_id=office_c.id,
+            sending_employee_id=employee_b.id,
+            status="Received",
+        )
+        db.add_all([received_handoff_one, received_handoff_two, pending_handoff, sent_handoff])
+        db.commit()
+        for handoff in (received_handoff_one, received_handoff_two, sent_handoff):
+            db.refresh(handoff)
+        db.add_all([
+            models.DocumentReceipt(
+                document_id=received_doc.id,
+                office_id=office_b.id,
+                handoff_id=received_handoff_one.id,
+                confirmed_by_user_id=employee_b.id,
+                status="Received",
+            ),
+            models.DocumentReceipt(
+                document_id=received_doc.id,
+                office_id=office_b.id,
+                handoff_id=received_handoff_two.id,
+                confirmed_by_user_id=employee_b.id,
+                status="Received",
+            ),
+            models.DocumentReceipt(
+                document_id=sent_doc.id,
+                office_id=office_c.id,
+                handoff_id=sent_handoff.id,
+                confirmed_by_user_id=employee_c.id,
+                status="Received",
+            ),
+        ])
+        db.commit()
+        office_a_id = office_a.id
+        office_b_id = office_b.id
+        office_c_id = office_c.id
+
+    office_b_response = client.get(
+        f"/documents/office/received-count?office_id={office_b_id}",
+        headers=bearer_headers(client, "count_employee_b"),
+    )
+    assert office_b_response.status_code == 200, office_b_response.text
+    assert office_b_response.json()["total"] == 1
+
+    office_c_response = client.get(
+        f"/documents/office/received-count?office_id={office_c_id}",
+        headers=bearer_headers(client, "count_employee_c"),
+    )
+    assert office_c_response.status_code == 200, office_c_response.text
+    assert office_c_response.json()["total"] == 1
+
+    office_a_response = client.get(
+        f"/documents/office/received-count?office_id={office_a_id}",
+        headers=bearer_headers(client, "count_employee_a"),
+    )
+    assert office_a_response.status_code == 200, office_a_response.text
+    assert office_a_response.json()["total"] == 3

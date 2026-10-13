@@ -20,8 +20,13 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 # Load development environment settings before starting child processes
 load_dotenv(override=True)
+
+from Backends.backend.lan import refresh_development_public_urls
 
 FRONTEND = str(REPO_ROOT / "frontend" / "app.py")
 SB_MEMBER_BACKEND = str(REPO_ROOT / "Backends" / "SBmem_backend" / "main.py")
@@ -76,6 +81,7 @@ def stop_all():
 def main():
     args = set(sys.argv[1:])
     try:
+        refresh_development_public_urls()
         backend_port = int(os.getenv("PORT", "8001"))
         backend_host = "0.0.0.0"
         if not check_port_available(backend_host, backend_port):

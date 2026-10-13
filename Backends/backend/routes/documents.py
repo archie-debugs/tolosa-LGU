@@ -7,11 +7,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi import Query
-from sqlalchemy import Integer, String, cast, exc, func, or_, text
+from sqlalchemy import Integer, String, cast, exc, exists, func, or_, text
 from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
-from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, record_audit_log, require_permission, user_has_permission
+from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
 from ..auth_jwt import create_preview_token, decode_access_token, decode_preview_token, get_current_user
 import uuid
 import time
@@ -1082,6 +1082,23 @@ def _serialize_office_document(doc: models.Document):
     }
 
 
+def _resolve_office_monitoring_id(db: Session, current_user: models.User, requested_office_id: int | None) -> int:
+    assigned_office_id = getattr(current_user, "office_id", None)
+    if assigned_office_id is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+    if requested_office_id is None:
+        return assigned_office_id
+    if normalize_user_role(getattr(current_user, "role", None)) != "Super Administrator":
+        return assigned_office_id
+    office = db.query(models.Office).filter(
+        models.Office.id == requested_office_id,
+        models.Office.is_active.is_(True),
+    ).first()
+    if office is None:
+        raise HTTPException(status_code=404, detail="Office not found")
+    return office.id
+
+
 @router.get("/office", response_model=schemas.PaginatedDocumentResponse)
 @router.get("/my-office", response_model=schemas.PaginatedDocumentResponse)
 def list_office_documents(
@@ -1090,6 +1107,7 @@ def list_office_documents(
     document_type: str | None = None,
     year: int | None = Query(default=None, ge=1, le=9999),
     receipt_status: str | None = Query(default=None),
+    office_id: int | None = Query(default=None, ge=1),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
     sort_by: str = Query(default="created_at"),
@@ -1097,14 +1115,13 @@ def list_office_documents(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    if getattr(current_user, "office_id", None) is None:
-        raise HTTPException(status_code=403, detail="Office assignment required")
     require_permission(current_user, "view_office_documents")
+    monitoring_office_id = _resolve_office_monitoring_id(db, current_user, office_id)
 
     if search and not user_has_permission(current_user, "search_office_documents"):
         raise HTTPException(status_code=403, detail="Permission denied")
     office_document_ids = db.query(models.DocumentOffice.document_id).filter(
-        models.DocumentOffice.office_id == current_user.office_id
+        models.DocumentOffice.office_id == monitoring_office_id
     )
     query = db.query(models.Document).filter(
         models.Document.id.in_(office_document_ids),
@@ -1136,7 +1153,7 @@ def list_office_documents(
     if receipt_status:
         normalized_receipt_status = receipt_status.strip().lower().replace(" ", "_")
         received_ids = db.query(models.DocumentReceipt.document_id).filter(
-            models.DocumentReceipt.office_id == current_user.office_id
+            models.DocumentReceipt.office_id == monitoring_office_id
         )
         if normalized_receipt_status == "received":
             query = query.filter(models.Document.id.in_(received_ids))
@@ -1167,7 +1184,7 @@ def list_office_documents(
     document_ids = [doc.id for doc in docs]
     receipts = db.query(models.DocumentReceipt).filter(
         models.DocumentReceipt.document_id.in_(document_ids),
-        models.DocumentReceipt.office_id == current_user.office_id,
+        models.DocumentReceipt.office_id == monitoring_office_id,
     ).all() if document_ids else []
     receipts_by_document_id = {receipt.document_id: receipt for receipt in receipts}
     items = []
@@ -1187,6 +1204,41 @@ def list_office_documents(
     }
 
 
+@router.get("/office/received-count")
+def count_received_office_documents(
+    office_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "view_office_documents")
+    monitoring_office_id = _resolve_office_monitoring_id(db, current_user, office_id)
+    total = (
+        db.query(func.count(models.Document.id))
+        .filter(
+            models.Document.archived.is_(False),
+            or_(
+                models.Document.current_office_id == monitoring_office_id,
+                exists().where(
+                    models.DocumentOffice.document_id == models.Document.id,
+                    models.DocumentOffice.office_id == monitoring_office_id,
+                ),
+                exists().where(
+                    models.DocumentReceipt.document_id == models.Document.id,
+                    models.DocumentReceipt.office_id == monitoring_office_id,
+                    models.DocumentReceipt.status == "Received",
+                ),
+                exists().where(
+                    models.DocumentHandoff.document_id == models.Document.id,
+                    models.DocumentHandoff.receiving_office_id == monitoring_office_id,
+                    models.DocumentHandoff.status == "Received",
+                ),
+            ),
+        )
+        .scalar()
+    ) or 0
+    return {"office_id": monitoring_office_id, "total": total}
+
+
 @router.get("/office/{document_id:int}")
 def get_office_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     require_permission(current_user, "view_office_document_details")
@@ -1194,10 +1246,18 @@ def get_office_document(document_id: int, db: Session = Depends(get_db), current
         raise HTTPException(status_code=403, detail="Office assignment required")
     doc = db.query(models.Document).filter(
         models.Document.id == document_id,
-        models.Document.id.in_(
-            db.query(models.DocumentOffice.document_id).filter(
-                models.DocumentOffice.office_id == current_user.office_id
-            )
+        or_(
+            models.Document.id.in_(
+                db.query(models.DocumentOffice.document_id).filter(
+                    models.DocumentOffice.office_id == current_user.office_id
+                )
+            ),
+            models.Document.id.in_(
+                db.query(models.DocumentHandoff.document_id).filter(
+                    models.DocumentHandoff.receiving_office_id == current_user.office_id,
+                    models.DocumentHandoff.status.in_(("Pending Receipt", "Received")),
+                )
+            ),
         ),
     ).first()
     if not doc:
@@ -1214,22 +1274,22 @@ def get_office_document(document_id: int, db: Session = Depends(get_db), current
 
 @router.get("/office/history")
 def list_office_history(
+    office_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     require_permission(current_user, "view_office_history")
-    if getattr(current_user, "office_id", None) is None:
-        raise HTTPException(status_code=403, detail="Office assignment required")
+    monitoring_office_id = _resolve_office_monitoring_id(db, current_user, office_id)
     rows = (
         db.query(models.DocumentReceipt)
         .join(models.DocumentOffice, models.DocumentOffice.document_id == models.DocumentReceipt.document_id)
-        .filter(models.DocumentReceipt.office_id == current_user.office_id)
-        .filter(models.DocumentOffice.office_id == current_user.office_id)
+        .filter(models.DocumentReceipt.office_id == monitoring_office_id)
+        .filter(models.DocumentOffice.office_id == monitoring_office_id)
         .order_by(models.DocumentReceipt.confirmed_at.desc())
         .all()
     )
     return {
-        "office_id": current_user.office_id,
+        "office_id": monitoring_office_id,
         "items": [_serialize_document_receipt(row) for row in rows],
         "total": len(rows),
     }
@@ -1730,12 +1790,12 @@ def _resolve_office_qr_access(db: Session, current_user: models.User, qr_value: 
         )
         raise HTTPException(status_code=404, detail="QR code not recognized")
 
-    pending_handoff = db.query(models.DocumentHandoff).filter(
+    office_handoff = db.query(models.DocumentHandoff).filter(
         models.DocumentHandoff.document_id == doc.id,
         models.DocumentHandoff.receiving_office_id == current_user.office_id,
-        models.DocumentHandoff.status == "Pending Receipt",
+        models.DocumentHandoff.status.in_(("Pending Receipt", "Received")),
     ).first()
-    if pending_handoff is None:
+    if office_handoff is None:
         record_audit_log(
             db,
             actor=getattr(current_user, "username", "System"),
@@ -1770,6 +1830,7 @@ def _resolve_office_qr_access(db: Session, current_user: models.User, qr_value: 
         "description": doc.description,
         "office_name": office_name,
         "office_id": current_user.office_id,
+        "handoff_status": office_handoff.status,
         "assigned_to": doc.assigned_to,
         "author": doc.author,
         "qr_token": doc.qr_token,
@@ -1804,6 +1865,26 @@ def _serialize_document_receipt(row: models.DocumentReceipt):
     }
 
 
+def _serialize_document_action(row: models.DocumentAction):
+    return {
+        "id": row.id,
+        "document_id": row.document_id,
+        "office_id": row.office_id,
+        "employee_id": row.employee_id,
+        "handoff_id": row.handoff_id,
+        "action_type": row.action_type,
+        "notes": row.notes,
+        "office_name": row.office.name if row.office else None,
+        "employee_name": (
+            row.employee.full_name or row.employee.username
+            if row.employee
+            else None
+        ),
+        "performed_at": row.performed_at.isoformat() if row.performed_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
 def _serialize_handoff(row: models.DocumentHandoff):
     sending_office = row.sending_office
     receiving_office = row.receiving_office
@@ -1833,8 +1914,8 @@ def create_document_handoff(
 ):
     if getattr(current_user, "office_id", None) is None:
         raise HTTPException(status_code=403, detail="Office assignment required")
-    if getattr(current_user, "role", None) is None or "Employee" not in (str(current_user.role).strip(),):
-        raise HTTPException(status_code=403, detail="Employee access required")
+    if normalize_user_role(getattr(current_user, "role", None)) not in {"Employee", "Super Administrator"}:
+        raise HTTPException(status_code=403, detail="Employee or Super Administrator access required")
     require_permission(current_user, "pass_office_documents")
 
     doc = db.query(models.Document).filter(models.Document.id == document_id).with_for_update().first()
@@ -1898,12 +1979,12 @@ def list_office_handoffs(
     direction: str = Query(default="incoming"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    office_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    if getattr(current_user, "office_id", None) is None:
-        raise HTTPException(status_code=403, detail="Office assignment required")
     require_permission(current_user, "view_office_documents")
+    monitoring_office_id = _resolve_office_monitoring_id(db, current_user, office_id)
 
     normalized_direction = (direction or "incoming").strip().lower()
     if normalized_direction not in {"incoming", "sent"}:
@@ -1911,9 +1992,9 @@ def list_office_handoffs(
 
     query = db.query(models.DocumentHandoff).join(models.Document, models.Document.id == models.DocumentHandoff.document_id)
     if normalized_direction == "incoming":
-        query = query.filter(models.DocumentHandoff.receiving_office_id == current_user.office_id)
+        query = query.filter(models.DocumentHandoff.receiving_office_id == monitoring_office_id)
     else:
-        query = query.filter(models.DocumentHandoff.sending_office_id == current_user.office_id)
+        query = query.filter(models.DocumentHandoff.sending_office_id == monitoring_office_id)
     query = query.order_by(models.DocumentHandoff.sent_at.desc(), models.DocumentHandoff.id.desc())
 
     total = query.count()
@@ -1923,8 +2004,8 @@ def list_office_handoffs(
         payload = _serialize_handoff(row)
         payload["document_title"] = row.document.title if row.document else None
         payload["tracking_number"] = row.document.tracking_number if row.document else None
-        payload["other_office_id"] = row.receiving_office_id if row.sending_office_id == current_user.office_id else row.sending_office_id
-        payload["other_office_name"] = row.receiving_office.name if row.sending_office_id == current_user.office_id and row.receiving_office else row.sending_office.name if row.sending_office else None
+        payload["other_office_id"] = row.receiving_office_id if row.sending_office_id == monitoring_office_id else row.sending_office_id
+        payload["other_office_name"] = row.receiving_office.name if row.sending_office_id == monitoring_office_id and row.receiving_office else row.sending_office.name if row.sending_office else None
         items.append(payload)
 
     return {
@@ -2077,6 +2158,122 @@ def confirm_document_receipt(qr_value: str, db: Session = Depends(get_db), curre
         "status": "confirmed",
         "receipt": _serialize_document_receipt(receipt),
         "message": "Receipt confirmed.",
+    }
+
+
+@router.post("/qr/{qr_value:path}/actions", response_model=schemas.DocumentActionResponse)
+def create_document_action(
+    qr_value: str,
+    payload: schemas.DocumentActionCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "scan_qr")
+    require_permission(current_user, "view_office_document_details")
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required for document actions")
+
+    doc = _find_document_by_qr_or_tracking(db, qr_value)
+    if not doc:
+        raise HTTPException(status_code=404, detail="QR code not recognized")
+
+    handoff = (
+        db.query(models.DocumentHandoff)
+        .filter(
+            models.DocumentHandoff.document_id == doc.id,
+            models.DocumentHandoff.receiving_office_id == current_user.office_id,
+            models.DocumentHandoff.status == "Received",
+        )
+        .order_by(models.DocumentHandoff.updated_at.desc(), models.DocumentHandoff.id.desc())
+        .with_for_update()
+        .first()
+    )
+    if handoff is None:
+        raise HTTPException(status_code=403, detail="This document has not been received by your office")
+
+    receipt = (
+        db.query(models.DocumentReceipt)
+        .filter(
+            models.DocumentReceipt.document_id == doc.id,
+            models.DocumentReceipt.office_id == current_user.office_id,
+            models.DocumentReceipt.handoff_id == handoff.id,
+            models.DocumentReceipt.status == "Received",
+        )
+        .first()
+    )
+    if receipt is None:
+        raise HTTPException(status_code=403, detail="A completed receipt is required before recording an action")
+
+    action = models.DocumentAction(
+        document_id=doc.id,
+        office_id=current_user.office_id,
+        employee_id=current_user.id,
+        handoff_id=handoff.id,
+        action_type=payload.action_type,
+        notes=payload.notes,
+        performed_at=datetime.now(timezone.utc),
+    )
+    db.add(action)
+    db.flush()
+    db.refresh(action)
+
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="DOCUMENT_ACTION_RECORDED",
+        target_type="document_action",
+        target_id=str(action.id),
+        details=f"Document {doc.id} action {action.action_type} recorded by office {current_user.office_id}",
+    )
+    result = _serialize_document_action(action)
+    result["message"] = "Document action recorded."
+    return result
+
+
+@router.get("/{document_id:int}/actions")
+def list_document_actions(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "view_office_history")
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required for action history")
+
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    access = db.query(models.DocumentHandoff.id).filter(
+        models.DocumentHandoff.document_id == document_id,
+        (
+            (models.DocumentHandoff.sending_office_id == current_user.office_id)
+            | (models.DocumentHandoff.receiving_office_id == current_user.office_id)
+        ),
+    ).first()
+    if access is None:
+        office_link = db.query(models.DocumentOffice.id).filter(
+            models.DocumentOffice.document_id == document_id,
+            models.DocumentOffice.office_id == current_user.office_id,
+        ).first()
+        if office_link is None:
+            raise HTTPException(status_code=403, detail="You are not authorized to view action history for this document")
+
+    rows = (
+        db.query(models.DocumentAction)
+        .filter(
+            models.DocumentAction.document_id == document_id,
+            models.DocumentAction.office_id == current_user.office_id,
+        )
+        .order_by(models.DocumentAction.performed_at.asc(), models.DocumentAction.id.asc())
+        .all()
+    )
+    return {
+        "document_id": document_id,
+        "tracking_number": doc.tracking_number,
+        "document_title": doc.title,
+        "items": [_serialize_document_action(row) for row in rows],
+        "total": len(rows),
     }
 
 

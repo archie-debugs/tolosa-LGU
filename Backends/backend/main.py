@@ -14,6 +14,7 @@ load_dotenv()
 from alembic import command
 from alembic.config import Config
 
+from .lan import refresh_development_public_urls
 from .database import engine, get_database_info
 from . import models
 from .core import ensure_default_super_admin_account, ensure_schema_columns, ensure_user_role_column
@@ -27,6 +28,8 @@ from .routes.reference_data import router as reference_data_router
 from .routes.settings import router as settings_router
 from .routes.storage import router as storage_router
 from .routes.offices import router as offices_router
+
+refresh_development_public_urls()
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -50,10 +53,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:8550",
     "http://127.0.0.1:8550",
-    "http://192.168.1.8:8550",
     "http://localhost:8551",
     "http://127.0.0.1:8551",
 ]
+configured_frontend_url = os.getenv("FRONTEND_PUBLIC_URL", "").strip().rstrip("/")
+if configured_frontend_url and configured_frontend_url not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(configured_frontend_url)
 
 app.add_middleware(
     CORSMiddleware,
