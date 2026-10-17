@@ -1,9 +1,9 @@
 import secrets
 import secrets
 from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint, Index, func, text
-from sqlalchemy import Date
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
+from sqlalchemy import Date
 from .database import Base
 
 
