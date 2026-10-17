@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from ..database import get_db
-from .. import models
+from .. import login_lockout, models
 from ..core import (
     get_password_hash,
     verify_password,
@@ -428,6 +428,26 @@ def reset_user_password(
     return {"message": "User password reset successfully", "id": user.id}
 
 
+@router.post("/auth/users/{user_id}/unlock")
+def unlock_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(get_current_admin_user),
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    record_audit_log(
+        db,
+        actor=current_admin.username,
+        action="ACCOUNT_UNLOCKED",
+        target_type="Auth",
+        target_id=user.username,
+        details=f"{current_admin.username} cleared the login lockout for {user.username}",
+    )
+    return {"message": "Login lockout cleared", "id": user.id}
+
+
 @router.post("/auth/login")
 def login_user(
     username: str = Form(...),
@@ -437,9 +457,23 @@ def login_user(
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
 
+    # Checked before the password so a locked username is refused even with the right password.
+    if login_lockout.is_username_locked(db, username):
+        record_audit_log(db, actor=username, action="LOGIN_BLOCKED", target_type="Auth", target_id=username, details="Login refused while locked out")
+        raise HTTPException(status_code=429, detail=login_lockout.lockout_message(), headers=login_lockout.retry_after_header())
+
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
-        record_audit_log(db, actor=username or "unknown", action="FAILED_LOGIN", target_type="Auth", target_id=username or "unknown", details="Failed login attempt")
+        record_audit_log(db, actor=username, action="FAILED_LOGIN", target_type="Auth", target_id=username, details="Failed login attempt")
+        if login_lockout.recent_failure_count(db, username) == login_lockout.LOGIN_MAX_FAILURES:
+            record_audit_log(
+                db,
+                actor="System",
+                action="ACCOUNT_LOCKED",
+                target_type="Auth",
+                target_id=username,
+                details=f"Locked for {login_lockout.LOGIN_LOCKOUT_MINUTES} minutes after {login_lockout.LOGIN_MAX_FAILURES} failed logins",
+            )
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if getattr(user, "status", "Active") == "Pending":
