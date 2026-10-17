@@ -38,11 +38,11 @@ os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 from Backends.backend import database, models  # noqa: E402
 
 if TEST_DATABASE_URL:
-    # Start from the current models, not whatever schema an earlier run left behind.
+    # Start empty, like the SQLite file, so the app's own startup builds the current schema
+    # rather than tests running on whatever an earlier run left behind.
     models.Base.metadata.drop_all(bind=database.engine)
     with database.engine.begin() as connection:
         connection.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
-    models.Base.metadata.create_all(bind=database.engine)
 
 
 def pytest_collection_finish(session):
