@@ -18,8 +18,8 @@ from ..core import (
     OFFICE_WORKFLOW_PERMISSIONS,
     require_permission,
     require_user_management_permission,
-    get_current_user_for_user_management,
 )
+from ..authentication import get_current_user_for_user_management
 from ..auth_jwt import create_access_token, create_refresh_token, decode_refresh_token
 
 router = APIRouter()

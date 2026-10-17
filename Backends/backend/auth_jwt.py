@@ -6,14 +6,10 @@ from typing import Optional
 from dotenv import load_dotenv
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
+from fastapi import HTTPException, status
 
 load_dotenv()
 
-from .database import get_db
-from . import models
 
 # Tokens signed with a guessable key can be forged for any user, so there is no fallback.
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "").strip()
@@ -23,9 +19,6 @@ if not SECRET_KEY:
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS512")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXP_MINUTES", "60"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_DAYS", "7"))
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     now = datetime.utcnow()
@@ -107,25 +100,3 @@ def decode_preview_token(token: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token expired") from exc
     except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token invalid") from exc
-
-
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    payload = decode_access_token(token)
-    username = payload.get("sub")
-    if not username:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    if not getattr(user, "is_active", False) or getattr(user, "status", None) != "Active":
-        raise HTTPException(status_code=401, detail="User no longer active")
-    session_id = payload.get("session_id")
-    session = db.query(models.UserSession).filter(
-        models.UserSession.session_id == session_id,
-        models.UserSession.user_id == user.id,
-    ).first() if session_id else None
-    expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
-    if not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="Session is no longer active")
-    session.last_activity = datetime.now(timezone.utc)
-    return user

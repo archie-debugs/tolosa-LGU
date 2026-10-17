@@ -1,5 +1,5 @@
 import ast
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -10,8 +10,7 @@ import json
 import re
 import tempfile
 from . import models
-from fastapi import Header
-from .auth_jwt import decode_access_token
+from .authentication import get_current_user_for_user_management
 from .database import get_db
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -453,65 +452,10 @@ def user_has_permission(user: models.User, permission: str) -> bool:
     return normalized_permission in permissions
 
 
-def validate_registered_session(db: Session, payload: dict, user: models.User | None):
-    if not user:
-        return
-    # Every access token must belong to a registered session, so logout, deactivation and
-    # administrator revocation always take effect.
-    session_id = payload.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Session is no longer active")
-    session = db.query(models.UserSession).filter(
-        models.UserSession.session_id == session_id,
-        models.UserSession.user_id == user.id,
-    ).first()
-    now = datetime.now(timezone.utc)
-    expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
-    if not session or session.revoked_at or not expires_at or expires_at <= now:
-        raise HTTPException(status_code=401, detail="Session is no longer active")
-    session.last_activity = now
-
-
-def get_current_admin_user(
-    db: Session = Depends(get_db),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-):
-    if not authorization or not authorization.lower().startswith("bearer "):
+def get_current_admin_user(current_user: models.User = Depends(get_current_user_for_user_management)):
+    if normalize_user_role(current_user.role) != "Super Administrator":
         raise HTTPException(status_code=403, detail="Super Administrator access required")
-    token = authorization.split(" ", 1)[1].strip()
-    try:
-        payload = decode_access_token(token)
-        username = payload.get("sub")
-        user = db.query(models.User).filter(models.User.username == username).first() if username else None
-        validate_registered_session(db, payload, user)
-    except HTTPException:
-        raise
-    except Exception:
-        user = None
-    if not user or normalize_user_role(user.role) != "Super Administrator" or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
-        raise HTTPException(status_code=403, detail="Super Administrator access required")
-    return user
-
-
-def get_current_user_for_user_management(
-    db: Session = Depends(get_db),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-):
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=403, detail="Authenticated user required")
-    token = authorization.split(" ", 1)[1].strip()
-    try:
-        payload = decode_access_token(token)
-        username = payload.get("sub")
-        user = db.query(models.User).filter(models.User.username == username).first() if username else None
-        validate_registered_session(db, payload, user)
-    except HTTPException:
-        raise
-    except Exception:
-        user = None
-    if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
-        raise HTTPException(status_code=403, detail="Authenticated user required")
-    return user
+    return current_user
 
 
 def require_user_management_permission(permission: str):
@@ -538,24 +482,3 @@ def require_permission(user: models.User, permission: str):
         return
     if not user_has_permission(user, permission):
         raise HTTPException(status_code=403, detail="Permission denied")
-
-
-def get_current_documents_import_user(
-    db: Session = Depends(get_db),
-    authorization: str | None = Header(default=None, alias="Authorization"),
-):
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=403, detail="Access denied")
-    token = authorization.split(" ", 1)[1].strip()
-    try:
-        payload = decode_access_token(token)
-        username = payload.get("sub")
-        user = db.query(models.User).filter(models.User.username == username).first() if username else None
-        validate_registered_session(db, payload, user)
-    except HTTPException:
-        raise
-    except Exception:
-        user = None
-    if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
-        raise HTTPException(status_code=403, detail="Access denied")
-    return user

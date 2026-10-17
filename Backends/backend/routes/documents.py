@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
-from ..auth_jwt import create_preview_token, decode_access_token, decode_preview_token, get_current_user
+from ..auth_jwt import create_preview_token, decode_preview_token
+from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
 import uuid
 import threading
 import time
@@ -117,27 +118,16 @@ async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Q
                 auth_user = db.query(models.User).filter(models.User.username == username).first()
             if not auth_user:
                 raise HTTPException(status_code=401, detail="Upload token user not found")
+            ensure_active_user(auth_user)
             # enforce permission for resolved user
             require_permission(auth_user, "register_documents")
         else:
             # fallback to Authorization/JWT path
             auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-            if provided_token:
-                tok = provided_token
-                if tok.lower().startswith("bearer "):
-                    tok = tok.split(" ", 1)[1]
-                payload = decode_access_token(tok)
-                username = payload.get("sub")
-                if username:
-                    auth_user = db.query(models.User).filter(models.User.username == username).first()
+            if provided_token and not (env_token and provided_token == env_token):
+                auth_user = authenticate_access_token(db, bearer_token(provided_token) or provided_token)
             elif auth_header:
-                tok = auth_header
-                if tok.lower().startswith("bearer "):
-                    tok = tok.split(" ", 1)[1]
-                payload = decode_access_token(tok)
-                username = payload.get("sub")
-                if username:
-                    auth_user = db.query(models.User).filter(models.User.username == username).first()
+                auth_user = authenticate_access_token(db, bearer_token(auth_header) or auth_header)
             # allow optional env token for dev fallback
             if not auth_user and env_token and provided_token == env_token:
                 # dev fallback accepted but do not set auth_user
