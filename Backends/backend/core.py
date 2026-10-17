@@ -2,7 +2,7 @@ import ast
 from fastapi import Depends, HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import os
 import json
 import re
@@ -160,10 +160,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "generate_qr_codes",
         "print_qr_codes",
         "view_qr_tracking",
-        "view_document_requests",
-        "approve_document_requests",
-        "reject_document_requests",
-        "fulfill_document_requests",
+        "set_documents_for_sb_members",
         "view_audit_logs",
         "export_audit_logs",
         "view_analytics",
@@ -176,11 +173,17 @@ DEFAULT_ROLE_PERMISSIONS = {
         "view_document_details",
         "download_documents",
         "print_documents",
-        "request_documents",
-        "view_own_document_requests",
-        "cancel_own_pending_requests",
     ],
 }
+
+# "Today" for Today's Documents is the LGU's calendar day, not the server's or UTC's.
+# The Philippines is UTC+8 all year (no daylight saving).
+LGU_UTC_OFFSET_HOURS = float(os.getenv("LGU_UTC_OFFSET_HOURS", "8"))
+LGU_TIMEZONE = timezone(timedelta(hours=LGU_UTC_OFFSET_HOURS))
+
+
+def lgu_today() -> date:
+    return datetime.now(LGU_TIMEZONE).date()
 
 USER_MANAGEMENT_PERMISSIONS = {
     "view_users",

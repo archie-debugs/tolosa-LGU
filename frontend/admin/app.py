@@ -147,6 +147,7 @@ from frontend.admin.users_roles import (
     build_users_roles_view,
 )
 from frontend.admin.reference_data import build_reference_data_view
+from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import render_shell
 
 
@@ -5358,7 +5359,7 @@ def main(page: ft.Page, session=None):
                 ("Dashboard", ["view_dashboard", "view_analytics"]),
                 ("Documents", ["view_documents", "search_documents", "filter_documents", "view_document_details", "register_documents", "edit_documents", "archive_documents", "restore_documents", "download_documents", "print_documents"]),
                 ("QR Code", ["generate_qr_codes", "print_qr_codes", "view_qr_tracking"]),
-                ("Document Requests", ["view_document_requests", "approve_document_requests", "reject_document_requests", "fulfill_document_requests"]),
+                ("Today's Documents", ["set_documents_for_sb_members"]),
                 ("Audit Logs", ["view_audit_logs", "export_audit_logs"]),
                 ("Analytics", ["view_analytics", "export_analytics"]),
             ]
@@ -6436,7 +6437,7 @@ def main(page: ft.Page, session=None):
             "Dashboard": "Control access to dashboard information.",
             "Documents": "Control actions employees can perform on legislative documents.",
             "QR Code": "Control QR code generation, printing, and tracking access.",
-            "Document Requests": "Control access to document request processing.",
+            "Today's Documents": "Let this employee set the documents SB Members see for the day.",
             "Users & Roles": "Control employee access to user and role administration.",
             "Committees": "Control committee management permissions.",
             "Audit Logs": "Control access to system activity records.",
@@ -6938,6 +6939,19 @@ def main(page: ft.Page, session=None):
     def close_dialog(dialog):
         dialog.open = False
         page.update()
+
+    def backend_api(method, path, **kwargs):
+        response = requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=15, **kwargs)
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail", response.text)
+            except Exception:
+                detail = response.text
+            raise Exception(detail)
+        return response.json() if response.content else {}
+
+    def todays_documents_page():
+        return build_todays_documents_view(page, backend_api, surface_card, section_header)
 
     def users_role_page():
         return users_roles_view()
@@ -8228,6 +8242,8 @@ def main(page: ft.Page, session=None):
         if has_permission("view_documents"):
             items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()))
             items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()))
+        if has_permission("set_documents_for_sb_members"):
+            items.append((ft.Icons.EVENT_NOTE_OUTLINED, "Documents for SB Members", todays_documents_page))
         if not is_employee() or has_permission("view_documents"):
             items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()))
         if has_permission("view_qr_tracking"):

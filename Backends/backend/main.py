@@ -25,6 +25,7 @@ from .routes.reference_data import router as reference_data_router
 from .routes.settings import router as settings_router
 from .routes.storage import router as storage_router
 from .routes.offices import router as offices_router
+from .routes.todays_documents import router as todays_documents_router
 
 refresh_development_public_urls()
 
@@ -91,6 +92,7 @@ app.include_router(reference_data_router)
 app.include_router(settings_router)
 app.include_router(storage_router)
 app.include_router(offices_router)
+app.include_router(todays_documents_router)
 
 
 @app.on_event("startup")

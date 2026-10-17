@@ -14,7 +14,7 @@ load_dotenv()
 
 from Backends.backend import models
 from Backends.backend.authentication import get_current_user
-from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, normalize_permissions, normalize_user_role
+from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, lgu_today, normalize_permissions, normalize_user_role
 from Backends.backend.database import get_db
 
 
@@ -133,6 +133,24 @@ def me(current_user: models.User = Depends(get_current_sb_member)):
         "status": current_user.status,
         "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
         "permissions": sorted(normalize_permissions(getattr(current_user, "permissions", None)) & SB_PERMISSIONS),
+    }
+
+
+@app.get("/todays-documents")
+def todays_documents(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    """The documents employees set for today, in their order, so members need not search."""
+    require_sb_permission(current_user, "view_documents")
+    today = lgu_today()
+    entries = (
+        db.query(models.TodaysDocument)
+        .join(models.Document, models.Document.id == models.TodaysDocument.document_id)
+        .filter(models.TodaysDocument.scheduled_for == today, models.Document.archived.is_(False))
+        .order_by(models.TodaysDocument.position.asc(), models.TodaysDocument.id.asc())
+        .all()
+    )
+    return {
+        "date": today.isoformat(),
+        "items": [{**_safe_document(entry.document, db), "note": entry.note} for entry in entries],
     }
 
 
