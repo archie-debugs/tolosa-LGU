@@ -14,7 +14,10 @@ load_dotenv()
 from .database import get_db
 from . import models
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY") or "dev-local-secret-key"
+# Tokens signed with a guessable key can be forged for any user, so there is no fallback.
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY is required to sign and verify authentication tokens.")
 
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS512")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXP_MINUTES", "60"))
@@ -113,6 +116,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not getattr(user, "is_active", False) or getattr(user, "status", None) != "Active":
+        raise HTTPException(status_code=401, detail="User no longer active")
     if payload.get("session_id"):
         session = db.query(models.UserSession).filter(
             models.UserSession.session_id == payload.get("session_id"),

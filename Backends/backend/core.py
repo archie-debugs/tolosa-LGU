@@ -16,12 +16,19 @@ from .database import get_db
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-# Keep ephemeral upload artifacts out of the repository. Temporary files may still be
-# needed by legacy flows, but they belong in the system temp area rather than the app's
-# workspace so the repo-local uploads folder is never recreated.
-UPLOAD_ROOT = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking"))
-UPLOAD_DIR = os.path.abspath(os.path.join(UPLOAD_ROOT, "uploads"))
-TEMP_UPLOAD_DIR = os.path.abspath(os.path.join(UPLOAD_ROOT, "tmp"))
+
+def _default_document_storage_dir() -> str:
+    base = os.getenv("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "sb_tolosa_tracking", "documents")
+
+
+# Stored attachments are official records, so they live in a persistent folder outside the
+# repository (DOCUMENT_STORAGE_DIR, or a per-user application data folder). Only in-progress
+# browser uploads belong in the system temp area, which the OS may clean at any time.
+UPLOAD_DIR = os.path.abspath(os.getenv("DOCUMENT_STORAGE_DIR", "").strip() or _default_document_storage_dir())
+TEMP_UPLOAD_DIR = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "tmp"))
+# Attachments stored before DOCUMENT_STORAGE_DIR existed; scripts/migrate_attachment_storage.py moves them.
+LEGACY_UPLOAD_DIR = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "uploads"))
 
 
 def get_password_hash(password: str) -> str:
@@ -59,52 +66,57 @@ def record_audit_log(
 
 
 def ensure_default_super_admin_account() -> None:
+    """Create the first Super Administrator from INITIAL_ADMIN_USERNAME/INITIAL_ADMIN_PASSWORD.
+
+    Runs only while no active Super Administrator exists, and never modifies existing
+    accounts, so it cannot reset a password or re-enable a deactivated user.
+    """
     from .database import SessionLocal
 
     db = SessionLocal()
     try:
-        user = db.query(models.User).filter(models.User.username == "a").first()
-        if user is None:
-            user = models.User(
-                username="a",
-                hashed_password=get_password_hash("a"),
-                role="Super Administrator",
-                permissions=str(["*"]),
-                status="Active",
-                is_active=True,
-                full_name="Default Super Administrator",
-                email="a@example.com",
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
+        has_active_super_admin = db.query(models.User.id).filter(
+            models.User.role == "Super Administrator",
+            models.User.is_active.is_(True),
+            models.User.status == "Active",
+        ).first() is not None
+        if has_active_super_admin:
             return
 
-        changed = False
-        if normalize_user_role(user.role) != "Super Administrator":
-            user.role = "Super Administrator"
-            changed = True
-        if getattr(user, "status", "Active") != "Active":
-            user.status = "Active"
-            changed = True
-        if not getattr(user, "is_active", True):
-            user.is_active = True
-            changed = True
-        if not verify_password("a", user.hashed_password):
-            user.hashed_password = get_password_hash("a")
-            changed = True
-        if not getattr(user, "permissions", None) or str(normalize_permissions(user.permissions)) != "['*']":
-            user.permissions = str(["*"])
-            changed = True
-        if not getattr(user, "full_name", None):
-            user.full_name = "Default Super Administrator"
-            changed = True
-        if not getattr(user, "email", None):
-            user.email = "a@example.com"
-            changed = True
+        username = os.getenv("INITIAL_ADMIN_USERNAME", "").strip()
+        password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
+        if not username or not password:
+            print(
+                "WARNING: No active Super Administrator exists. Set INITIAL_ADMIN_USERNAME and "
+                "INITIAL_ADMIN_PASSWORD to create one at startup."
+            )
+            return
+        if len(password) < 8:
+            raise RuntimeError("INITIAL_ADMIN_PASSWORD must be at least 8 characters")
+        if db.query(models.User.id).filter(models.User.username == username).first() is not None:
+            raise RuntimeError(
+                f"INITIAL_ADMIN_USERNAME '{username}' already belongs to an account; "
+                "activate it or choose a different username"
+            )
 
-        if changed:
-            db.commit()
+        db.add(models.User(
+            username=username,
+            hashed_password=get_password_hash(password),
+            role="Super Administrator",
+            permissions=str(["*"]),
+            status="Active",
+            is_active=True,
+            full_name="Initial Super Administrator",
+        ))
+        db.commit()
+        record_audit_log(
+            db,
+            actor="System",
+            action="INITIAL_SUPER_ADMIN_CREATED",
+            target_type="User",
+            target_id=username,
+            details="Initial Super Administrator created from environment configuration",
+        )
     finally:
         db.close()
 
@@ -136,13 +148,11 @@ def ensure_user_role_column() -> None:
         if dialect == "sqlite":
             columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
             if "role" not in columns:
-                connection.exec_driver_sql("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'Super Administrator'")
-            connection.exec_driver_sql("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''")
+                connection.exec_driver_sql("ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'Employee'")
             connection.exec_driver_sql("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'")
             connection.exec_driver_sql("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')")
         else:
-            _add_column_if_missing(connection, "users", "role", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR NOT NULL DEFAULT 'Super Administrator'"))
-            connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
+            _add_column_if_missing(connection, "users", "role", text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR NOT NULL DEFAULT 'Employee'"))
             connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))
             connection.execute(text("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')"))
 
@@ -223,7 +233,6 @@ def ensure_schema_columns() -> None:
                 _add_column_if_missing(connection, "documents", "archived_by", text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_by VARCHAR"))
 
         if "users" in existing_tables:
-            connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE role IS NULL OR role = ''"))
             connection.execute(text("UPDATE users SET role = 'Super Administrator' WHERE lower(role) = 'admin'"))
             connection.execute(text("UPDATE users SET role = 'Employee' WHERE lower(role) IN ('staff', 'secretary', 'secretary / vice mayor')"))
             connection.execute(text("UPDATE users SET status = 'Active' WHERE status IS NULL OR status = ''"))
@@ -348,11 +357,12 @@ ROLE_DEFINITIONS = {
 
 
 def normalize_user_role(role: str | None) -> str:
+    # A missing role must never grant access: return "" so role and permission checks fail closed.
     if role is None:
-        return "Super Administrator"
+        return ""
     normalized = str(role).strip()
     if not normalized:
-        return "Super Administrator"
+        return ""
     lowered = normalized.lower()
     if lowered in LEGACY_ROLE_MAP:
         return LEGACY_ROLE_MAP[lowered]
@@ -419,6 +429,8 @@ def user_has_permission(user: models.User, permission: str) -> bool:
     role = normalize_user_role(getattr(user, "role", None))
     if role == "Super Administrator":
         return True
+    if role not in VALID_ROLES:
+        return False
     normalized_permission = normalize_permission_name(permission)
     if normalized_permission in OFFICE_WORKFLOW_PERMISSIONS and (
         role != "Employee" or getattr(user, "office_id", None) is None

@@ -49,6 +49,13 @@ def validate_reset_password(password: str) -> str:
     return normalized
 
 
+def _revoke_user_sessions(db: Session, user_id: int, reason: str) -> None:
+    db.query(models.UserSession).filter(
+        models.UserSession.user_id == user_id,
+        models.UserSession.revoked_at.is_(None),
+    ).update({"revoked_at": datetime.now(timezone.utc), "revoke_reason": reason}, synchronize_session=False)
+
+
 @router.post("/auth/register")
 async def register_user(
     request: Request,
@@ -87,7 +94,7 @@ async def register_user(
     if "permissions" in data:
         permission_list = validate_permissions(permissions)
     elif normalized_role == "Employee" and office_assignment_requested:
-        permission_list = []
+        permission_list = sorted(OFFICE_WORKFLOW_PERMISSIONS)
     else:
         permission_list = get_default_permissions_for_role(normalized_role)
     if normalized_role == "Super Administrator":
@@ -107,7 +114,8 @@ async def register_user(
             raise HTTPException(status_code=400, detail="An active office is required")
 
     if normalized_role == "Employee" and office is not None:
-        permission_list = sorted(OFFICE_WORKFLOW_PERMISSIONS)
+        # Office employees get only office-workflow permissions, limited to those the admin chose.
+        permission_list = sorted(set(permission_list) & OFFICE_WORKFLOW_PERMISSIONS)
 
     try:
         new_user = models.User(
@@ -271,6 +279,8 @@ def update_user(
     user.permissions = str(["*"] if target_is_super_admin else requested_permissions)
     user.status = normalized_status
     user.is_active = normalized_status == "Active"
+    if not user.is_active:
+        _revoke_user_sessions(db, user.id, "account_deactivated")
     db.commit()
     if previous_office_id != user.office_id:
         record_audit_log(
@@ -374,6 +384,8 @@ def update_user_status(
 
     user.status = normalized_status
     user.is_active = normalized_status == "Active"
+    if not user.is_active:
+        _revoke_user_sessions(db, user.id, "account_deactivated")
     db.commit()
     record_audit_log(
         db,

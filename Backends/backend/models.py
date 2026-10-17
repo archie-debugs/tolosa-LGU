@@ -154,7 +154,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    role = Column(String, nullable=False, default="Super Administrator")
+    role = Column(String, nullable=False, default="Employee")
     full_name = Column(String, nullable=True)
     email = Column(String, nullable=True, index=True)
     office_id = Column(Integer, ForeignKey("offices.id"), nullable=True, index=True)
