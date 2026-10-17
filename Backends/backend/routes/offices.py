@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from ..auth_jwt import get_current_user
+from ..authentication import get_current_user
 from ..core import normalize_user_role, record_audit_log, require_permission
 from ..database import get_db
 
