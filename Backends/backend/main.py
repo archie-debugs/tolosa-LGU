@@ -6,18 +6,15 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from dotenv import load_dotenv
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 
 # Load .env early so core.py picks up environment overrides
 load_dotenv()
 
-from alembic import command
-from alembic.config import Config
-
 from .lan import refresh_development_public_urls
 from .database import engine, get_database_info
-from . import models
-from .core import ensure_default_super_admin_account, ensure_schema_columns, ensure_user_role_column
+from .core import ensure_default_super_admin_account
+from .schema import run_database_migrations
 from .routes.auth import router as auth_router
 from .routes.status import router as status_router
 from .routes.audit import router as audit_router
@@ -77,31 +74,8 @@ if force_https:
 app.add_middleware(SecurityHeadersMiddleware)
 
 
-def run_database_migrations() -> None:
-    table_names = set(inspect(engine).get_table_names())
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    alembic_cfg = Config(os.path.join(project_root, "alembic.ini"))
-
-    expected_tables = set(models.Base.metadata.tables.keys())
-    if not table_names or not expected_tables.issubset(table_names):
-        models.Base.metadata.create_all(bind=engine)
-        table_names = set(inspect(engine).get_table_names())
-
-    if not table_names:
-        command.stamp(alembic_cfg, "head")
-        return
-
-    if "alembic_version" not in table_names:
-        command.stamp(alembic_cfg, "head")
-        return
-
-    command.upgrade(alembic_cfg, "head")
-
-
 try:
     run_database_migrations()
-    ensure_user_role_column()
-    ensure_schema_columns()
     ensure_default_super_admin_account()
 except Exception as exc:
     raise RuntimeError(f"Startup initialization failed: {exc}") from exc

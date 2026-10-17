@@ -1,10 +1,6 @@
-import os
-
 import pytest
-import Backends.backend.main as main
 
-os.environ["JWT_SECRET_KEY"] = "test-secret-key"
-os.environ["DATABASE_URL"] = "sqlite:///./test_startup_error.sqlite"
+import Backends.backend.schema as schema
 
 
 def test_startup_raises_when_migration_fails(monkeypatch):
@@ -12,12 +8,12 @@ def test_startup_raises_when_migration_fails(monkeypatch):
         def get_table_names(self):
             return ["users", "alembic_version"]
 
-    monkeypatch.setattr(main, "inspect", lambda engine: DummyInspector())
+    monkeypatch.setattr(schema, "inspect", lambda engine: DummyInspector())
 
     def boom(cfg, revision):
         raise RuntimeError("schema migration failed")
 
-    monkeypatch.setattr(main.command, "upgrade", boom)
+    monkeypatch.setattr(schema.command, "upgrade", boom)
 
-    with pytest.raises(RuntimeError, match="schema migration failed|startup initialization"):
-        main.run_database_migrations()
+    with pytest.raises(RuntimeError, match="schema migration failed"):
+        schema.run_database_migrations()
