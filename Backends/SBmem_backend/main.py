@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
@@ -58,7 +59,7 @@ def get_current_sb_member(request: Request, db: Session = Depends(get_db)) -> mo
     token = header.split(" ", 1)[1].strip()
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired access token") from exc
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid access token")

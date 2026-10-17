@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dotenv import load_dotenv
-from jose import JWTError, ExpiredSignatureError, jwt
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -80,7 +81,7 @@ def decode_access_token(token: str) -> dict:
         return payload
     except ExpiredSignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired") from exc
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalid") from exc
 
 
@@ -92,7 +93,7 @@ def decode_refresh_token(token: str) -> dict:
         return payload
     except ExpiredSignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired") from exc
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token invalid") from exc
 
 
@@ -104,7 +105,7 @@ def decode_preview_token(token: str) -> dict:
         return payload
     except ExpiredSignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token expired") from exc
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token invalid") from exc
 
 
@@ -118,13 +119,13 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise HTTPException(status_code=401, detail="User not found")
     if not getattr(user, "is_active", False) or getattr(user, "status", None) != "Active":
         raise HTTPException(status_code=401, detail="User no longer active")
-    if payload.get("session_id"):
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_id == payload.get("session_id"),
-            models.UserSession.user_id == user.id,
-        ).first()
-        expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
-        if not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc):
-            raise HTTPException(status_code=401, detail="Session is no longer active")
-        session.last_activity = datetime.now(timezone.utc)
+    session_id = payload.get("session_id")
+    session = db.query(models.UserSession).filter(
+        models.UserSession.session_id == session_id,
+        models.UserSession.user_id == user.id,
+    ).first() if session_id else None
+    expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
+    if not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Session is no longer active")
+    session.last_activity = datetime.now(timezone.utc)
     return user

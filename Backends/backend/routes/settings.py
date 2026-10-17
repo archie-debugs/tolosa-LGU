@@ -118,6 +118,7 @@ def update_system_settings(
             target_type="SystemSetting",
             target_id=key,
             details=f"Updated {key} to {raw_value}",
+            commit=False,
         )
 
     db.commit()

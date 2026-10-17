@@ -456,13 +456,13 @@ def login_user(
         target_type="Auth",
         target_id=user.username,
         details="Successful login",
+        commit=False,
     )
     # This represents the user's most recent authenticated activity.
     # We intentionally update it on both credentialed login and refresh so it tracks
     # the latest time the user successfully re-established trust, not merely the
     # first time they ever signed in.
     user.last_login = datetime.now(timezone.utc)
-    db.commit()
 
     session_id = str(uuid.uuid4())
     session_now = datetime.now(timezone.utc)
@@ -513,7 +513,7 @@ def refresh_access_token(
         models.UserSession.user_id == user.id if user else False,
     ).first() if session_id else None
     expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
-    if session_id and (not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc)):
+    if not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Session is no longer active")
     if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
         raise HTTPException(status_code=401, detail="User no longer active")
@@ -530,8 +530,8 @@ def refresh_access_token(
         permissions = get_default_permissions_for_role(role)
 
     return {
-        "access_token": create_access_token({"sub": user.username, "session_id": session_id} if session_id else {"sub": user.username}),
-        "refresh_token": create_refresh_token({"sub": user.username, "session_id": session_id} if session_id else {"sub": user.username}),
+        "access_token": create_access_token({"sub": user.username, "session_id": session_id}),
+        "refresh_token": create_refresh_token({"sub": user.username, "session_id": session_id}),
         "username": user.username,
         "role": role,
         "permissions": permissions,

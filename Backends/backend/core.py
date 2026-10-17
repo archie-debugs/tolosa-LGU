@@ -47,7 +47,15 @@ def record_audit_log(
     target_type: str | None = None,
     target_id: str | None = None,
     details: str | None = None,
+    commit: bool = True,
 ):
+    """Record an audit entry.
+
+    By default the entry is committed immediately, together with anything else pending in
+    the session; that keeps denial and failure entries even when the caller then raises.
+    Pass commit=False inside a multi-step write so the entry commits (or rolls back) with
+    the caller's own transaction.
+    """
     audit_log = models.AuditLog(
         actor=actor,
         action=action,
@@ -56,6 +64,9 @@ def record_audit_log(
         details=details,
     )
     db.add(audit_log)
+    if not commit:
+        db.flush()
+        return audit_log
     try:
         db.commit()
     except Exception:
@@ -445,9 +456,11 @@ def user_has_permission(user: models.User, permission: str) -> bool:
 def validate_registered_session(db: Session, payload: dict, user: models.User | None):
     if not user:
         return
-    session_id = payload.get("session_id") or payload.get("jti")
-    if not payload.get("session_id"):
-        return
+    # Every access token must belong to a registered session, so logout, deactivation and
+    # administrator revocation always take effect.
+    session_id = payload.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Session is no longer active")
     session = db.query(models.UserSession).filter(
         models.UserSession.session_id == session_id,
         models.UserSession.user_id == user.id,

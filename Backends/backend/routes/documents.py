@@ -14,7 +14,9 @@ from ..database import get_db
 from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
 from ..auth_jwt import create_preview_token, decode_access_token, decode_preview_token, get_current_user
 import uuid
+import threading
 import time
+from collections import deque
 from urllib.parse import quote, unquote, urlparse
 import hashlib
 import mimetypes
@@ -29,6 +31,27 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 public_qr_router = APIRouter(tags=["public-qr"])
 
 QR_IMAGE_DIR = os.path.join(UPLOAD_DIR, "qr")
+
+# Anonymous QR lookups write audit entries, so each client is limited to keep the audit
+# log from being flooded. In-memory, per backend process.
+PUBLIC_QR_RATE_LIMIT_PER_MINUTE = int(os.getenv("PUBLIC_QR_RATE_LIMIT_PER_MINUTE", "30"))
+_public_qr_lookups: dict[str, deque] = {}
+_public_qr_lookups_lock = threading.Lock()
+
+
+def _allow_public_qr_lookup(client_key: str) -> bool:
+    now = time.monotonic()
+    window_start = now - 60
+    with _public_qr_lookups_lock:
+        for key in [key for key, stamps in _public_qr_lookups.items() if not stamps or stamps[-1] < window_start]:
+            del _public_qr_lookups[key]
+        stamps = _public_qr_lookups.setdefault(client_key, deque())
+        while stamps and stamps[0] < window_start:
+            stamps.popleft()
+        if len(stamps) >= PUBLIC_QR_RATE_LIMIT_PER_MINUTE:
+            return False
+        stamps.append(now)
+        return True
 TITLE_YEAR_PATTERN = r"(?i)series[[:space:]]*:?[[:space:]]*((19|20)[0-9]{2})"
 LEGISLATIVE_NUMBER_PATTERN = re.compile(r"(?i)\b(?:ordinance|resolution)\s+(?:no\.?|number)\s*[:#]?\s*([0-9]+)\b")
 
@@ -1739,6 +1762,10 @@ def public_lookup_qr_by_value(qr_value: str, request: Request, db: Session = Dep
                 raise HTTPException(status_code=503, detail="Frontend public URL is not configured")
             frontend_qr_url = f"{frontend_url}/qr/{quote(qr_value, safe='')}"
             return RedirectResponse(frontend_qr_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    client_key = request.client.host if request.client else "unknown"
+    if not _allow_public_qr_lookup(client_key):
+        raise HTTPException(status_code=429, detail="Too many QR lookups. Please wait a minute and try again.")
 
     # Unauthenticated callers must present the unguessable QR token; sequential tracking
     # numbers would let anyone enumerate private and archived documents.
