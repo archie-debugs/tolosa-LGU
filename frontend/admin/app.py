@@ -5769,6 +5769,7 @@ def main(page: ft.Page, session=None):
             lambda item=None: open_edit_user_dialog(item or visible_users[0] if visible_users else {}),
             lambda item=None: open_reset_password_dialog(item or visible_users[0] if visible_users else {}),
             lambda item=None: delete_user(item or visible_users[0] if visible_users else {}),
+            unlock_user=unlock_user if current_user_role == "Super Administrator" else None,
         )
         office_table_holder.content = build_offices_table(
             office_management_data,
@@ -5940,6 +5941,7 @@ def main(page: ft.Page, session=None):
             view_office_users=open_view_office_users_dialog,
             office_table_holder=office_table_holder,
             create_employee=lambda _: open_create_user_dialog(employee_only=True),
+            unlock_user=unlock_user if current_user_role == "Super Administrator" else None,
         )
         update_users_role_view()
         return view
@@ -6929,6 +6931,46 @@ def main(page: ft.Page, session=None):
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
                 ft.Button("Delete", on_click=lambda _: confirm_delete(), bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
+            ],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def unlock_user(user):
+        def confirm_unlock():
+            try:
+                response = requests.post(
+                    f"{BACKEND_URL}/auth/users/{user.get('id')}/unlock",
+                    headers=get_admin_headers(),
+                    verify=False,
+                    timeout=15,
+                )
+                if response.status_code != 200:
+                    detail = response.text
+                    try:
+                        detail = response.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    raise Exception(detail)
+                close_dialog(dialog)
+                page.snack_bar = ft.SnackBar(ft.Text(f"{user.get('username', 'User')} can sign in again."), open=True)
+                load_user_management_data()
+            except Exception as exc:
+                close_dialog(dialog)
+                page.snack_bar = ft.SnackBar(ft.Text(f"Unable to unlock account: {exc}"), open=True)
+                page.update()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Unlock Login"),
+            content=ft.Text(
+                f"{user.get('full_name', user.get('username', 'This user'))} is locked out after too many failed logins. "
+                "Unlock now so they can sign in again?"
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
+                ft.Button("Unlock", on_click=lambda _: confirm_unlock(), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
             ],
         )
         page.overlay.append(dialog)

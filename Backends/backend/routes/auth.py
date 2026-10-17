@@ -182,6 +182,7 @@ def list_users(
             "department": user.office.name if getattr(user, "office", None) else None,
             "role": normalize_user_role(user.role),
             "status": getattr(user, "status", "Active"),
+            "locked": login_lockout.is_username_locked(db, user.username),
             "permissions": sorted(list(normalize_permissions(getattr(user, "permissions", None)))),
             "last_login": user.last_login.isoformat() if user.last_login else None,
             "created": user.created_at.isoformat() if user.created_at else None,

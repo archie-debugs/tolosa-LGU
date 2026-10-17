@@ -151,12 +151,47 @@ def _build_permission_checkboxes(selected_permissions=None):
     return items
 
 
+def _locked_badge():
+    return ft.Container(
+        content=ft.Row(
+            [ft.Icon(ft.Icons.LOCK, size=12, color=ft.Colors.RED_800), ft.Text("Locked", size=11, weight=ft.FontWeight.W_600, color=ft.Colors.RED_800)],
+            spacing=4,
+            tight=True,
+        ),
+        padding=ft.Padding(left=10, top=5, right=10, bottom=5),
+        bgcolor=ft.Colors.RED_50,
+        border_radius=12,
+        border=ft.border.all(1, ft.Colors.RED_200),
+        tooltip="Too many failed logins. Unlocks automatically, or a Super Administrator can unlock it now.",
+    )
+
+
+def _account_status_cell(user, status):
+    if not user.get("locked"):
+        return _status_badge(status)
+    return ft.Row([_status_badge(status), _locked_badge()], spacing=6, tight=True)
+
+
+def _user_actions_menu(user, open_view_user_dialog, open_edit_user_dialog, open_reset_password_dialog, delete_user, unlock_user=None):
+    items = [
+        ft.PopupMenuItem(content=ft.Text("View"), on_click=lambda _, item=user: open_view_user_dialog(item)),
+        ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, item=user: open_edit_user_dialog(item)),
+        ft.PopupMenuItem(content=ft.Text("Reset Password"), on_click=lambda _, item=user: open_reset_password_dialog(item)),
+    ]
+    # Unlocking is a Super Administrator action, so callers pass unlock_user only for them.
+    if unlock_user is not None and user.get("locked"):
+        items.append(ft.PopupMenuItem(content=ft.Text("Unlock Login"), on_click=lambda _, item=user: unlock_user(item)))
+    items.append(ft.PopupMenuItem(content=ft.Text("Delete"), on_click=lambda _, item=user: delete_user(item)))
+    return ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="User actions", items=items)
+
+
 def build_users_roles_table(
     users_data,
     open_view_user_dialog,
     open_edit_user_dialog,
     open_reset_password_dialog,
     delete_user,
+    unlock_user=None,
 ):
     user_rows = []
     for user in users_data:
@@ -167,15 +202,8 @@ def build_users_roles_table(
         permissions = user.get("permissions") or []
         last_login = _format_timestamp(user.get("last_login"))
         created = _format_timestamp(user.get("created"))
-        action_buttons = ft.PopupMenuButton(
-            icon=ft.Icons.MORE_VERT,
-            tooltip="User actions",
-            items=[
-                ft.PopupMenuItem(content=ft.Text("View"), on_click=lambda _, item=user: open_view_user_dialog(item)),
-                ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, item=user: open_edit_user_dialog(item)),
-                ft.PopupMenuItem(content=ft.Text("Reset Password"), on_click=lambda _, item=user: open_reset_password_dialog(item)),
-                ft.PopupMenuItem(content=ft.Text("Delete"), on_click=lambda _, item=user: delete_user(item)),
-            ],
+        action_buttons = _user_actions_menu(
+            user, open_view_user_dialog, open_edit_user_dialog, open_reset_password_dialog, delete_user, unlock_user
         )
 
         user_rows.append(
@@ -195,7 +223,7 @@ def build_users_roles_table(
                     ft.DataCell(ft.Text(username, size=12)),
                     ft.DataCell(_role_badge(role)),
                     ft.DataCell(ft.Text(user.get("department") or "-", size=12)),
-                    ft.DataCell(_status_badge(status)),
+                    ft.DataCell(_account_status_cell(user, status)),
                     ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
                     ft.DataCell(ft.Text(last_login, size=12)),
                     ft.DataCell(ft.Text(created, size=12)),
@@ -307,6 +335,7 @@ def build_users_roles_view(
     view_office_users=None,
     office_table_holder=None,
     create_employee=None,
+    unlock_user=None,
 ):
     user_rows = []
     for user in users_data:
@@ -317,15 +346,8 @@ def build_users_roles_view(
         permissions = user.get("permissions") or []
         last_login = _format_timestamp(user.get("last_login"))
         created = _format_timestamp(user.get("created"))
-        action_buttons = ft.PopupMenuButton(
-            icon=ft.Icons.MORE_VERT,
-            tooltip="User actions",
-            items=[
-                ft.PopupMenuItem(content=ft.Text("View"), on_click=lambda _, item=user: open_view_user_dialog(item)),
-                ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, item=user: open_edit_user_dialog(item)),
-                ft.PopupMenuItem(content=ft.Text("Reset Password"), on_click=lambda _, item=user: open_reset_password_dialog(item)),
-                ft.PopupMenuItem(content=ft.Text("Delete"), on_click=lambda _, item=user: delete_user(item)),
-            ],
+        action_buttons = _user_actions_menu(
+            user, open_view_user_dialog, open_edit_user_dialog, open_reset_password_dialog, delete_user, unlock_user
         )
 
         user_rows.append(
@@ -345,7 +367,7 @@ def build_users_roles_view(
                     ft.DataCell(ft.Text(username, size=12)),
                     ft.DataCell(_role_badge(role)),
                     ft.DataCell(ft.Text(user.get("department") or "-", size=12)),
-                    ft.DataCell(_status_badge(status)),
+                    ft.DataCell(_account_status_cell(user, status)),
                     ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
                     ft.DataCell(ft.Text(last_login, size=12)),
                     ft.DataCell(ft.Text(created, size=12)),

@@ -130,3 +130,31 @@ def test_only_super_administrators_can_unlock():
 
     assert response.status_code == 403
 
+
+
+def test_user_list_reports_which_accounts_are_locked():
+    reset_db()
+    client = TestClient(main.app)
+    fail_until_locked(client)
+    admin_token = attempt(client, "admin", "pw123").json()["access_token"]
+
+    response = client.get("/auth/users", headers={"Authorization": f"Bearer {admin_token}"})
+
+    assert response.status_code == 200, response.text
+    assert {user["username"]: user["locked"] for user in response.json()} == {"admin": False, "clerk": True}
+
+
+def _menu_labels(user, unlock_user):
+    from frontend.admin.users_roles import _user_actions_menu
+
+    noop = lambda item: None
+    menu = _user_actions_menu(user, noop, noop, noop, noop, unlock_user)
+    return [item.content.value for item in menu.items]
+
+
+def test_unlock_menu_item_only_shows_for_locked_users_when_unlocking_is_allowed():
+    unlock = lambda item: None
+
+    assert "Unlock Login" in _menu_labels({"locked": True}, unlock)
+    assert "Unlock Login" not in _menu_labels({"locked": False}, unlock)
+    assert "Unlock Login" not in _menu_labels({"locked": True}, None)
