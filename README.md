@@ -51,3 +51,18 @@ All backend services are grouped under `Backends/`:
 - `Backends/SBmem_backend`: SB Member API service
 
 The root launch scripts remain as convenient entrypoints and now import from these packages.
+
+## Tests
+
+```
+python -m pytest
+```
+
+By default tests run on a throwaway SQLite file and never touch the database in `.env`.
+
+SQLite ignores row locks and some PostgreSQL-only behaviour, so the handoff concurrency test is skipped there. To run the whole suite on PostgreSQL, point `TEST_DATABASE_URL` at a separate database whose name ends in `_test`. **Every table in it is dropped at the start of the run.**
+
+```
+createdb legi_sys_test
+TEST_DATABASE_URL=postgresql+psycopg2://user:password@localhost:5432/legi_sys_test python -m pytest
+```

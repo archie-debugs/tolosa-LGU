@@ -23,20 +23,10 @@ models.Base.metadata.create_all(bind=engine)
 
 
 def reset_db():
+    # Children before parents, so this also works where foreign keys are enforced (PostgreSQL).
     with SessionLocal() as db:
-        db.query(models.DocumentTrackingNumberAlias).delete()
-        db.query(models.DocumentHandoff).delete()
-        db.query(models.DocumentAction).delete()
-        db.query(models.DocumentOffice).delete()
-        db.query(models.DocumentReceipt).delete()
-        db.query(models.Attachment).delete()
-        db.query(models.Document).delete()
-        db.query(models.UserSession).delete()
-        db.query(models.AuditLog).delete()
-        db.query(models.SystemSetting).delete()
-        db.query(models.User).delete()
-        db.query(models.Office).delete()
-        db.query(models.RegistrationRequest).delete()
+        for table in reversed(models.Base.metadata.sorted_tables):
+            db.execute(table.delete())
         db.commit()
 
 
@@ -879,3 +869,57 @@ def test_received_office_document_count_uses_completed_receipts_without_duplicat
     )
     assert office_a_response.status_code == 200, office_a_response.text
     assert office_a_response.json()["total"] == 3
+
+
+@pytest.mark.skipif(engine.dialect.name != "postgresql", reason="needs row locks; set TEST_DATABASE_URL (see tests/conftest.py)")
+def test_concurrent_handoffs_of_one_document_create_exactly_one_pending_handoff():
+    import threading
+
+    reset_db()
+    with SessionLocal() as db:
+        offices = [models.Office(name=f"Race Office {code}", office_code=f"RACE{code}") for code in "ABCDEF"]
+        db.add_all(offices)
+        db.commit()
+        office_ids = [office.id for office in offices]
+        doc = models.Document(
+            tracking_number="DOC-RACE-1",
+            title="Race Document",
+            status="Approved",
+            priority="Medium",
+            qr_token="race-token-001",
+            current_office_id=office_ids[0],
+        )
+        db.add(doc)
+        db.commit()
+        document_id = doc.id
+        senders = [
+            create_employee(db, f"racer{index}", office_ids[0], permissions=["pass_office_documents"]).username
+            for index in range(len(office_ids) - 1)
+        ]
+
+    headers = [bearer_headers(TestClient(main.app), username) for username in senders]
+    barrier = threading.Barrier(len(headers))
+    statuses = []
+
+    def send(sender_headers, receiving_office_id):
+        client = TestClient(main.app)
+        barrier.wait()
+        response = client.post(
+            f"/documents/{document_id}/handoffs",
+            json={"receiving_office_id": receiving_office_id},
+            headers=sender_headers,
+        )
+        statuses.append(response.status_code)
+
+    threads = [
+        threading.Thread(target=send, args=(sender_headers, receiving_office_id))
+        for sender_headers, receiving_office_id in zip(headers, office_ids[1:])
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(statuses) == [200] + [409] * (len(headers) - 1)
+    with SessionLocal() as db:
+        assert db.query(models.DocumentHandoff).filter_by(document_id=document_id, status="Pending Receipt").count() == 1
