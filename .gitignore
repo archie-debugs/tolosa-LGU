@@ -151,3 +151,6 @@ debug_uvicorn.py
 uploads/
 *.pdf
 *.pdf
+
+# Local runtime logs
+backend_log.txt

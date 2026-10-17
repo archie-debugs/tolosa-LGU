@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dotenv import load_dotenv
-from jose import JWTError, ExpiredSignatureError, jwt
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -14,7 +15,10 @@ load_dotenv()
 from .database import get_db
 from . import models
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY") or "dev-local-secret-key"
+# Tokens signed with a guessable key can be forged for any user, so there is no fallback.
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY is required to sign and verify authentication tokens.")
 
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS512")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXP_MINUTES", "60"))
@@ -77,7 +81,7 @@ def decode_access_token(token: str) -> dict:
         return payload
     except ExpiredSignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired") from exc
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalid") from exc
 
 
@@ -89,7 +93,7 @@ def decode_refresh_token(token: str) -> dict:
         return payload
     except ExpiredSignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired") from exc
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token invalid") from exc
 
 
@@ -101,7 +105,7 @@ def decode_preview_token(token: str) -> dict:
         return payload
     except ExpiredSignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token expired") from exc
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token invalid") from exc
 
 
@@ -113,13 +117,15 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    if payload.get("session_id"):
-        session = db.query(models.UserSession).filter(
-            models.UserSession.session_id == payload.get("session_id"),
-            models.UserSession.user_id == user.id,
-        ).first()
-        expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
-        if not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc):
-            raise HTTPException(status_code=401, detail="Session is no longer active")
-        session.last_activity = datetime.now(timezone.utc)
+    if not getattr(user, "is_active", False) or getattr(user, "status", None) != "Active":
+        raise HTTPException(status_code=401, detail="User no longer active")
+    session_id = payload.get("session_id")
+    session = db.query(models.UserSession).filter(
+        models.UserSession.session_id == session_id,
+        models.UserSession.user_id == user.id,
+    ).first() if session_id else None
+    expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
+    if not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Session is no longer active")
+    session.last_activity = datetime.now(timezone.utc)
     return user

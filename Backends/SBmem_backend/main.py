@@ -1,5 +1,4 @@
 import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -8,7 +7,8 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
@@ -16,7 +16,7 @@ load_dotenv()
 
 from Backends.backend import models
 from Backends.backend.auth_jwt import ALGORITHM, SECRET_KEY
-from Backends.backend.core import normalize_permissions, normalize_user_role
+from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, normalize_permissions, normalize_user_role, validate_registered_session
 from Backends.backend.database import get_db
 
 
@@ -59,11 +59,13 @@ def get_current_sb_member(request: Request, db: Session = Depends(get_db)) -> mo
     token = header.split(" ", 1)[1].strip()
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired access token") from exc
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid access token")
-    return _active_sb_member(db, payload.get("sub"))
+    user = _active_sb_member(db, payload.get("sub"))
+    validate_registered_session(db, payload, user)
+    return user
 
 
 def require_sb_permission(user: models.User, permission: str) -> None:
@@ -211,8 +213,8 @@ def download_document(document_id: int, attachment_id: int, db: Session = Depend
     if not attachment or not attachment.stored_path or not os.path.isabs(attachment.stored_path):
         raise HTTPException(status_code=404, detail="Attachment not found")
     path = Path(attachment.stored_path).resolve()
-    upload_root = Path(tempfile.gettempdir()) / "sb_tolosa_tracking" / "uploads"
-    if upload_root.resolve() not in path.parents or not path.is_file():
+    allowed_roots = {Path(UPLOAD_DIR).resolve(), Path(LEGACY_UPLOAD_DIR).resolve()}
+    if not any(root in path.parents for root in allowed_roots) or not path.is_file():
         raise HTTPException(status_code=404, detail="Attachment file not found")
     return FileResponse(str(path), filename=attachment.original_filename, media_type=attachment.mime_type or "application/octet-stream")
 

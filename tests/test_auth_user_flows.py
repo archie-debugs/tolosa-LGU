@@ -12,7 +12,7 @@ from Backends.backend import models
 from Backends.backend.core import UPLOAD_DIR, get_password_hash, verify_password
 from Backends.backend.auth_jwt import create_access_token
 from Backends.backend.database import SessionLocal, engine
-from Backends.backend.core import get_default_permissions_for_role, require_permission
+from Backends.backend.core import OFFICE_WORKFLOW_PERMISSIONS, get_default_permissions_for_role, require_permission
 from Backends.backend.routes import documents as documents_routes
 from fastapi import HTTPException
 
@@ -32,6 +32,8 @@ models.Base.metadata.create_all(bind=engine)
 def reset_db():
     with SessionLocal() as db:
         db.query(models.DocumentTrackingNumberAlias).delete()
+        db.query(models.DocumentAction).delete()
+        db.query(models.DocumentHandoff).delete()
         db.query(models.DocumentOffice).delete()
         db.query(models.DocumentReceipt).delete()
         db.query(models.Attachment).delete()
@@ -728,14 +730,8 @@ def test_user_offices_support_assignment_update_and_unassigned_users():
     assert office_user["office_id"] == office_id
     assert office_user["department"] == "SB Secretariat"
     office_permissions = office_user["permissions"]
-    assert set(office_permissions) == {
-        "view_office_documents",
-        "search_office_documents",
-        "view_office_document_details",
-        "scan_qr",
-        "confirm_document_receipt",
-        "view_office_history",
-    }
+    # Only the office-workflow permissions the admin selected are kept.
+    assert set(office_permissions) == {"view_office_documents"}
 
     updated = client.put(
         f"/auth/users/{office_user['id']}",
@@ -964,8 +960,8 @@ def test_office_qr_lookup_requires_matching_office_assignment():
             title="City Budget Ordinance",
             status="Approved",
             priority="Medium",
-            current_office_id=office_a.id,
-            current_office="Office of the Mayor - QR Test",
+            current_office_id=office_b.id,
+            current_office="Treasury Office - QR Test",
             qr_token="office-access-token-123",
             qr_code_value="https://example.test/qr/office-access-token-123",
         )
@@ -974,9 +970,9 @@ def test_office_qr_lookup_requires_matching_office_assignment():
         db.refresh(doc)
         if not db.query(models.DocumentOffice).filter(
             models.DocumentOffice.document_id == doc.id,
-            models.DocumentOffice.office_id == office_a.id,
+            models.DocumentOffice.office_id == office_b.id,
         ).first():
-            db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+            db.add(models.DocumentOffice(document_id=doc.id, office_id=office_b.id))
             db.commit()
         document_id = doc.id
         qr_token = doc.qr_token
@@ -1021,6 +1017,14 @@ def test_office_qr_lookup_requires_matching_office_assignment():
         db.commit()
         db.refresh(office_user)
         db.refresh(other_user)
+        db.add(models.DocumentHandoff(
+            document_id=document_id,
+            sending_office_id=office_b.id,
+            receiving_office_id=office_a.id,
+            sending_employee_id=other_user.id,
+            status="Pending Receipt",
+        ))
+        db.commit()
 
     office_headers = bearer_headers(client, "mayorstaff", "pw123")
     allowed = client.get(f"/documents/qr/{qr_token}/office", headers=office_headers)
@@ -1030,7 +1034,7 @@ def test_office_qr_lookup_requires_matching_office_assignment():
     other_headers = bearer_headers(client, "treasurystaff", "pw123")
     denied = client.get(f"/documents/qr/{qr_token}/office", headers=other_headers)
     assert denied.status_code == 403, denied.text
-    assert "not assigned to your office" in denied.json()["detail"].lower()
+    assert "not pending receipt at your office" in denied.json()["detail"].lower()
 
     no_office_headers = bearer_headers(client, "unassignedstaff", "pw123")
     no_office = client.get(f"/documents/qr/{qr_token}/office", headers=no_office_headers)
@@ -1062,8 +1066,8 @@ def test_document_receipt_confirmation_and_history_are_office_scoped():
             title="Receipt Test Ordinance",
             status="Approved",
             priority="Medium",
-            current_office_id=office_a_id,
-            current_office="SB Secretariat",
+            current_office_id=office_b_id,
+            current_office="Office of the Mayor",
             qr_token="receipt-confirmation-token-001",
             qr_code_value="https://example.test/qr/receipt-confirmation-token-001",
         )
@@ -1072,19 +1076,23 @@ def test_document_receipt_confirmation_and_history_are_office_scoped():
         db.refresh(doc)
         if not db.query(models.DocumentOffice).filter(
             models.DocumentOffice.document_id == doc.id,
-            models.DocumentOffice.office_id == office_a_id,
+            models.DocumentOffice.office_id == office_b_id,
         ).first():
-            db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a_id))
+            db.add(models.DocumentOffice(document_id=doc.id, office_id=office_b_id))
             db.commit()
         qr_token = doc.qr_token
         document_id = doc.id
+        office_c = models.Office(name="Unrelated Office - Receipt Test", office_code="UNRREC")
+        db.add(office_c)
+        db.commit()
+        office_c_id = office_c.id
 
         employee_a = models.User(
             username="receiptusera",
             hashed_password=get_password_hash("pw123"),
             role="Employee",
             office_id=office_a_id,
-            permissions="['scan_qr', 'confirm_document_receipt', 'view_office_documents', 'view_office_document_details', 'view_office_history']",
+            permissions="['scan_qr', 'confirm_document_receipt', 'pass_office_documents', 'view_office_documents', 'view_office_document_details', 'view_office_history']",
             status="Active",
             is_active=True,
         )
@@ -1097,7 +1105,24 @@ def test_document_receipt_confirmation_and_history_are_office_scoped():
             status="Active",
             is_active=True,
         )
-        db.add_all([employee_a, employee_b])
+        employee_c = models.User(
+            username="receiptuserc",
+            hashed_password=get_password_hash("pw123"),
+            role="Employee",
+            office_id=office_c_id,
+            permissions="['scan_qr', 'confirm_document_receipt', 'view_office_documents', 'view_office_document_details', 'view_office_history']",
+            status="Active",
+            is_active=True,
+        )
+        db.add_all([employee_a, employee_b, employee_c])
+        db.commit()
+        db.add(models.DocumentHandoff(
+            document_id=document_id,
+            sending_office_id=office_b_id,
+            receiving_office_id=office_a_id,
+            sending_employee_id=employee_b.id,
+            status="Pending Receipt",
+        ))
         db.commit()
 
     office_a_headers = bearer_headers(client, "receiptusera", "pw123")
@@ -1114,7 +1139,7 @@ def test_document_receipt_confirmation_and_history_are_office_scoped():
     office_b_headers = bearer_headers(client, "receiptuserb", "pw123")
     deny = client.post(f"/documents/qr/{qr_token}/receipt", headers=office_b_headers)
     assert deny.status_code == 403, deny.text
-    assert "not assigned to your office" in deny.json()["detail"].lower()
+    assert "not pending receipt at your office" in deny.json()["detail"].lower()
 
     history = client.get(f"/documents/{document_id}/receipts", headers=office_a_headers)
     assert history.status_code == 200, history.text
@@ -1129,12 +1154,13 @@ def test_document_receipt_confirmation_and_history_are_office_scoped():
     assert received_filter["total"] == 1 and received_filter["items"][0]["id"] == document_id
     assert not_received_filter["total"] == 0
 
-    forbidden_history = client.get(f"/documents/{document_id}/receipts", headers=office_b_headers)
+    office_c_headers = bearer_headers(client, "receiptuserc", "pw123")
+    forbidden_history = client.get(f"/documents/{document_id}/receipts", headers=office_c_headers)
     assert forbidden_history.status_code == 403, forbidden_history.text
 
-    with SessionLocal() as db:
-        db.add(models.DocumentOffice(document_id=document_id, office_id=office_b_id))
-        db.commit()
+    # Receipt made office A the holder, so A (not the original sender) can pass it back to B.
+    returned = client.post(f"/documents/{document_id}/handoffs", json={"receiving_office_id": office_b_id}, headers=office_a_headers)
+    assert returned.status_code == 200, returned.text
     office_b_confirm = client.post(f"/documents/qr/{qr_token}/receipt", headers=office_b_headers)
     assert office_b_confirm.status_code == 200, office_b_confirm.text
     assert office_b_confirm.json()["receipt"]["office_id"] == office_b_id
@@ -1187,7 +1213,7 @@ def test_super_admin_office_management_and_inactive_assignment_retention():
     )
     assert created_user.status_code == 200, created_user.text
     assert created_user.json()["office_id"] == office["id"]
-    assert created_user.json()["permissions"] == []
+    assert created_user.json()["permissions"] == sorted(OFFICE_WORKFLOW_PERMISSIONS)
 
     internal_user = client.post(
         "/auth/register",
@@ -1547,21 +1573,22 @@ def test_super_admin_creation_requires_authenticated_super_admin():
         assert audit is not None
 
 
-def test_public_registration_cannot_create_an_account_or_assign_super_admin():
+def test_unauthenticated_registration_cannot_create_an_account_or_assign_super_admin():
     reset_db()
     client = TestClient(main.app)
     response = client.post(
-        "/registration/requests",
+        "/auth/register",
         json={
-            "first_name": "Public",
-            "last_name": "Applicant",
+            "full_name": "Public Applicant",
             "email": "public@example.com",
             "username": "public-admin",
             "password": "securepass",
-            "requested_access": "Super Administrator",
+            "role": "Super Administrator",
         },
     )
     assert response.status_code == 403
+    with SessionLocal() as db:
+        assert db.query(models.User).filter(models.User.username == "public-admin").first() is None
 
 
 def test_unknown_permissions_are_rejected_and_valid_permissions_are_stored():
@@ -1726,174 +1753,27 @@ def test_expired_or_inactive_admin_jwt_is_rejected():
     assert inactive.status_code == 403
 
 
-def _seed_registration_request(username, email, status="Pending"):
-    with SessionLocal() as db:
-        request = models.RegistrationRequest(
-            registration_reference=f"REG-TEST-{username}",
-            first_name="Registered",
-            middle_name="Test",
-            last_name="Applicant",
-            email=email,
-            username=username,
-            office="SB Secretariat",
-            position="Staff",
-            requested_access="Employee",
-            hashed_password=get_password_hash("registration-pass"),
-            status=status,
-        )
-        db.add(request)
-        db.commit()
-        db.refresh(request)
-        return request.id
-
-
-def test_registration_requests_accept_case_insensitive_pending_statuses():
-    reset_db()
-    client = TestClient(main.app)
-    request_id = _seed_registration_request("pending-lowercase", "pending-lowercase@example.com", status="pending")
-    admin_headers = bearer_headers(client)
-
-    pending = client.get("/registration/requests", params={"status": "pending"}, headers=admin_headers)
-    assert pending.status_code == 200, pending.text
-    assert any(item["id"] == request_id for item in pending.json()["items"])
-
-    default_pending = client.get("/registration/requests", headers=admin_headers)
-    assert default_pending.status_code == 200, default_pending.text
-    assert any(item["id"] == request_id for item in default_pending.json()["items"])
-
-
-def test_registration_approval_creates_active_user_with_audit_and_login():
-    reset_db()
-    client = TestClient(main.app)
-    request_id = _seed_registration_request("approved-registration", "approved@example.com")
-    admin_headers = bearer_headers(client)
-
-    pending = client.get("/registration/requests", headers=admin_headers)
-    assert pending.status_code == 200, pending.text
-    item = next(item for item in pending.json()["items"] if item["id"] == request_id)
-    assert item["status"] == "Pending"
-
-    approved = client.put(
-        f"/registration/requests/{request_id}/approve",
-        headers=admin_headers,
-        json={"final_role": "Employee"},
-    )
-    assert approved.status_code == 200, approved.text
-
-    login = client.post("/auth/login", data={"username": "approved-registration", "password": "registration-pass"})
-    assert login.status_code == 200, login.text
-    with SessionLocal() as db:
-        user = db.query(models.User).filter(models.User.username == "approved-registration").one()
-        request = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.id == request_id).one()
-        assert user.full_name == "Registered Test Applicant"
-        assert user.email == "approved@example.com"
-        assert user.status == "Active"
-        assert user.is_active is True
-        assert request.status == "Approved"
-        assert request.assigned_role == "Employee"
-        assert db.query(models.AuditLog).filter(
-            models.AuditLog.target_id == request.registration_reference,
-            models.AuditLog.action == "Approved Registration",
-        ).count() >= 1
-        registration_audit = db.query(models.AuditLog).filter(
-            models.AuditLog.action == "USER_REGISTERED",
-            models.AuditLog.details.ilike("%approved-registration%"),
-        ).order_by(models.AuditLog.id.desc()).first()
-        assert registration_audit is not None
-
-
-def test_registration_rejection_cannot_create_or_activate_user():
-    reset_db()
-    client = TestClient(main.app)
-    request_id = _seed_registration_request("rejected-registration", "rejected@example.com")
-    admin_headers = bearer_headers(client)
-
-    rejected = client.put(
-        f"/registration/requests/{request_id}/reject",
-        headers=admin_headers,
-        json={"reason": "Invalid Information"},
-    )
-    assert rejected.status_code == 200, rejected.text
-    with SessionLocal() as db:
-        request = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.id == request_id).one()
-        assert request.status == "Rejected"
-        assert db.query(models.User).filter(models.User.username == "rejected-registration").count() == 0
-        assert db.query(models.AuditLog).filter(
-            models.AuditLog.target_id == request.registration_reference,
-            models.AuditLog.action == "Rejected Registration",
-        ).count() >= 1
-
-
-def test_registration_approval_rejects_duplicate_and_unauthorized_requests():
-    reset_db()
-    client = TestClient(main.app)
-    request_id = _seed_registration_request("activeuser", "duplicate@example.com")
-    duplicate = client.put(
-        f"/registration/requests/{request_id}/approve",
-        headers=bearer_headers(client),
-        json={"final_role": "Employee"},
-    )
-    assert duplicate.status_code == 409
-
-    other_request_id = _seed_registration_request("unauthorized-registration", "unauthorized@example.com")
-    unauthorized = client.put(
-        f"/registration/requests/{other_request_id}/approve",
-        headers=bearer_headers(client, "activeuser"),
-        json={"final_role": "Employee"},
-    )
-    assert unauthorized.status_code == 403
-
-
-def test_role_definitions_and_registration_permissions_are_server_enforced():
+def test_role_definitions_are_served_from_the_server():
     reset_db()
     client = TestClient(main.app)
     with SessionLocal() as db:
         manager = models.User(
-            username="registration-manager",
+            username="user-manager",
             hashed_password=get_password_hash("managerpass"),
             role="Employee",
-            permissions="['view_users', 'view_registration_requests', 'approve_registrations', 'reject_registrations']",
+            permissions="['view_users']",
             status="Active",
             is_active=True,
         )
         db.add(manager)
         db.commit()
-    manager_headers = bearer_headers(client, "registration-manager", "managerpass")
+    manager_headers = bearer_headers(client, "user-manager", "managerpass")
 
     roles = client.get("/auth/roles", headers=manager_headers)
     assert roles.status_code == 200, roles.text
     role_map = {item["name"]: item["permissions"] for item in roles.json()}
     assert set(role_map["SB Member"]) >= {"view_documents", "download_documents"}
     assert role_map["Super Administrator"] == ["*"]
-
-    request_id = _seed_registration_request("employee-approved", "employee-approved@example.com")
-    approved = client.put(
-        f"/registration/requests/{request_id}/approve",
-        headers=manager_headers,
-        json={"final_role": "Employee"},
-    )
-    assert approved.status_code == 200, approved.text
-
-    with SessionLocal() as db:
-        audit = db.query(models.AuditLog).filter(
-            models.AuditLog.action == "Approved Registration",
-            models.AuditLog.actor == "registration-manager",
-        ).order_by(models.AuditLog.id.desc()).first()
-        assert audit is not None
-
-
-def test_employee_without_registration_permissions_is_blocked():
-    reset_db()
-    client = TestClient(main.app)
-    request_id = _seed_registration_request("blocked-registration", "blocked@example.com")
-    blocked = client.get("/registration/requests", headers=bearer_headers(client, "activeuser"))
-    assert blocked.status_code == 403
-    blocked_approval = client.put(
-        f"/registration/requests/{request_id}/approve",
-        headers=bearer_headers(client, "activeuser"),
-        json={"final_role": "Employee"},
-    )
-    assert blocked_approval.status_code == 403
 
 
 def test_role_and_permission_changes_have_dedicated_audit_events():
@@ -2088,35 +1968,6 @@ def test_analytics_reports_support_filters_and_csv_export():
 
     employee_headers = bearer_headers(client, "activeuser", "pw123")
     blocked = client.get("/analytics/reports", headers=employee_headers)
-    assert blocked.status_code == 403
-
-
-def test_backup_creation_and_verification_are_admin_only():
-    reset_db()
-    client = TestClient(main.app)
-    super_headers = bearer_headers(client, "superuser", "pw123")
-
-    response = client.post(
-        "/backup/create",
-        headers=super_headers,
-        json={"confirm": True, "include_documents": True},
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["backup"]["status"] == "created"
-    assert payload["backup"]["location"]
-    assert os.path.exists(payload["backup"]["location"])
-
-    verify = client.get("/backup/verify", headers=super_headers)
-    assert verify.status_code == 200, verify.text
-    assert verify.json()["verified"] in {True, False}
-
-    employee_headers = bearer_headers(client, "activeuser", "pw123")
-    blocked = client.post(
-        "/backup/create",
-        headers=employee_headers,
-        json={"confirm": True},
-    )
     assert blocked.status_code == 403
 
 

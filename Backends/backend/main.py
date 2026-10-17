@@ -35,7 +35,9 @@ refresh_development_public_urls()
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+        # HSTS over plain-HTTP development would pin browsers to HTTPS for this host for a year.
+        if force_https:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
@@ -149,7 +151,6 @@ def health():
         "database": {
             "status": database_status,
             "dialect": info["dialect"],
-            "url": info["url"],
         },
         "document_storage": storage["document_storage"],
         "temporary_upload_storage": storage["temporary_upload_storage"],

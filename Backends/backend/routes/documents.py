@@ -14,7 +14,9 @@ from ..database import get_db
 from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
 from ..auth_jwt import create_preview_token, decode_access_token, decode_preview_token, get_current_user
 import uuid
+import threading
 import time
+from collections import deque
 from urllib.parse import quote, unquote, urlparse
 import hashlib
 import mimetypes
@@ -29,6 +31,27 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 public_qr_router = APIRouter(tags=["public-qr"])
 
 QR_IMAGE_DIR = os.path.join(UPLOAD_DIR, "qr")
+
+# Anonymous QR lookups write audit entries, so each client is limited to keep the audit
+# log from being flooded. In-memory, per backend process.
+PUBLIC_QR_RATE_LIMIT_PER_MINUTE = int(os.getenv("PUBLIC_QR_RATE_LIMIT_PER_MINUTE", "30"))
+_public_qr_lookups: dict[str, deque] = {}
+_public_qr_lookups_lock = threading.Lock()
+
+
+def _allow_public_qr_lookup(client_key: str) -> bool:
+    now = time.monotonic()
+    window_start = now - 60
+    with _public_qr_lookups_lock:
+        for key in [key for key, stamps in _public_qr_lookups.items() if not stamps or stamps[-1] < window_start]:
+            del _public_qr_lookups[key]
+        stamps = _public_qr_lookups.setdefault(client_key, deque())
+        while stamps and stamps[0] < window_start:
+            stamps.popleft()
+        if len(stamps) >= PUBLIC_QR_RATE_LIMIT_PER_MINUTE:
+            return False
+        stamps.append(now)
+        return True
 TITLE_YEAR_PATTERN = r"(?i)series[[:space:]]*:?[[:space:]]*((19|20)[0-9]{2})"
 LEGISLATIVE_NUMBER_PATTERN = re.compile(r"(?i)\b(?:ordinance|resolution)\s+(?:no\.?|number)\s*[:#]?\s*([0-9]+)\b")
 
@@ -814,8 +837,10 @@ def _extract_qr_token_from_value(qr_value: str | None) -> str | None:
     if "://" in candidate:
         parsed = urlparse(candidate)
         path = parsed.path or ""
-        if "/qr/" in path.lower():
-            candidate = path.lower().split("/qr/", 1)[1]
+        marker = path.lower().find("/qr/")
+        if marker >= 0:
+            # Slice the original path: QR tokens are case-sensitive.
+            candidate = path[marker + len("/qr/"):]
         else:
             candidate = path.rsplit("/", 1)[-1]
     if candidate.startswith("/"):
@@ -1738,8 +1763,14 @@ def public_lookup_qr_by_value(qr_value: str, request: Request, db: Session = Dep
             frontend_qr_url = f"{frontend_url}/qr/{quote(qr_value, safe='')}"
             return RedirectResponse(frontend_qr_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
+    client_key = request.client.host if request.client else "unknown"
+    if not _allow_public_qr_lookup(client_key):
+        raise HTTPException(status_code=429, detail="Too many QR lookups. Please wait a minute and try again.")
+
+    # Unauthenticated callers must present the unguessable QR token; sequential tracking
+    # numbers would let anyone enumerate private and archived documents.
     token_value = _extract_qr_token_from_value(qr_value)
-    doc = _find_document_by_qr_or_tracking(db, token_value or qr_value)
+    doc = db.query(models.Document).filter(models.Document.qr_token == token_value).first() if token_value else None
     if not doc:
         record_audit_log(
             db,
@@ -1921,13 +1952,20 @@ def create_document_handoff(
     doc = db.query(models.Document).filter(models.Document.id == document_id).with_for_update().first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.archived:
+        raise HTTPException(status_code=400, detail="Archived documents cannot be handed off")
 
-    sender_office_link = db.query(models.DocumentOffice.id).filter(
-        models.DocumentOffice.document_id == document_id,
-        models.DocumentOffice.office_id == current_user.office_id,
-    ).with_for_update().first()
-    if sender_office_link is None:
-        raise HTTPException(status_code=403, detail="This document is not assigned to your office")
+    # Only the office currently holding the document may pass it on. Documents without a
+    # recorded current office fall back to their office association.
+    if doc.current_office_id is not None:
+        holds_document = doc.current_office_id == current_user.office_id
+    else:
+        holds_document = db.query(models.DocumentOffice.id).filter(
+            models.DocumentOffice.document_id == document_id,
+            models.DocumentOffice.office_id == current_user.office_id,
+        ).with_for_update().first() is not None
+    if not holds_document:
+        raise HTTPException(status_code=403, detail="This document is not currently held by your office")
 
     receiving_office = db.query(models.Office).filter(models.Office.id == payload.receiving_office_id).first()
     if receiving_office is None:
@@ -2106,6 +2144,22 @@ def confirm_document_receipt(qr_value: str, db: Session = Depends(get_db), curre
         .first()
     )
     if handoff is None:
+        # A repeated scan by the office that already received (and still holds) the document
+        # is answered idempotently instead of being treated as an access violation.
+        if doc.current_office_id == current_user.office_id:
+            previous_receipt = (
+                db.query(models.DocumentReceipt)
+                .join(models.DocumentHandoff, models.DocumentHandoff.id == models.DocumentReceipt.handoff_id)
+                .filter(
+                    models.DocumentReceipt.document_id == doc.id,
+                    models.DocumentReceipt.office_id == current_user.office_id,
+                    models.DocumentHandoff.status == "Received",
+                )
+                .order_by(models.DocumentReceipt.confirmed_at.desc(), models.DocumentReceipt.id.desc())
+                .first()
+            )
+            if previous_receipt is not None:
+                return {"status": "already_confirmed", "receipt": _serialize_document_receipt(previous_receipt), "message": "Receipt already confirmed for this handoff."}
         raise HTTPException(status_code=403, detail="This document is not pending receipt at your office")
 
     existing = (
@@ -2137,6 +2191,12 @@ def confirm_document_receipt(qr_value: str, db: Session = Depends(get_db), curre
         db.flush()
         handoff.status = "Received"
         handoff.updated_at = datetime.now(timezone.utc)
+        # Receipt transfers custody: the receiving office now holds the document and may pass
+        # it on. The sending office keeps its association so its history stays visible.
+        receiving_office = db.query(models.Office).filter(models.Office.id == current_user.office_id).first()
+        doc.current_office_id = current_user.office_id
+        doc.current_office = receiving_office.name if receiving_office else doc.current_office
+        _ensure_document_office_association(db, doc.id, current_user.office_id)
         db.flush()
     except exc.IntegrityError as exc:
         db.rollback()
@@ -2312,6 +2372,26 @@ def list_document_receipts(document_id: int, db: Session = Depends(get_db), curr
     }
 
 
+# Registered before the /qr/{qr_value:path} routes, which would otherwise capture "labels".
+@router.get("/qr/labels")
+def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "print_qr_codes")
+    query = db.query(models.Document).filter(models.Document.archived.is_(False))
+    if ids:
+        id_list = [int(item.strip()) for item in str(ids).split(",") if item.strip().isdigit()]
+        if id_list:
+            query = query.filter(models.Document.id.in_(id_list))
+    documents = query.order_by(models.Document.id.asc()).all()
+    if not documents:
+        raise HTTPException(status_code=404, detail="No documents found for QR label generation")
+    pdf_buffer = _render_qr_label_pdf(documents)
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=qr_labels.pdf"},
+    )
+
+
 @router.get("/qr/{qr_value:path}/office")
 @router.get("/qr/{qr_value:path}/office-access")
 def lookup_office_qr_by_value(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -2354,25 +2434,6 @@ def lookup_qr_by_value(qr_value: str, db: Session = Depends(get_db), current_use
         "current_office": doc.current_office,
         "qr_payload": doc.qr_code_value,
     }
-
-
-@router.get("/qr/labels")
-def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    require_permission(current_user, "print_qr_codes")
-    query = db.query(models.Document).filter(models.Document.archived.is_(False))
-    if ids:
-        id_list = [int(item.strip()) for item in str(ids).split(",") if item.strip().isdigit()]
-        if id_list:
-            query = query.filter(models.Document.id.in_(id_list))
-    documents = query.order_by(models.Document.id.asc()).all()
-    if not documents:
-        raise HTTPException(status_code=404, detail="No documents found for QR label generation")
-    pdf_buffer = _render_qr_label_pdf(documents)
-    return StreamingResponse(
-        pdf_buffer,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=qr_labels.pdf"},
-    )
 
 
 @router.delete("/{document_id:int}")
