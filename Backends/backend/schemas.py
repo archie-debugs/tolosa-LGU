@@ -98,6 +98,8 @@ class DocumentResponse(BaseModel):
     archived_by: Optional[str] = None
     office_receipt_status: Optional[str] = None
     office_receipt_confirmed_at: Optional[datetime] = None
+    in_transit_to: Optional[str] = None
+    in_transit_since: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -112,6 +114,8 @@ class PaginatedDocumentResponse(BaseModel):
     page_size: int
     total_pages: int
     available_years: list[int] = Field(default_factory=list)
+    available_statuses: list[str] = Field(default_factory=list)
+    summary: Optional[dict] = None
 
 
 class DocumentHandoffCreate(BaseModel):

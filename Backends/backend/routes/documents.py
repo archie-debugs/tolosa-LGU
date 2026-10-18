@@ -1483,6 +1483,9 @@ def list_documents(
     start_date: str | None = None,
     end_date: str | None = None,
     priority: str | None = None,
+    location: str | None = Query(default=None, description="in_transit or at_office"),
+    visibility: str | None = Query(default=None, description="public or private"),
+    has_attachment: bool | None = Query(default=None),
     archived: bool | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
@@ -1497,6 +1500,19 @@ def list_documents(
         query = query.filter(models.Document.archived.is_(archived))
     else:
         query = query.filter(models.Document.archived.is_(False))
+    in_transit = exists().where(
+        models.DocumentHandoff.document_id == models.Document.id,
+        models.DocumentHandoff.status == "Pending Receipt",
+    )
+    with_attachment = exists().where(models.Attachment.document_id == models.Document.id)
+    # Counts over the whole list, before search and filters, for the screen's summary.
+    summary = {
+        "total": query.count(),
+        "in_transit": query.filter(in_transit).count(),
+        "public": query.filter(models.Document.is_public.is_(True)).count(),
+        "without_attachment": query.filter(~with_attachment).count(),
+    }
+    available_statuses = sorted(value for (value,) in query.with_entities(models.Document.status).distinct() if value)
     available_year_query = db.query(func.min(_document_title_year_expression()))
     if archived is not None:
         available_year_query = available_year_query.filter(models.Document.archived.is_(archived))
@@ -1542,6 +1558,18 @@ def list_documents(
         query = query.filter(models.Document.current_office == current_office)
     if priority:
         query = query.filter(models.Document.priority == priority)
+    if location == "in_transit":
+        query = query.filter(in_transit)
+    elif location == "at_office":
+        query = query.filter(~in_transit)
+    elif location:
+        raise HTTPException(status_code=400, detail="Invalid location: use in_transit or at_office.")
+    if visibility in ("public", "private"):
+        query = query.filter(models.Document.is_public.is_(visibility == "public"))
+    elif visibility:
+        raise HTTPException(status_code=400, detail="Invalid visibility: use public or private.")
+    if has_attachment is not None:
+        query = query.filter(with_attachment if has_attachment else ~with_attachment)
     if year:
         year_text = str(year).strip()
         if not re.fullmatch(r"\d{4}", year_text):
@@ -1583,13 +1611,29 @@ def list_documents(
         .limit(page_size)
         .all()
     )
+    handoffs = {
+        row.document_id: row
+        for row in db.query(models.DocumentHandoff).filter(
+            models.DocumentHandoff.document_id.in_([doc.id for doc in docs]),
+            models.DocumentHandoff.status == "Pending Receipt",
+        )
+    } if docs else {}
+    items = []
+    for doc in docs:
+        item = _serialize_document(doc)
+        handoff = handoffs.get(doc.id)
+        item["in_transit_to"] = handoff.receiving_office.name if handoff and handoff.receiving_office else None
+        item["in_transit_since"] = _as_utc(handoff.sent_at) if handoff else None
+        items.append(item)
     return {
-        "items": [_serialize_document(doc) for doc in docs],
+        "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
         "available_years": available_years,
+        "available_statuses": available_statuses,
+        "summary": summary,
     }
 
 
@@ -2637,6 +2681,46 @@ def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depe
     pdf_buffer = _render_qr_label_pdf(documents)
     return StreamingResponse(
         pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=qr_labels.pdf"},
+    )
+
+
+@router.post("/qr/labels/download-token")
+def create_qr_labels_download_token(payload: dict = Body(...), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """A short-lived link to the QR labels of the selected documents."""
+    require_permission(current_user, "print_qr_codes")
+    raw_ids = payload.get("ids") if isinstance(payload, dict) else None
+    ids = sorted({int(value) for value in (raw_ids or []) if str(value).strip().isdigit()})
+    if not ids:
+        raise HTTPException(status_code=400, detail="Select at least one document.")
+    if not db.query(models.Document.id).filter(models.Document.id.in_(ids), models.Document.archived.is_(False)).first():
+        raise HTTPException(status_code=404, detail="No documents found for QR label generation")
+    token = create_download_token({"sub": current_user.username, "qr_label_ids": ids})
+    return {"download_url": f"{_public_base_url()}/documents/qr/labels/file?download_token={quote(token, safe='')}"}
+
+
+@router.get("/qr/labels/file")
+def download_qr_labels_by_link(download_token: str = Query(...), db: Session = Depends(get_db)):
+    payload = decode_download_token(download_token)
+    ids = payload.get("qr_label_ids")
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=403, detail="Link does not match QR labels")
+    user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Link user not found")
+    ensure_active_user(user)
+    require_permission(user, "print_qr_codes")
+    documents = (
+        db.query(models.Document)
+        .filter(models.Document.id.in_(ids), models.Document.archived.is_(False))
+        .order_by(models.Document.id.asc())
+        .all()
+    )
+    if not documents:
+        raise HTTPException(status_code=404, detail="No documents found for QR label generation")
+    return StreamingResponse(
+        _render_qr_label_pdf(documents),
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=qr_labels.pdf"},
     )
