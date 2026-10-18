@@ -1357,15 +1357,10 @@ def main(page: ft.Page, session=None):
 
     documents_data = []
     archived_documents_data = []
-    documents_page = 1
-    documents_total = 0
-    documents_total_pages = 1
     archived_documents_page = 1
     archived_documents_total = 0
     archived_documents_total_pages = 1
     selected_archived_document_ids = set()
-    documents_select_all_checkbox = ft.Checkbox(value=False, on_change=lambda e: documents_select_all_toggle(e.control.value))
-    documents_pagination_bar = ft.Row([], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
     archived_documents_pagination_bar = ft.Row([], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def update_pagination_bar(bar, current_page, total_pages, load_page):
@@ -1400,61 +1395,6 @@ def main(page: ft.Page, session=None):
         if normalized in {"archived"}:
             return ft.Colors.BLUE_GREY_700, ft.Colors.BLUE_GREY_50
         return ft.Colors.BLUE_GREY_700, ft.Colors.BLUE_GREY_50
-
-    documents_search_field = ft.TextField(
-        label="Search documents",
-        hint_text="Search by Tracking ID, title, type, status, or location...",
-        prefix_icon=ft.Icon(ft.Icons.SEARCH, size=18, color=ft.Colors.BLUE_GREY_600),
-        expand=True,
-        on_change=lambda _: load_documents_table(),
-    )
-    documents_filter_status = ft.Dropdown(
-        label="Status",
-        width=140,
-        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Received"), ft.dropdown.Option("Approved"), ft.dropdown.Option("Returned"), ft.dropdown.Option("Archived")],
-        value="All",
-    )
-    documents_filter_type = ft.Dropdown(
-        label="Document Type",
-        width=160,
-        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")],
-        value="All",
-    )
-    documents_filter_category = ft.Dropdown(
-        label="Category",
-        width=140,
-        options=[ft.dropdown.Option("All"), ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")],
-        value="All",
-    )
-    documents_sort_filter = ft.Dropdown(
-        label="Sort",
-        width=140,
-        options=[ft.dropdown.Option("Sequence"), ft.dropdown.Option("Newest"), ft.dropdown.Option("Oldest"), ft.dropdown.Option("Title")],
-        value="Sequence",
-    )
-    documents_filter_start_date = ft.Dropdown(label="Start Date", hint_text="Any year", options=[], width=140)
-    documents_filter_end_date = ft.Dropdown(label="End Date", hint_text="Any year", options=[], width=140)
-    documents_filter_priority = ft.Dropdown(
-        label="Priority",
-        width=120,
-        options=[
-            ft.dropdown.Option("All"),
-            ft.dropdown.Option("Low"),
-            ft.dropdown.Option("Medium"),
-            ft.dropdown.Option("High"),
-        ],
-        value="All",
-    )
-    documents_status_filter = documents_filter_status
-    documents_category_filter = documents_filter_category
-    documents_type_filter = documents_filter_type
-
-    def set_document_year_options(years):
-        documents_filter_start_date.options = [ft.dropdown.Option(key=str(year), text=str(year)) for year in years]
-        documents_filter_end_date.options = [
-            ft.dropdown.Option(key="current_date", text="Current Date"),
-        ] + [ft.dropdown.Option(key=str(year), text=str(year)) for year in reversed(years)]
-
 
     documents_details_dialog = ft.AlertDialog(
         title=ft.Text("Document Details"),
@@ -1853,11 +1793,8 @@ def main(page: ft.Page, session=None):
 
     def clear_selected_qr_documents():
         selected_qr_document_ids.clear()
-        refresh_qr_selection_badge()
-        update_document_selection_button_state()
-        apply_document_search_to_current_view()
         close_qr_label_download_dialog()
-        page.update()
+        documents_refresh()
 
     def close_qr_label_download_dialog():
         qr_label_download_dialog.open = False
@@ -2516,12 +2453,10 @@ def main(page: ft.Page, session=None):
                 (registration_category, category_names),
                 (bulk_common_category, category_names),
                 (edit_document_category, category_names),
-                (documents_filter_category, category_names),
                 (archived_documents_filter_category, category_names),
                 (registration_document_type, type_names),
                 (bulk_common_document_type, type_names),
                 (edit_document_type, type_names),
-                (documents_filter_type, type_names),
                 (archived_documents_filter_type, type_names),
             ):
                 current_value = control.value
@@ -2626,7 +2561,7 @@ def main(page: ft.Page, session=None):
                 raise Exception(f"{response.status_code} {detail}")
             edit_document_dialog.open = False
             page.update()
-            load_documents_table(documents_page)
+            load_documents_table()
             show_document_notice("Document updated successfully.")
         except Exception as exc:
             show_document_notice(f"Document update failed: {exc}")
@@ -2640,72 +2575,7 @@ def main(page: ft.Page, session=None):
         )
 
     selected_qr_document_ids = set()
-    documents_toolbar_update = None
-
-    def refresh_qr_selection_badge():
-        if selected_qr_document_ids:
-            documents_notice.value = f"{len(selected_qr_document_ids)} QR labels selected"
-        else:
-            documents_notice.value = ""
-        page.update()
-
-    documents_archive_selected_button = ft.Button(
-        "Archive Selected",
-        icon=ft.Icons.ARCHIVE,
-        bgcolor=ft.Colors.BLUE_GREY_700,
-        color=ft.Colors.WHITE,
-        on_click=lambda _: open_documents_bulk_archive_dialog(),
-    )
-    documents_qr_labels_button = ft.OutlinedButton(
-        "Download QR Labels",
-        icon=ft.Icons.PRINT,
-        on_click=lambda _: open_qr_label_download_dialog(),
-    )
-
-    documents_table = ft.DataTable(
-        columns=[
-            ft.DataColumn(label=ft.Container(content=documents_select_all_checkbox, width=50, alignment=ft.Alignment.CENTER)),
-            ft.DataColumn(label=make_document_header("Actions", 90)),
-            ft.DataColumn(label=make_document_header("Tracking No.", 120)),
-            ft.DataColumn(label=make_document_header("Title", 280)),
-            ft.DataColumn(label=make_document_header("Document Type", 120)),
-            ft.DataColumn(label=make_document_header("Category", 100)),
-            ft.DataColumn(label=make_document_header("Current Office", 140)),
-            ft.DataColumn(label=make_document_header("Status", 120)),
-            ft.DataColumn(label=make_document_header("Priority", 80)),
-            ft.DataColumn(label=make_document_header("Date Received", 100)),
-            ft.DataColumn(label=make_document_header("Last Updated", 100)),
-        ],
-        rows=[],
-        width=1600,
-        expand=False,
-        column_spacing=10,
-        horizontal_margin=0,
-        data_row_min_height=52,
-        data_text_style=ft.TextStyle(size=13),
-        heading_text_style=ft.TextStyle(
-            size=12,
-            weight=ft.FontWeight.BOLD,
-        ),
-        horizontal_lines=ft.BorderSide(width=1, color=ft.Colors.BLUE_GREY_100),
-        border_radius=10,
-    )
-
-    documents_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
-
-    documents_empty_state = ft.Container(
-        content=ft.Text(
-            "No documents match your search.",
-            size=13,
-            color=ft.Colors.BLUE_GREY_600,
-            text_align=ft.TextAlign.CENTER,
-        ),
-        width=1600,
-        height=40,
-        alignment=ft.Alignment.CENTER,
-        visible=False,
-        padding=ft.Padding(left=0, top=8, right=0, bottom=8),
-    )
+    documents_refresh = lambda: None
 
     archived_documents_table = ft.DataTable(
         columns=[
@@ -2896,35 +2766,18 @@ def main(page: ft.Page, session=None):
                 return True
         return False
 
-    def apply_document_search(documents, search_text=None):
-        if search_text is None:
-            search_text = documents_search_field.value
-        query = normalize_search_text(search_text)
-        if not query:
-            return list(documents)
-
-        terms = [token for token in query.split() if token]
-        if not terms:
-            return list(documents)
-
-        filtered = []
-        for doc in documents:
-            if all(document_matches_search_term(doc, term) for term in terms):
-                filtered.append(doc)
-        return filtered
-
     def update_document_result_indicator(display_documents, visible_count=None, total_count=None):
-        search_text = normalize_search_text(documents_search_field.value)
+        search_text = normalize_search_text(archived_documents_search_field.value)
         mode_text = get_document_search_mode(search_text)
         total_count = len(display_documents) if total_count is None else total_count
         if not display_documents and total_count == 0:
-            documents_notice.value = f"{mode_text} • No matching documents"
+            archived_documents_notice.value = f"{mode_text} • No matching documents"
             return
         count_label = "document" if total_count == 1 else "documents"
         if visible_count is not None and visible_count < total_count:
-            documents_notice.value = f"{mode_text} • Showing {visible_count} of {total_count} matching {count_label}"
+            archived_documents_notice.value = f"{mode_text} • Showing {visible_count} of {total_count} matching {count_label}"
             return
-        documents_notice.value = f"{mode_text} • Showing {total_count} {count_label}"
+        archived_documents_notice.value = f"{mode_text} • Showing {total_count} {count_label}"
 
     def show_document_notice(message):
         page.snack_bar = ft.SnackBar(ft.Text(message), open=True)
@@ -3162,11 +3015,6 @@ def main(page: ft.Page, session=None):
         documents_details_dialog.open = False
         page.update()
 
-    def update_document_selection_button_state():
-        show_bulk_actions = len(selected_qr_document_ids) >= 2
-        if documents_toolbar_update is not None:
-            documents_toolbar_update(show_bulk_actions)
-
     def close_documents_delete_dialog():
         nonlocal pending_delete_document
         pending_delete_document = None
@@ -3179,7 +3027,6 @@ def main(page: ft.Page, session=None):
 
     def open_documents_bulk_archive_dialog():
         if not selected_qr_document_ids:
-            documents_archive_selected_button.disabled = True
             return
         count = len(selected_qr_document_ids)
         documents_bulk_archive_dialog.title = ft.Text("Archive Selected Documents?")
@@ -3191,33 +3038,22 @@ def main(page: ft.Page, session=None):
 
     def run_bulk_archive_selected_documents():
         close_documents_bulk_archive_dialog()
-        if not selected_qr_document_ids:
-            update_document_selection_button_state()
-            return
-        selected_ids = list(selected_qr_document_ids)
         failed = []
         archived_count = 0
-        try:
-            for doc_id in selected_ids:
-                try:
-                    response = requests.delete(f"{BACKEND_URL}/documents/{doc_id}", headers=get_admin_headers(), verify=False, timeout=10)
-                    if response.status_code != 200:
-                        raise Exception(response.text)
-                    archived_count += 1
-                except Exception as exc:
-                    failed.append((doc_id, str(exc)))
-            if failed:
-                selected_qr_document_ids.clear()
-                load_documents_table()
-                show_document_notice(f"Archive failed for {len(failed)} document(s): {failed[0][1]}")
-            else:
-                selected_qr_document_ids.clear()
-                load_documents_table()
-                show_document_notice(f"{archived_count} documents archived successfully.")
-            update_document_selection_button_state()
-            apply_document_search_to_current_view()
-        except Exception as exc:
-            show_document_notice(f"Bulk archive failed: {exc}")
+        for doc_id in list(selected_qr_document_ids):
+            try:
+                response = requests.delete(f"{BACKEND_URL}/documents/{doc_id}", headers=get_admin_headers(), verify=False, timeout=10)
+                if response.status_code != 200:
+                    raise Exception(response.text)
+                archived_count += 1
+            except Exception as exc:
+                failed.append((doc_id, str(exc)))
+        selected_qr_document_ids.clear()
+        load_documents_table()
+        if failed:
+            show_document_notice(f"Archived {archived_count}; {len(failed)} failed: {failed[0][1]}")
+        else:
+            show_document_notice(f"{archived_count} document(s) archived. They are in Archived Documents.")
 
     def confirm_delete_document(doc):
         nonlocal pending_delete_document
@@ -3233,7 +3069,6 @@ def main(page: ft.Page, session=None):
         close_documents_delete_dialog()
         if document:
             delete_document_record(document.get("id"))
-            render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Archived Documents"), 0))
 
     def close_archived_restore_dialog():
         nonlocal pending_restore_document
@@ -3333,28 +3168,17 @@ def main(page: ft.Page, session=None):
             show_document_notice(f"Permanent delete failed: {exc}")
 
     def download_selected_qr_labels():
-        selected_ids = sorted(str(doc_id) for doc_id in selected_qr_document_ids if doc_id is not None)
+        selected_ids = sorted(doc_id for doc_id in selected_qr_document_ids if doc_id is not None)
         if not selected_ids:
             show_document_notice("Select one or more documents to download QR labels.")
             return
         try:
-            response = requests.get(
-                f"{BACKEND_URL}/documents/qr/labels",
-                params={"ids": ",".join(selected_ids)},
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=30,
-                stream=True,
-            )
-            if response.status_code != 200:
-                raise Exception(response.text)
-            download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-            os.makedirs(download_dir, exist_ok=True)
-            file_path = os.path.join(download_dir, "qr_labels.pdf")
-            with open(file_path, "wb") as handle:
-                handle.write(response.content)
-            os.startfile(file_path)
-            show_document_notice(f"Downloaded QR labels for {len(selected_ids)} selected document(s).")
+            download_url = backend_api("POST", "/documents/qr/labels/download-token", json={"ids": selected_ids}).get("download_url")
+            if not download_url:
+                raise Exception("Download link was not returned")
+            page.launch_url(download_url)
+            close_qr_label_download_dialog()
+            show_document_notice(f"Downloading QR labels for {len(selected_ids)} document(s).")
         except Exception as exc:
             show_document_notice(f"QR label download failed: {exc}")
 
@@ -3914,40 +3738,6 @@ def main(page: ft.Page, session=None):
 
     # QR generation/print functionality removed from frontend.
 
-    def build_document_summary_cards():
-        total_documents = len(documents_data)
-        pending_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "pending")
-        completed_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() in {"approved", "completed"})
-        archived_count = sum(1 for doc in documents_data if (doc.get("status") or "").lower() == "archived")
-        summary_items = [
-            {"title": "Total Documents", "value": str(total_documents), "detail": "Tracked records", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},
-            {"title": "Pending", "value": str(pending_count), "detail": "Awaiting attention", "icon": ft.Icons.HOURGLASS_EMPTY_OUTLINED, "accent": ft.Colors.ORANGE_700},
-            {"title": "Completed", "value": str(completed_count), "detail": "Finalized items", "icon": ft.Icons.CHECK_CIRCLE_OUTLINED, "accent": ft.Colors.GREEN_700},
-            {"title": "Archived", "value": str(archived_count), "detail": "Stored for reference", "icon": ft.Icons.ARCHIVE_OUTLINED, "accent": ft.Colors.BLUE_GREY_700},
-        ]
-        cards = []
-        for item in summary_items:
-            cards.append(
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Row([ft.Icon(item["icon"], color=item["accent"], size=22), ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                            ft.Text(item["value"], size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                            ft.Text(item["detail"], size=12, color=ft.Colors.BLUE_GREY_600),
-                        ],
-                        spacing=6,
-                    ),
-                    padding=16,
-                    bgcolor=ft.Colors.WHITE,
-                    border_radius=18,
-                    width=190,
-                )
-            )
-        return cards
-
-    def get_visible_documents():
-        return documents_data
-
     def get_visible_archived_documents():
         return archived_documents_data
 
@@ -3988,6 +3778,9 @@ def main(page: ft.Page, session=None):
             "attachment_name": doc.get("attachment_name") or "-",
             "remarks": doc.get("remarks") or "",
             "attachments": doc.get("attachments") or [],
+            "document_number": doc.get("document_number"),
+            "series_year": doc.get("series_year"),
+            "current_office_id": doc.get("current_office_id"),
             "is_public": bool(doc.get("is_public", False)),
             "archived": bool(doc.get("archived", False)),
         }
@@ -3998,9 +3791,9 @@ def main(page: ft.Page, session=None):
             if response.status_code != 200:
                 raise Exception(response.text)
             load_documents_table()
-            show_document_notice("Document archived successfully.")
+            show_document_notice("Document archived. It is in Archived Documents.")
         except Exception as exc:
-            show_document_notice(f"Delete failed: {exc}")
+            show_document_notice(f"Archive failed: {exc}")
 
     def preview_document_pdf(doc):
         attachments = [item for item in doc.get("attachments", []) if isinstance(item, dict)]
@@ -4205,7 +3998,7 @@ def main(page: ft.Page, session=None):
                     detail = response.text
                 raise Exception(f"{response.status_code} {detail}")
             close_replace_attachment_dialog()
-            load_documents_table(documents_page)
+            load_documents_table()
             show_document_notice("Attachment replaced successfully.")
         except Exception as exc:
             show_document_notice(f"Attachment replacement failed: {exc}")
@@ -4229,235 +4022,10 @@ def main(page: ft.Page, session=None):
                 except Exception:
                     detail = response.text
                 raise Exception(f"{response.status_code} {detail}")
-            load_documents_table(documents_page)
+            load_documents_table()
             show_document_notice(f"Document is now {'public' if is_public else 'private'}.")
         except Exception as exc:
             show_document_notice(f"Visibility update failed: {exc}")
-
-    def apply_document_search_to_current_view():
-        visible_documents = get_visible_documents()
-        # The backend already filters, sorts, and paginates this page.
-        rendered_documents = visible_documents
-        sync_documents_header_checkbox_from_rows(visible_documents)
-        rows = []
-        for doc in rendered_documents:
-            status = doc.get("status", "Pending")
-            status_color, status_bg = get_document_status_style(status)
-            document_title = str(doc.get("title", "-") or "-")
-            doc_id = doc.get("id")
-            title_cell = ft.DataCell(
-                ft.Tooltip(
-                    message=document_title,
-                    content=ft.Container(
-                        content=ft.Text(
-                            document_title,
-                            size=13,
-                            max_lines=1,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                            no_wrap=True,
-                        ),
-                        width=260,
-                        padding=ft.Padding(left=4, top=0, right=4, bottom=0),
-                        alignment=ft.Alignment.CENTER_LEFT,
-                    ),
-                )
-            )
-            actions = []
-            if has_permission("view_document_details"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)))
-            if has_permission("download_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Preview PDF"), on_click=lambda _, d=doc: preview_document_pdf(d)))
-            if has_permission("print_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Print"), on_click=lambda _, d=doc: print_document_pdf(d)))
-            if has_permission("download_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Download"), on_click=lambda _, d=doc: download_document_attachment(d)))
-            if has_permission("edit_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Edit"), on_click=lambda _, d=doc: open_edit_document_dialog(d)))
-                if any(isinstance(item, dict) and item.get("id") for item in doc.get("attachments", [])):
-                    actions.append(ft.PopupMenuItem(content=ft.Text("Replace Attachment"), on_click=lambda _, d=doc: open_replace_attachment_dialog(d)))
-                actions.append(
-                    ft.PopupMenuItem(
-                        content=ft.Text("Remove Public Visibility" if doc.get("is_public") else "Mark Public"),
-                        on_click=lambda _, d=doc: set_document_visibility(d, not d.get("is_public", False)),
-                    )
-                )
-            if has_permission("archive_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)))
-            rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(
-                            ft.Checkbox(
-                                value=doc_id in selected_qr_document_ids,
-                                on_change=lambda e, doc_id_value=doc_id: (
-                                    selected_qr_document_ids.add(doc_id_value) if e.control.value else selected_qr_document_ids.discard(doc_id_value),
-                                    refresh_qr_selection_badge(),
-                                    update_document_selection_button_state(),
-                                    sync_documents_header_checkbox_from_rows(visible_documents),
-                                ),
-                            )
-                        ),
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
-                                width=90,
-                                alignment=ft.Alignment.CENTER,
-                            )
-                        ),
-                        ft.DataCell(ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13),
-                                    *(
-                                        [
-                                            ft.Text(
-                                                f"No. {doc.get('document_number')} / {doc.get('series_year')}",
-                                                size=10,
-                                                color=ft.Colors.BLUE_GREY_600,
-                                            )
-                                        ]
-                                        if doc.get("document_number") or doc.get("series_year")
-                                        else []
-                                    ),
-                                ],
-                                spacing=1,
-                                height=32,
-                                alignment=ft.MainAxisAlignment.START,
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                width=120,
-                            ),
-                            width=120,
-                            alignment=ft.Alignment.CENTER,
-                        )),
-                        title_cell,
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
-                            ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
-                            ft.DataCell(ft.Container(content=ft.Text(doc.get("current_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=140, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.Text(status, size=12, color=status_color),
-                                bgcolor=status_bg,
-                                padding=6,
-                                border_radius=12,
-                                alignment=ft.Alignment.CENTER,
-                                width=120,
-                            )
-                        ),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("priority", "-"), size=13), width=80, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("date_received", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("last_updated", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
-                    ],
-                )
-            )
-
-        documents_table.rows = rows
-        documents_empty_state.visible = len(rows) == 0
-        update_document_result_indicator(visible_documents, visible_count=len(rows), total_count=documents_total)
-        page.update()
-
-    def sync_documents_header_checkbox_from_rows(visible_docs):
-        visible_ids = {doc.get("id") for doc in visible_docs if doc.get("id") is not None}
-        documents_select_all_checkbox.value = bool(visible_ids) and visible_ids.issubset(selected_qr_document_ids)
-
-    def documents_select_all_toggle(checked):
-        visible_docs = get_visible_documents()
-        visible_ids = [doc.get("id") for doc in visible_docs if doc.get("id") is not None]
-        if checked:
-            selected_qr_document_ids.update(visible_ids)
-        else:
-            selected_qr_document_ids.difference_update(visible_ids)
-        refresh_qr_selection_badge()
-        update_document_selection_button_state()
-        apply_document_search_to_current_view()
-
-    def build_document_rows(documents, include_archive_action=True):
-        rows = []
-        for doc in documents:
-            status = doc.get("status", "Pending")
-            status_color, status_bg = get_document_status_style(status)
-            document_title = str(doc.get("title", "-") or "-")
-            title_cell = ft.DataCell(
-                ft.Tooltip(
-                    message=document_title,
-                    content=ft.Container(
-                        content=ft.Text(
-                            document_title,
-                            size=13,
-                            max_lines=1,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                            no_wrap=True,
-                        ),
-                        width=260,
-                        padding=ft.Padding(left=4, top=0, right=4, bottom=0),
-                        alignment=ft.Alignment.CENTER_LEFT,
-                    ),
-                )
-            )
-            actions = []
-            if has_permission("view_document_details"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d)))
-            if include_archive_action and has_permission("archive_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Archive Document"), on_click=lambda _, d=doc: confirm_delete_document(d)))
-            if not include_archive_action and has_permission("restore_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Restore Document"), on_click=lambda _, d=doc: confirm_restore_archived_document(d)))
-            if not include_archive_action and has_permission("delete_documents"):
-                actions.append(ft.PopupMenuItem(content=ft.Text("Delete Document"), on_click=lambda _, d=doc: confirm_permanent_delete_archived_document(d)))
-            rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="Document actions", items=actions),
-                                width=90,
-                                alignment=ft.Alignment.CENTER,
-                            )
-                        ),
-                        ft.DataCell(ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13),
-                                    *(
-                                        [
-                                            ft.Text(
-                                                f"No. {doc.get('document_number')} / {doc.get('series_year')}",
-                                                size=10,
-                                                color=ft.Colors.BLUE_GREY_600,
-                                            )
-                                        ]
-                                        if doc.get("document_number") or doc.get("series_year")
-                                        else []
-                                    ),
-                                ],
-                                spacing=1,
-                                height=32,
-                                alignment=ft.MainAxisAlignment.START,
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                width=120,
-                            ),
-                            width=120,
-                            alignment=ft.Alignment.CENTER,
-                        )),
-                        title_cell,
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("document_type", "-"), size=13), width=120, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("category", "-"), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("current_office", "-"), size=13, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=140, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.Text(status, size=12, color=status_color),
-                                bgcolor=status_bg,
-                                padding=6,
-                                border_radius=12,
-                                alignment=ft.Alignment.CENTER,
-                                width=120,
-                            )
-                        ),
-                        ft.DataCell(ft.Container(content=ft.Text(doc.get("priority", "-"), size=13), width=80, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("date_received", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(doc.get("last_updated", "-")), size=13), width=100, alignment=ft.Alignment.CENTER_LEFT)),
-                    ],
-                )
-            )
-        return rows
 
     def sync_archived_document_delete_selected_button_state():
         archived_documents_delete_selected_button.disabled = len(selected_archived_document_ids) == 0
@@ -4735,133 +4303,47 @@ def main(page: ft.Page, session=None):
             tight=True,
         )
 
-    def load_documents_table(requested_page=1):
-        nonlocal documents_page, documents_total, documents_total_pages
-        try:
-            # Check permissions locally before requesting documents to avoid backend permission errors.
-            if not has_permission("view_documents"):
-                documents_data[:] = []
-                documents_table.rows = []
-                documents_empty_state.visible = True
-                documents_notice.value = "Unable to load documents: Permission denied"
-                page.update()
-                return
-
-            documents_page = max(1, requested_page)
-            selected_qr_document_ids.clear()
-            update_document_selection_button_state()
-            params = {"page": documents_page, "page_size": 10}
-            if documents_search_field.value:
-                params["search"] = documents_search_field.value
-            if documents_status_filter.value and documents_status_filter.value != "All":
-                params["status"] = documents_status_filter.value
-            if documents_type_filter.value and documents_type_filter.value != "All":
-                params["document_type"] = documents_type_filter.value
-            if documents_category_filter.value and documents_category_filter.value != "All":
-                params["category"] = documents_category_filter.value
-            if documents_filter_priority.value and documents_filter_priority.value != "All":
-                params["priority"] = documents_filter_priority.value
-            start_year = int(documents_filter_start_date.value) if documents_filter_start_date.value else None
-            end_value = documents_filter_end_date.value
-            end_year = None if end_value in (None, "", "current_date") else int(end_value)
-            if start_year is not None and end_year is not None and start_year > end_year:
-                documents_notice.value = "Start year cannot be later than end year."
-                page.update()
-                return
-            if documents_filter_start_date.value:
-                params["start_date"] = documents_filter_start_date.value
-            if documents_filter_end_date.value:
-                params["end_date"] = documents_filter_end_date.value
-            sort_map = {"Sequence": ("tracking_number", "desc"), "Newest": ("created_at", "desc"), "Oldest": ("created_at", "asc"), "Title": ("title", "asc")}
-            params["sort_by"], params["sort_order"] = sort_map.get(documents_sort_filter.value, ("tracking_number", "desc"))
-            response = requests.get(f"{BACKEND_URL}/documents", params=params, headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.text)
-            payload = response.json() if response.content else {}
-            documents_total = payload.get("total", 0)
-            documents_total_pages = max(1, payload.get("total_pages", 1))
-            documents_page = min(documents_page, documents_total_pages)
-            set_document_year_options(payload.get("available_years") or [])
-            documents_data[:] = [normalize_document(doc) for doc in payload.get("items", [])]
-            update_pagination_bar(documents_pagination_bar, documents_page, documents_total_pages, load_documents_table)
-        except Exception as exc:
-            documents_data[:] = []
-            documents_table.rows = []
-            documents_empty_state.visible = True
-            documents_notice.value = f"Unable to load documents: {exc}"
-            page.update()
-            return
-
-        apply_document_search_to_current_view()
-
-    def reset_document_filters():
-        documents_search_field.value = ""
-        documents_status_filter.value = "All"
-        documents_type_filter.value = "All"
-        documents_category_filter.value = "All"
-        documents_filter_priority.value = "All"
-        documents_sort_filter.value = "Sequence"
-        documents_filter_start_date.value = None
-        documents_filter_end_date.value = None
-        load_documents_table(1)
-        page.update()
-
-    def open_pending_documents_view(_=None):
-        documents_search_field.value = ""
-        documents_status_filter.value = "Approved"
-        load_documents_table(1)
-        page.update()
-
-    def open_documents_view(_=None):
-        load_documents_table()
-        page.update()
+    def load_documents_table():
+        documents_refresh()
 
     def documents_view():
-        nonlocal documents_toolbar_update
-        try:
-            load_active_definition_options()
-            load_documents_table()
-            print("documents_view: building document controls")
-            documents_controls = {
-                "summary_cards": build_document_summary_cards(),
-                "search_field": documents_search_field if has_permission("search_documents") else None,
-                "status_filter": documents_status_filter if has_permission("filter_documents") else None,
-                "category_filter": documents_category_filter if has_permission("filter_documents") else None,
-                "type_filter": documents_type_filter if has_permission("filter_documents") else None,
-                "priority_filter": documents_filter_priority if has_permission("filter_documents") else None,
-                "register_button": ft.Button("Register Document", icon=ft.Icons.ADD, on_click=lambda _: open_register_document_dialog()) if has_permission("register_documents") else None,
-                "bulk_register_button": ft.Button("Multiple Registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register_document_dialog()) if has_permission("import_documents") else None,
-                "archive_selected_button": documents_archive_selected_button if has_permission("archive_documents") else None,
-                "bulk_actions_visible": len(selected_qr_document_ids) >= 2,
-                "refresh_button": ft.Button("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
-                "qr_labels_button": documents_qr_labels_button if has_permission("print_qr_codes") else None,
-                "export_button": None,
-                "print_button": None,
-                "import_button": None,
-                "filter_button": ft.OutlinedButton("Apply", icon=ft.Icons.FILTER_LIST, on_click=lambda _: load_documents_table()),
-                "reset_filter_button": ft.TextButton("Clear Filters", icon=ft.Icons.REFRESH, on_click=lambda _: reset_document_filters()),
-                "sort_filter": documents_sort_filter,
-                "start_date_filter": documents_filter_start_date,
-                "end_date_filter": documents_filter_end_date,
-                "empty_state_button": None,
-                "empty_state": documents_empty_state,
-                "pagination_bar": documents_pagination_bar,
-            }
-            view = build_documents_view(
-                documents_table,
-                documents_notice,
-                open_documents_view,
-                surface_card,
-                section_header,
-                documents_controls,
-            )
-            documents_toolbar_update = documents_controls.get("refresh_action_row")
-            return view
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            print("documents_view error:\n", tb)
-            return ft.Column([ft.Text("Error building Documents view"), ft.Text(str(e)), ft.Text(tb)])
+        nonlocal documents_refresh
+        if not has_permission("view_documents"):
+            return ft.Column([ft.Text("You do not have access to documents.")])
+        # The register, multiple registration and edit dialogs take their category and type options from here.
+        load_active_definition_options()
+        view, documents_refresh = build_documents_view(
+            page,
+            backend_api,
+            surface_card,
+            section_header,
+            normalize=normalize_document,
+            selection=selected_qr_document_ids,
+            loaded=documents_data,
+            can_search=has_permission("search_documents"),
+            can_filter=has_permission("filter_documents"),
+            can_register=has_permission("register_documents"),
+            can_import=has_permission("import_documents"),
+            can_archive=has_permission("archive_documents"),
+            can_print_qr=has_permission("print_qr_codes"),
+            can_view_details=has_permission("view_document_details"),
+            can_download=has_permission("download_documents"),
+            can_print=has_permission("print_documents"),
+            can_edit=has_permission("edit_documents"),
+            open_details=show_document_details,
+            open_register=open_register_document_dialog,
+            open_bulk_register=open_bulk_register_document_dialog,
+            open_edit=open_edit_document_dialog,
+            open_replace_attachment=open_replace_attachment_dialog,
+            preview=preview_document_pdf,
+            print_document=print_document_pdf,
+            download=download_document_attachment,
+            set_visibility=set_document_visibility,
+            archive=confirm_delete_document,
+            archive_selected=open_documents_bulk_archive_dialog,
+            qr_labels=open_qr_label_download_dialog,
+        )
+        return view
 
     def settings_view():
         is_dark = page.theme_mode == ft.ThemeMode.DARK
