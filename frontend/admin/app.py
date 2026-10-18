@@ -147,6 +147,7 @@ from frontend.admin.users_roles import (
     build_users_roles_view,
 )
 from frontend.admin.reference_data import build_reference_data_view
+from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import render_shell
 
 
@@ -3376,7 +3377,7 @@ def main(page: ft.Page, session=None):
         close_documents_delete_dialog()
         if document:
             delete_document_record(document.get("id"))
-            render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=1)
+            render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Archived Documents"), 0))
 
     def close_archived_restore_dialog():
         nonlocal pending_restore_document
@@ -5358,7 +5359,7 @@ def main(page: ft.Page, session=None):
                 ("Dashboard", ["view_dashboard", "view_analytics"]),
                 ("Documents", ["view_documents", "search_documents", "filter_documents", "view_document_details", "register_documents", "edit_documents", "archive_documents", "restore_documents", "download_documents", "print_documents"]),
                 ("QR Code", ["generate_qr_codes", "print_qr_codes", "view_qr_tracking"]),
-                ("Document Requests", ["view_document_requests", "approve_document_requests", "reject_document_requests", "fulfill_document_requests"]),
+                ("Today's Documents", ["set_documents_for_sb_members"]),
                 ("Audit Logs", ["view_audit_logs", "export_audit_logs"]),
                 ("Analytics", ["view_analytics", "export_analytics"]),
             ]
@@ -6436,7 +6437,7 @@ def main(page: ft.Page, session=None):
             "Dashboard": "Control access to dashboard information.",
             "Documents": "Control actions employees can perform on legislative documents.",
             "QR Code": "Control QR code generation, printing, and tracking access.",
-            "Document Requests": "Control access to document request processing.",
+            "Today's Documents": "Let this employee set the documents SB Members see for the day.",
             "Users & Roles": "Control employee access to user and role administration.",
             "Committees": "Control committee management permissions.",
             "Audit Logs": "Control access to system activity records.",
@@ -6939,6 +6940,19 @@ def main(page: ft.Page, session=None):
         dialog.open = False
         page.update()
 
+    def backend_api(method, path, **kwargs):
+        response = requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=15, **kwargs)
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail", response.text)
+            except Exception:
+                detail = response.text
+            raise Exception(detail)
+        return response.json() if response.content else {}
+
+    def todays_documents_page():
+        return build_todays_documents_view(page, backend_api, surface_card, section_header)
+
     def users_role_page():
         return users_roles_view()
 
@@ -6967,11 +6981,11 @@ def main(page: ft.Page, session=None):
         return build_archived_documents_view()
 
     def open_documents_module():
-        target_index = next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Documents"), 0)
+        target_index = next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Documents"), 0)
         render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=target_index)
 
     def open_archived_documents_module():
-        target_index = next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Archived Documents"), 1)
+        target_index = next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Archived Documents"), 0)
         render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=target_index)
 
     def dashboard_view():
@@ -7358,7 +7372,7 @@ def main(page: ft.Page, session=None):
             quick_action("Archived Documents", "View archived records", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_700, lambda _: open_archived_documents_module()),
         ]
         if "view_analytics" in {(p or "").strip().lower().replace(" ", "_") for p in (current_user_permissions or [])} or current_user_role == "Super Administrator":
-            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Analytics"), 0))))
+            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Analytics"), 0))))
 
         normalized_permissions = sorted({str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])})
         if current_user_role == "Super Administrator" and not normalized_permissions:
@@ -7713,7 +7727,7 @@ def main(page: ft.Page, session=None):
                 nav_items,
                 office_monitoring_view(office),
                 initial_selected_index=next(
-                    (idx for idx, (_, label, _) in enumerate(nav_items) if label == "Office Dashboard"),
+                    (idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Office Dashboard"),
                     0,
                 ),
             )
@@ -7818,7 +7832,7 @@ def main(page: ft.Page, session=None):
             nav_items,
             office_overview_view(),
             initial_selected_index=next(
-                (idx for idx, (_, label, _) in enumerate(nav_items) if label == "Office Dashboard"),
+                (idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Office Dashboard"),
                 0,
             ),
         )
@@ -8213,35 +8227,47 @@ def main(page: ft.Page, session=None):
         ], spacing=12)
 
     def build_nav_items():
+        # Each item is (icon, label, view, section). Items are kept in section
+        # order; the shell draws a header whenever the section changes and pins
+        # the "Account" section to the bottom of the sidebar.
         items = []
+        is_super_admin = current_user_role == "Super Administrator"
 
+        # Overview
         if is_employee() and has_permission("view_office_documents"):
-            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view()))
+            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view(), None))
         if has_permission("view_dashboard"):
-            items.append((ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view()))
-        if has_permission("view_analytics"):
-            items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view()))
-
+            items.append((ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view(), None))
         if has_permission("view_office_documents") and not is_employee():
-            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view()))
+            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view(), None))
+        if has_permission("view_analytics"):
+            items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view(), None))
 
+        # Documents
         if has_permission("view_documents"):
-            items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()))
-            items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()))
-        if not is_employee() or has_permission("view_documents"):
-            items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()))
+            items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view(), "Documents"))
+        if has_permission("set_documents_for_sb_members"):
+            items.append((ft.Icons.EVENT_NOTE_OUTLINED, "Documents for SB Members", todays_documents_page, "Documents"))
         if has_permission("view_qr_tracking"):
-            items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view))
-        if current_user_role == "Super Administrator":
-            items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view()))
-            items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view))
-            items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view()))
-            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
-        elif has_permission("view_audit_logs"):
-            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
+            items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view, "Documents"))
+        if has_permission("view_documents"):
+            items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view(), "Documents"))
 
-        items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view()))
-        items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
+        # Legislative
+        if not is_employee() or has_permission("view_documents"):
+            items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view(), "Legislative"))
+
+        # Administration
+        if is_super_admin:
+            items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view(), "Administration"))
+            items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view(), "Administration"))
+            items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view, "Administration"))
+        if is_super_admin or has_permission("view_audit_logs"):
+            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view(), "Administration"))
+
+        # Account (pinned to the bottom of the sidebar)
+        items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view(), "Account"))
+        items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view(), "Account"))
         return items
 
     nav_items = build_nav_items()

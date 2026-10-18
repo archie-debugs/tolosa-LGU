@@ -11,7 +11,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..auth_jwt import get_current_user
+from ..authentication import get_current_user
 from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, require_permission
 from ..database import get_db
 

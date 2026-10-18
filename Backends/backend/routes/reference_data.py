@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..auth_jwt import get_current_user
+from ..authentication import get_current_user
 from ..core import record_audit_log, require_permission
 from ..database import get_db
 

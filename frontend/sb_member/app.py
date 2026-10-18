@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -19,6 +21,8 @@ if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
     ft.Icons = ft.icons
 
 API_URL = os.getenv("SBMEM_BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
+# How often Today's Documents re-checks for documents employees set while it is open.
+TODAYS_DOCUMENTS_REFRESH_SECONDS = int(os.getenv("TODAYS_DOCUMENTS_REFRESH_SECONDS", "30"))
 MAIN_BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 
 
@@ -31,8 +35,10 @@ def main(page: ft.Page, session=None):
     user = None
     permissions = set()
     dark = False
-    current_page = "Dashboard"
+    current_page = "Today's Documents"
     content = ft.Container(expand=True)
+    # Bumped on every render, so a refresh loop stops once its view is no longer shown.
+    render_generation = 0
 
     def color(name, light, night):
         return night if dark else light
@@ -311,6 +317,78 @@ def main(page: ft.Page, session=None):
         load(update_page=False)
         return view
 
+    def todays_documents_view():
+        if not can("view_documents"):
+            return card(ft.Column([ft.Icon(ft.Icons.LOCK_OUTLINE, size=32, color="#64748b"), ft.Text("Documents are unavailable for this account.", size=14)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10))
+
+        heading = ft.Text("Today's Documents", size=25, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9"))
+        date_line = ft.Text(size=12, color="#64748b")
+        list_holder = ft.Column(spacing=10)
+        updated_line = ft.Text(size=11, color="#94a3b8")
+        last_ids = None
+
+        def document_row(index, document):
+            actions = [ft.OutlinedButton("Open", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=document: document_dialog(d))]
+            if can("download_documents") and document.get("attachments"):
+                actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color="#64748b", on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
+            details = [
+                ft.Text(document.get("title") or "Untitled", size=14, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9")),
+                ft.Text(f"{document.get('document_type') or 'Document'} · No. {document.get('document_number') or '-'} / {document.get('series_year') or '-'} · {document.get('tracking_number') or '-'}", size=11, color="#64748b"),
+            ]
+            if document.get("note"):
+                details.append(ft.Text(document["note"], size=12, italic=True, color="#1d4ed8"))
+            return card(ft.Row([
+                ft.Container(ft.Text(str(index), size=14, weight=ft.FontWeight.BOLD, color="#ffffff"), bgcolor="#2563eb", border_radius=16, width=32, height=32, alignment=ft.alignment.center),
+                ft.Column(details, spacing=3, expand=True),
+                ft.Row(actions, spacing=4, tight=True),
+            ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER), padding=14)
+
+        def load():
+            nonlocal last_ids
+            try:
+                payload = api("GET", "/todays-documents")
+            except Exception as exc:
+                list_holder.controls = [card(ft.Text(f"Unable to load today's documents: {exc}", size=12))]
+                return
+            items = payload.get("items", [])
+            date_line.value = format_date(payload.get("date"))
+            snapshot = [(item["id"], item.get("note")) for item in items]
+            if snapshot != last_ids:
+                last_ids = snapshot
+                if items:
+                    list_holder.controls = [document_row(index, item) for index, item in enumerate(items, start=1)]
+                else:
+                    list_holder.controls = [card(ft.Column([
+                        ft.Icon(ft.Icons.EVENT_AVAILABLE_OUTLINED, size=30, color="#94a3b8"),
+                        ft.Text("No documents have been set for today yet.", weight=ft.FontWeight.BOLD),
+                        ft.Text("They appear here as soon as they are set. You can still search all documents.", size=12, color="#64748b"),
+                        ft.TextButton("Search documents", icon=ft.Icons.SEARCH, on_click=lambda _: navigate("Documents")),
+                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6), padding=24)]
+            updated_line.value = f"Updated {datetime.now().strftime('%I:%M %p').lstrip('0')} · refreshes automatically"
+
+        def refresh_loop(generation):
+            while True:
+                time.sleep(TODAYS_DOCUMENTS_REFRESH_SECONDS)
+                if generation != render_generation or current_page != "Today's Documents" or token is None:
+                    return
+                load()
+                try:
+                    page.update()
+                except Exception:
+                    return
+
+        load()
+        threading.Thread(target=refresh_loop, args=(render_generation,), daemon=True).start()
+        return ft.Column([
+            ft.Row([
+                ft.Column([heading, date_line], spacing=3),
+                ft.IconButton(ft.Icons.REFRESH, tooltip="Refresh now", on_click=lambda _: (load(), page.update())),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Text("Documents set for you for today. Past documents remain searchable under Documents.", size=12, color="#64748b"),
+            list_holder,
+            updated_line,
+        ], spacing=10, tight=True)
+
     def dashboard_view():
         try:
             data = api("GET", "/dashboard")
@@ -385,10 +463,13 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def render():
+        nonlocal render_generation
+        render_generation += 1
         page.bgcolor = color("bg", "#f8fafc", "#0d171d")
         workspace_items = []
         if can("view_documents"):
             workspace_items = [
+                (ft.Icons.EVENT_NOTE_OUTLINED, "Today's Documents"),
                 (ft.Icons.DASHBOARD_OUTLINED, "Dashboard"),
                 (ft.Icons.FOLDER_OPEN_OUTLINED, "Documents"),
             ]
@@ -401,7 +482,8 @@ def main(page: ft.Page, session=None):
                 nav.append(ft.Container(content=ft.Row([ft.Icon(icon, size=18, color="#ffffff" if is_selected else "#93c5fd"), ft.Text(label, size=12, color="#ffffff" if is_selected else "#dbeafe")], spacing=12), bgcolor="#0754c7" if is_selected and not dark else ("#193d55" if is_selected else None), border_radius=7, padding=ft.padding.symmetric(horizontal=12, vertical=10), on_click=lambda _, item=label: navigate(item)))
         nav.append(ft.Container(expand=True))
         nav.append(ft.Container(content=ft.Row([ft.Icon(ft.Icons.LOGOUT, size=18, color="#dc2626"), ft.Text("Log Out", size=12, color="#dc2626")], spacing=12), padding=ft.padding.symmetric(horizontal=12, vertical=10), on_click=logout))
-        if current_page == "Dashboard": body = dashboard_view()
+        if current_page == "Today's Documents": body = todays_documents_view()
+        elif current_page == "Dashboard": body = dashboard_view()
         elif current_page == "Documents": body = documents_view()
         elif current_page == "My Account": body = account_view()
         else: body = settings_view()

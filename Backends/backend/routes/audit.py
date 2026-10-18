@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models
-from ..auth_jwt import get_current_user
+from ..authentication import get_current_user
 from ..core import require_permission
 
 router = APIRouter()

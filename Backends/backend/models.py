@@ -3,6 +3,7 @@ import secrets
 from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint, Index, func, text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
+from sqlalchemy import Date
 from .database import Base
 
 
@@ -264,6 +265,27 @@ class DocumentAction(Base):
     office = relationship("Office", foreign_keys=[office_id])
     employee = relationship("User", foreign_keys=[employee_id])
     handoff = relationship("DocumentHandoff", foreign_keys=[handoff_id])
+
+
+class TodaysDocument(Base):
+    """A document an employee has set for SB Members to have at hand on a given day."""
+
+    __tablename__ = "todays_documents"
+    __table_args__ = (
+        UniqueConstraint("scheduled_for", "document_id", name="uq_todays_documents_date_document"),
+        Index("ix_todays_documents_scheduled_for_position", "scheduled_for", "position"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    scheduled_for = Column(Date, nullable=False, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False, default=0)
+    note = Column(Text, nullable=True)
+    added_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    added_by = relationship("User", foreign_keys=[added_by_id])
 
 
 class DocumentHistory(Base):

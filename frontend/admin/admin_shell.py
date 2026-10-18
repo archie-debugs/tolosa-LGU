@@ -1,6 +1,9 @@
 import flet as ft
 import traceback
 
+# Nav items in this section are pinned to the bottom of the sidebar.
+FOOTER_SECTION = "Account"
+
 
 def render_shell(
     page,
@@ -88,15 +91,21 @@ def render_shell(
             ),
         )
 
-    if not any(label == "Settings" for _, label, _ in shell_nav_items):
-        shell_nav_items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", shared_settings_view))
+    # Nav items are (icon, label, view) or (icon, label, view, section).
+    shell_nav_items = [item if len(item) == 4 else (*item, None) for item in shell_nav_items]
+    if not any(label == "Settings" for _, label, *_ in shell_nav_items):
+        shell_nav_items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", shared_settings_view, FOOTER_SECTION))
 
     # =========================================================
     # SIDEBAR
     # =========================================================
 
     nav_container = ft.Column(
-        spacing=12,
+        spacing=2,
+        expand=False,
+    )
+    footer_container = ft.Column(
+        spacing=2,
         expand=False,
     )
 
@@ -253,8 +262,38 @@ def render_shell(
     # BUILD NAVIGATION
     # =========================================================
 
+    def nav_tile(icon, label, color, on_click, bgcolor=None):
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(icon, color=color, size=20),
+                    ft.Container(width=8),
+                    ft.Text(label, size=12, color=color),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(left=12, top=8, right=12, bottom=8),
+            width=200,
+            bgcolor=bgcolor,
+            border_radius=10,
+            on_click=on_click,
+        )
+
+    def section_header(title):
+        return ft.Container(
+            content=ft.Text(
+                title.upper(),
+                size=10,
+                weight=ft.FontWeight.BOLD,
+                color=(ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_400),
+            ),
+            padding=ft.Padding(left=12, top=14, right=12, bottom=4),
+            width=200,
+        )
+
     def build_nav():
         nav_container.controls.clear()
+        footer_container.controls.clear()
 
         # -----------------------------------------------------
         # SIDEBAR HEADER
@@ -301,69 +340,41 @@ def render_shell(
         # -----------------------------------------------------
         # NAVIGATION ITEMS
 
-        for idx, (icon, label, _) in enumerate(shell_nav_items):
+        # A header is drawn whenever the section changes, so empty sections
+        # never show one. Footer-section items go to the pinned footer.
+
+        current_section = None
+
+        for idx, (icon, label, _, section) in enumerate(shell_nav_items):
 
             is_selected = idx == selected_index
-
-            nav_container.controls.append(
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(
-                                icon,
-                                color=(
-                                    ft.Colors.BLUE_800
-                                    if is_selected
-                                    else text_color
-                                ),
-                            ),
-                            ft.Container(width=8),
-                            ft.Text(
-                                label,
-                                size=12,
-                                color=(
-                                    ft.Colors.BLUE_800
-                                    if is_selected
-                                    else text_color
-                                ),
-                            ),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=ft.Padding(left=12, top=10, right=12, bottom=10),
-                    width=200,
-                    bgcolor=(selected_color if is_selected else None),
-                    border_radius=10,
-                    on_click=lambda e, i=idx: switch_view(i),
-                )
+            tile = nav_tile(
+                icon,
+                label,
+                ft.Colors.BLUE_800 if is_selected else text_color,
+                lambda e, i=idx: switch_view(i),
+                bgcolor=(selected_color if is_selected else None),
             )
+
+            if section == FOOTER_SECTION:
+                footer_container.controls.append(tile)
+                continue
+
+            if section and section != current_section:
+                nav_container.controls.append(section_header(section))
+            current_section = section
+            nav_container.controls.append(tile)
 
         # -----------------------------------------------------
         # LOGOUT
         # -----------------------------------------------------
 
-        nav_container.controls.append(
-
-            ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(
-                            ft.Icons.LOGOUT,
-                            color=ft.Colors.RED_700,
-                        ),
-                        ft.Container(width=8),
-                        ft.Text(
-                            "Log out",
-                            size=12,
-                            color=ft.Colors.RED_700,
-                        ),
-                    ],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=ft.Padding(left=12, top=10, right=12, bottom=10),
-                width=200,
-                border_radius=10,
-                on_click=lambda e: logout_user(),
+        footer_container.controls.append(
+            nav_tile(
+                ft.Icons.LOGOUT,
+                "Log out",
+                ft.Colors.RED_700,
+                lambda e: logout_user(),
             )
         )
 
@@ -404,9 +415,20 @@ def render_shell(
                         bottom=0,
                     ),
                     content=ft.Column(
-                        controls=[nav_container],
+                        controls=[
+                            ft.Column(
+                                controls=[nav_container],
+                                expand=True,
+                                scroll=ft.ScrollMode.AUTO,
+                            ),
+                            ft.Divider(height=1, color=(ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_GREY_100)),
+                            ft.Container(
+                                content=footer_container,
+                                padding=ft.Padding(left=0, top=4, right=0, bottom=8),
+                            ),
+                        ],
                         expand=True,
-                        scroll=ft.ScrollMode.AUTO,
+                        spacing=0,
                     ),
                     bgcolor=sidebar_color,
                     border=None,

@@ -26,11 +26,8 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "Print QR Codes",
         "View QR Tracking",
     ],
-    "Document Requests": [
-        "View Document Requests",
-        "Approve Document Requests",
-        "Reject Document Requests",
-        "Fulfill Document Requests",
+    "Today's Documents": [
+        "Set Documents For SB Members",
     ],
     "Users & Roles": [
         "Create Users",

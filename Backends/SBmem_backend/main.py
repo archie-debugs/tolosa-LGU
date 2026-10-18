@@ -4,19 +4,17 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-import jwt
-from jwt import InvalidTokenError
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
 load_dotenv()
 
 from Backends.backend import models
-from Backends.backend.auth_jwt import ALGORITHM, SECRET_KEY
-from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, normalize_permissions, normalize_user_role, validate_registered_session
+from Backends.backend.authentication import get_current_user
+from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, lgu_today, normalize_permissions, normalize_user_role
 from Backends.backend.database import get_db
 
 
@@ -40,31 +38,9 @@ app.add_middleware(
 )
 
 
-def _active_sb_member(db: Session, username: str | None) -> models.User:
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if (
-        not user
-        or normalize_user_role(getattr(user, "role", None)) != SB_ROLE
-        or not getattr(user, "is_active", False)
-        or getattr(user, "status", "Active") != "Active"
-    ):
+def get_current_sb_member(user: models.User = Depends(get_current_user)) -> models.User:
+    if normalize_user_role(getattr(user, "role", None)) != SB_ROLE:
         raise HTTPException(status_code=403, detail="An active SB Member account is required")
-    return user
-
-
-def get_current_sb_member(request: Request, db: Session = Depends(get_db)) -> models.User:
-    header = request.headers.get("Authorization", "")
-    if not header.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    token = header.split(" ", 1)[1].strip()
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except InvalidTokenError as exc:
-        raise HTTPException(status_code=401, detail="Invalid or expired access token") from exc
-    if payload.get("type") != "access":
-        raise HTTPException(status_code=401, detail="Invalid access token")
-    user = _active_sb_member(db, payload.get("sub"))
-    validate_registered_session(db, payload, user)
     return user
 
 
@@ -157,6 +133,24 @@ def me(current_user: models.User = Depends(get_current_sb_member)):
         "status": current_user.status,
         "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
         "permissions": sorted(normalize_permissions(getattr(current_user, "permissions", None)) & SB_PERMISSIONS),
+    }
+
+
+@app.get("/todays-documents")
+def todays_documents(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    """The documents employees set for today, in their order, so members need not search."""
+    require_sb_permission(current_user, "view_documents")
+    today = lgu_today()
+    entries = (
+        db.query(models.TodaysDocument)
+        .join(models.Document, models.Document.id == models.TodaysDocument.document_id)
+        .filter(models.TodaysDocument.scheduled_for == today, models.Document.archived.is_(False))
+        .order_by(models.TodaysDocument.position.asc(), models.TodaysDocument.id.asc())
+        .all()
+    )
+    return {
+        "date": today.isoformat(),
+        "items": [{**_safe_document(entry.document, db), "note": entry.note} for entry in entries],
     }
 
 
