@@ -1,4 +1,4 @@
-"""Documents screen: find any active document, see where it is, and act on it."""
+"""Documents and Archived Documents screens: find a document, see where it is, and act on it."""
 
 import inspect
 
@@ -11,6 +11,12 @@ SORTS = {
     "Newest number": ("tracking_number", "desc"),
     "Oldest number": ("tracking_number", "asc"),
     "Recently updated": ("updated_at", "desc"),
+    "Title A–Z": ("title", "asc"),
+}
+ARCHIVED_SORTS = {
+    "Recently archived": ("archived_at", "desc"),
+    "Oldest archived": ("archived_at", "asc"),
+    "Newest number": ("tracking_number", "desc"),
     "Title A–Z": ("title", "asc"),
 }
 PRIORITY_COLORS = {"High": ft.Colors.RED_700, "Low": ft.Colors.BLUE_GREY_600}
@@ -55,8 +61,15 @@ def build_documents_view(
     archive=None,
     archive_selected=None,
     qr_labels=None,
+    archived=False,
+    can_restore=False,
+    can_delete=False,
+    restore=None,
+    restore_selected=None,
+    delete_permanently=None,
+    delete_selected=None,
 ):
-    """The active document list.
+    """The active document list, or with `archived=True` the archived one.
 
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     `normalize(item)` turns a list item into the document shape the app's dialogs expect.
@@ -66,6 +79,8 @@ def build_documents_view(
     Returns `(view, refresh)`; `refresh()` reloads the current page.
     """
     widgets = TrackingWidgets(page)
+    sorts = ARCHIVED_SORTS if archived else SORTS
+    default_sort = next(iter(sorts))
     state = {"page": 1, "page_size": PAGE_SIZES[0], "total": 0, "total_pages": 1, "quick": None, "summary": {}}
 
     def dropdown(label, options, value=ALL, width=150):
@@ -95,8 +110,12 @@ def build_documents_view(
     status_filter = dropdown("Status", [(ALL, ALL)], width=140)
     from_year = dropdown("From year", [(ALL, "Any")], width=120)
     to_year = dropdown("To year", [(ALL, "Any")], width=120)
-    sort_filter = dropdown("Sort", [(name, name) for name in SORTS], value="Newest number", width=170)
-    filters = [type_filter, category_filter, priority_filter, status_filter, from_year, to_year]
+    archived_by_filter = dropdown("Archived by", [(ALL, "Anyone")], width=150)
+    sort_filter = dropdown("Sort", [(name, name) for name in sorts], value=default_sort, width=170)
+    if archived:
+        filters = [type_filter, category_filter, archived_by_filter, status_filter, from_year, to_year]
+    else:
+        filters = [type_filter, category_filter, priority_filter, status_filter, from_year, to_year]
 
     kpi_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
     notice_text = ft.Text("", size=12, visible=False)
@@ -128,11 +147,13 @@ def build_documents_view(
 
     def params():
         result = {"page": state["page"], "page_size": state["page_size"]}
-        result["sort_by"], result["sort_order"] = SORTS.get(sort_filter.value, SORTS["Newest number"])
+        result["sort_by"], result["sort_order"] = sorts.get(sort_filter.value, sorts[default_sort])
+        if archived:
+            result["archived"] = "true"
         if can_search and (search_field.value or "").strip():
             result["search"] = search_field.value.strip()
         if can_filter:
-            for key, control in (("document_type", type_filter), ("category", category_filter), ("priority", priority_filter), ("status", status_filter), ("start_date", from_year), ("end_date", to_year)):
+            for key, control in (("document_type", type_filter), ("category", category_filter), ("priority", priority_filter), ("status", status_filter), ("start_date", from_year), ("end_date", to_year), ("archived_by", archived_by_filter)):
                 if control.value and control.value != ALL:
                     result[key] = control.value
         quick = state["quick"]
@@ -142,6 +163,8 @@ def build_documents_view(
             result["visibility"] = "public"
         elif quick == "without_attachment":
             result["has_attachment"] = "false"
+        elif quick == "archived_last_30_days":
+            result["archived_within_days"] = 30
         return result
 
     def load(page_number=None, keep_notice=False):
@@ -171,6 +194,7 @@ def build_documents_view(
         statuses = payload.get("available_statuses") or []
         set_options(status_filter, statuses, ALL)
         status_filter.visible = len(statuses) > 1 or status_filter.value != ALL
+        set_options(archived_by_filter, payload.get("available_archivers") or [], "Anyone")
         items = payload.get("items") or []
         loaded[:] = [{**normalize(item), "in_transit_to": item.get("in_transit_to"), "in_transit_since": item.get("in_transit_since")} for item in items]
         selection.intersection_update(doc.get("id") for doc in loaded)
@@ -188,13 +212,17 @@ def build_documents_view(
         search_field.value = ""
         for control in filters:
             control.value = ALL
-        sort_filter.value = "Newest number"
+        sort_filter.value = default_sort
         state["quick"] = None
         load(page_number=1)
 
     def render_kpis():
         summary = state["summary"]
         cards = [
+            ("total", "Archived documents", summary.get("total", 0), "Out of circulation", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_GREY_600),
+            ("archived_last_30_days", "Archived in 30 days", summary.get("archived_last_30_days", 0), "Recently archived", ft.Icons.HISTORY, ft.Colors.BLUE_700),
+            ("without_attachment", "No file attached", summary.get("without_attachment", 0), "Missing the scanned copy", ft.Icons.FILE_PRESENT_OUTLINED, ft.Colors.RED_700),
+        ] if archived else [
             ("total", "Active documents", summary.get("total", 0), "Registered and not archived", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700),
             ("in_transit", "In transit", summary.get("in_transit", 0), "Sent, not yet received", ft.Icons.LOCAL_SHIPPING_OUTLINED, ft.Colors.AMBER_800),
             ("public", "Public", summary.get("public", 0), "Visible to SB Members", ft.Icons.PUBLIC, ft.Colors.GREEN_700),
@@ -203,16 +231,27 @@ def build_documents_view(
         controls = []
         for key, title, value, detail, icon, accent in cards:
             active = state["quick"] == key or (key == "total" and state["quick"] is None)
-            card = widgets.kpi(title, value, "Showing these" if active and key != "total" else detail, icon, accent, col={"xs": 6, "md": 3})
+            card = widgets.kpi(title, value, "Showing these" if active and key != "total" else detail, icon, accent, col={"xs": 6, "md": 12 // len(cards)})
             card.on_click = lambda _, k=key: set_quick(k)
             card.ink = True
-            card.tooltip = "Show all documents" if key == "total" else f"Show only: {title.lower()}"
+            card.tooltip = "Show all" if key == "total" else f"Show only: {title.lower()}"
             if active and key != "total":
                 card.bgcolor = ft.Colors.with_opacity(0.10, accent)
             controls.append(card)
         kpi_row.controls = controls
 
     def location_cell(doc):
+        if archived:
+            archived_at = doc.get("date_archived") if doc.get("date_archived") not in (None, "-") else doc.get("archived_at")
+            by = doc.get("archived_by")
+            return ft.Column(
+                [
+                    ft.Text(format_date(archived_at), size=12, color=widgets.body_color()),
+                    widgets.hint(f"by {by}" if by and by != "-" else "Archiver not recorded"),
+                ],
+                spacing=3,
+                width=190,
+            )
         if doc.get("in_transit_to"):
             return ft.Column(
                 [
@@ -234,7 +273,7 @@ def build_documents_view(
 
     def badges(doc):
         chips = []
-        if doc.get("is_public"):
+        if doc.get("is_public") and not archived:
             chips.append(widgets.chip("Public", ft.Colors.GREEN_700))
         priority = doc.get("priority")
         if priority in PRIORITY_COLORS and priority != "Low":
@@ -261,6 +300,15 @@ def build_documents_view(
         def add(text, icon, handler):
             if handler:
                 items.append(ft.PopupMenuItem(content=ft.Row([ft.Icon(icon, size=18), ft.Text(text)], spacing=10), on_click=lambda _, d=doc: handler(d)))
+
+        if archived:
+            if can_restore:
+                add("Restore to Documents", ft.Icons.UNARCHIVE_OUTLINED, restore)
+            if can_delete and delete_permanently:
+                if items:
+                    items.append(ft.PopupMenuItem())
+                add("Delete permanently", ft.Icons.DELETE_FOREVER_OUTLINED, delete_permanently)
+            return items
 
         if can_download and has_pdf(doc):
             add("Preview PDF", ft.Icons.PICTURE_AS_PDF_OUTLINED, preview)
@@ -306,7 +354,7 @@ def build_documents_view(
         render()
         page.update()
 
-    selectable = can_archive or can_print_qr
+    selectable = (can_restore or can_delete) if archived else (can_archive or can_print_qr)
 
     def render_selection_bar():
         count = len(selection)
@@ -314,9 +362,14 @@ def build_documents_view(
         if not selection_bar.visible:
             return
         actions = [ft.Text(f"{count} selected", size=13, weight=ft.FontWeight.W_600, color=widgets.heading_color())]
-        if can_print_qr and qr_labels:
+        if archived:
+            if can_restore and restore_selected:
+                actions.append(ft.OutlinedButton("Restore selected", icon=ft.Icons.UNARCHIVE_OUTLINED, on_click=lambda _: restore_selected()))
+            if can_delete and delete_selected:
+                actions.append(ft.OutlinedButton("Delete permanently", icon=ft.Icons.DELETE_FOREVER_OUTLINED, style=ft.ButtonStyle(color=ft.Colors.RED_700), on_click=lambda _: delete_selected()))
+        elif can_print_qr and qr_labels:
             actions.append(ft.OutlinedButton("Download QR labels", icon=ft.Icons.QR_CODE_2, on_click=lambda _: qr_labels()))
-        if can_archive and archive_selected:
+        if can_archive and archive_selected and not archived:
             actions.append(ft.OutlinedButton("Archive selected", icon=ft.Icons.ARCHIVE_OUTLINED, on_click=lambda _: archive_selected()))
         actions.append(ft.TextButton("Clear selection", on_click=clear_selection))
         selection_bar.content = ft.Row(actions, spacing=10, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -329,7 +382,7 @@ def build_documents_view(
         cells = []
         if selectable:
             cells.append(ft.Checkbox(value=bool(ids) and ids.issubset(selection), tooltip="Select this page", on_change=lambda e: toggle_page(e.control.value)))
-        for text, width in (("Document", None), ("Where it is", 190), ("Registered", 110), ("", 96)):
+        for text, width in (("Document", None), ("Archived" if archived else "Where it is", 190), ("Registered", 110), ("", 96)):
             label = widgets.hint(text.upper())
             cells.append(ft.Container(label, expand=True) if width is None else ft.Container(label, width=width))
         return ft.Container(ft.Row(cells, spacing=12), padding=ft.Padding(4, 4, 4, 6), border=ft.Border(bottom=ft.BorderSide(1, widgets.line_color())))
@@ -405,14 +458,17 @@ def build_documents_view(
             rows_column.controls = [header_row()] + [document_row(doc) for doc in loaded]
         else:
             result_text.value = ""
-            message = "No documents match your search or filters." if filtering() else "No documents yet. Registered documents appear here."
+            if filtering():
+                message = "No documents match your search or filters."
+            else:
+                message = "Nothing is archived. Documents you archive appear here and can be restored." if archived else "No documents yet. Registered documents appear here."
             rows_column.controls = [widgets.empty(message)]
         render_pagination()
 
     header_actions = []
-    if can_register and open_register:
+    if can_register and open_register and not archived:
         header_actions.append(ft.FilledButton("Register document", icon=ft.Icons.ADD, on_click=lambda _: open_register()))
-    if can_import and open_bulk_register:
+    if can_import and open_bulk_register and not archived:
         header_actions.append(ft.OutlinedButton("Multiple registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register()))
 
     filter_controls = [*filters, sort_filter] if can_filter else [sort_filter]
@@ -422,7 +478,12 @@ def build_documents_view(
                 # A wrapping Row cannot hold an expanding child (Flutter renders a gray box), so split by width instead.
                 ft.ResponsiveRow(
                     [
-                        ft.Container(section_header("Documents", "Every active legislative document, where it is, and what you can do with it.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700), col={"xs": 12, "lg": 7}),
+                        ft.Container(
+                            section_header("Archived Documents", "Documents taken out of circulation. Restore one to put it back on Documents.", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_GREY_700)
+                            if archived else
+                            section_header("Documents", "Every active legislative document, where it is, and what you can do with it.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700),
+                            col={"xs": 12, "lg": 7},
+                        ),
                         ft.Container(ft.Row(header_actions, spacing=8, wrap=True, alignment=ft.MainAxisAlignment.END), col={"xs": 12, "lg": 5}),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
