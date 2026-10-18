@@ -3377,7 +3377,7 @@ def main(page: ft.Page, session=None):
         close_documents_delete_dialog()
         if document:
             delete_document_record(document.get("id"))
-            render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=1)
+            render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Archived Documents"), 0))
 
     def close_archived_restore_dialog():
         nonlocal pending_restore_document
@@ -6981,11 +6981,11 @@ def main(page: ft.Page, session=None):
         return build_archived_documents_view()
 
     def open_documents_module():
-        target_index = next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Documents"), 0)
+        target_index = next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Documents"), 0)
         render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=target_index)
 
     def open_archived_documents_module():
-        target_index = next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Archived Documents"), 1)
+        target_index = next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Archived Documents"), 0)
         render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=target_index)
 
     def dashboard_view():
@@ -7372,7 +7372,7 @@ def main(page: ft.Page, session=None):
             quick_action("Archived Documents", "View archived records", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_700, lambda _: open_archived_documents_module()),
         ]
         if "view_analytics" in {(p or "").strip().lower().replace(" ", "_") for p in (current_user_permissions or [])} or current_user_role == "Super Administrator":
-            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, _) in enumerate(nav_items) if label == "Analytics"), 0))))
+            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Analytics"), 0))))
 
         normalized_permissions = sorted({str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])})
         if current_user_role == "Super Administrator" and not normalized_permissions:
@@ -7727,7 +7727,7 @@ def main(page: ft.Page, session=None):
                 nav_items,
                 office_monitoring_view(office),
                 initial_selected_index=next(
-                    (idx for idx, (_, label, _) in enumerate(nav_items) if label == "Office Dashboard"),
+                    (idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Office Dashboard"),
                     0,
                 ),
             )
@@ -7832,7 +7832,7 @@ def main(page: ft.Page, session=None):
             nav_items,
             office_overview_view(),
             initial_selected_index=next(
-                (idx for idx, (_, label, _) in enumerate(nav_items) if label == "Office Dashboard"),
+                (idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Office Dashboard"),
                 0,
             ),
         )
@@ -8227,37 +8227,47 @@ def main(page: ft.Page, session=None):
         ], spacing=12)
 
     def build_nav_items():
+        # Each item is (icon, label, view, section). Items are kept in section
+        # order; the shell draws a header whenever the section changes and pins
+        # the "Account" section to the bottom of the sidebar.
         items = []
+        is_super_admin = current_user_role == "Super Administrator"
 
+        # Overview
         if is_employee() and has_permission("view_office_documents"):
-            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view()))
+            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view(), None))
         if has_permission("view_dashboard"):
-            items.append((ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view()))
-        if has_permission("view_analytics"):
-            items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view()))
-
+            items.append((ft.Icons.DASHBOARD_OUTLINED, "Dashboard", lambda: dashboard_view(), None))
         if has_permission("view_office_documents") and not is_employee():
-            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view()))
+            items.append((ft.Icons.LOCATION_CITY_OUTLINED, "Office Dashboard", lambda: office_dashboard_view(), None))
+        if has_permission("view_analytics"):
+            items.append((ft.Icons.ANALYTICS_OUTLINED, "Analytics", lambda: analytics_view(), None))
 
+        # Documents
         if has_permission("view_documents"):
-            items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view()))
-            items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view()))
+            items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view(), "Documents"))
         if has_permission("set_documents_for_sb_members"):
-            items.append((ft.Icons.EVENT_NOTE_OUTLINED, "Documents for SB Members", todays_documents_page))
-        if not is_employee() or has_permission("view_documents"):
-            items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view()))
+            items.append((ft.Icons.EVENT_NOTE_OUTLINED, "Documents for SB Members", todays_documents_page, "Documents"))
         if has_permission("view_qr_tracking"):
-            items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view))
-        if current_user_role == "Super Administrator":
-            items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view()))
-            items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view))
-            items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view()))
-            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
-        elif has_permission("view_audit_logs"):
-            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view()))
+            items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view, "Documents"))
+        if has_permission("view_documents"):
+            items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view(), "Documents"))
 
-        items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view()))
-        items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view()))
+        # Legislative
+        if not is_employee() or has_permission("view_documents"):
+            items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view(), "Legislative"))
+
+        # Administration
+        if is_super_admin:
+            items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view(), "Administration"))
+            items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view(), "Administration"))
+            items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view, "Administration"))
+        if is_super_admin or has_permission("view_audit_logs"):
+            items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view(), "Administration"))
+
+        # Account (pinned to the bottom of the sidebar)
+        items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view(), "Account"))
+        items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view(), "Account"))
         return items
 
     nav_items = build_nav_items()
