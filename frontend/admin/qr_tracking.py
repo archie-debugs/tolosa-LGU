@@ -1,19 +1,10 @@
 """QR Tracking screen: scan a document to see where it is, and watch documents move between offices."""
 
-from datetime import datetime, timezone
 from urllib.parse import quote
 
 import flet as ft
 
-# How each kind of tracking event is shown: (label, icon, colour).
-EVENT_STYLES = {
-    "sent": ("Sent", ft.Icons.SEND_OUTLINED, ft.Colors.BLUE_700),
-    "received": ("Received", ft.Icons.MOVE_TO_INBOX_OUTLINED, ft.Colors.GREEN_700),
-    "action": ("Action", ft.Icons.TASK_ALT, ft.Colors.INDIGO_600),
-    "scan": ("Scanned", ft.Icons.QR_CODE_SCANNER, ft.Colors.TEAL_700),
-    "unrecognized": ("Unrecognized scan", ft.Icons.ERROR_OUTLINE, ft.Colors.RED_700),
-    "registered": ("Registered", ft.Icons.NOTE_ADD_OUTLINED, ft.Colors.BLUE_GREY_600),
-}
+from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time
 
 # Where a scanned document is now: (headline, icon, colour).
 LOCATION_STYLES = {
@@ -24,70 +15,12 @@ LOCATION_STYLES = {
 }
 
 
-def parse_time(value):
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def format_time(value):
-    parsed = parse_time(value)
-    return parsed.astimezone().strftime("%b %d, %I:%M %p") if parsed else "-"
-
-
-def format_elapsed(value, now=None):
-    """'2d 3h', '5h 12m' or '8m' since `value`."""
-    parsed = parse_time(value)
-    if not parsed:
-        return "-"
-    minutes = max(0, int(((now or datetime.now(timezone.utc)) - parsed).total_seconds() // 60))
-    days, minutes = divmod(minutes, 24 * 60)
-    hours, minutes = divmod(minutes, 60)
-    if days:
-        return f"{days}d {hours}h"
-    if hours:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
-
-
-def event_summary(event):
-    """One line describing a tracking event, e.g. 'Office A → Office B'."""
-    office = event.get("office") or "-"
-    kind = event.get("type")
-    if kind == "sent":
-        return f"{office} → {event.get('to_office') or '-'}"
-    if kind in ("received", "registered"):
-        return office
-    if kind == "action":
-        return f"{event.get('detail') or 'Action'} · {office}"
-    return event.get("detail") or ""
-
-
 def build_qr_tracking_view(page, api, surface_card, section_header):
     """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises."""
 
-    # The shell themes a view once when it opens; rows rendered later pick night-mode colours here.
-    def tone(light, dark):
-        return dark if page.theme_mode == ft.ThemeMode.DARK else light
-
-    def heading_color():
-        return tone(ft.Colors.BLUE_GREY_900, ft.Colors.BLUE_GREY_50)
-
-    def body_color():
-        return tone(ft.Colors.BLUE_GREY_800, ft.Colors.BLUE_GREY_200)
-
-    def muted_color():
-        return tone(ft.Colors.BLUE_GREY_500, ft.Colors.BLUE_GREY_400)
-
-    def link_color():
-        return tone(ft.Colors.BLUE_900, ft.Colors.BLUE_200)
-
-    def line_color():
-        return tone(ft.Colors.BLUE_GREY_100, ft.Colors.BLUE_GREY_700)
+    widgets = TrackingWidgets(page)
+    heading_color, body_color, muted_color, link_color = widgets.heading_color, widgets.body_color, widgets.muted_color, widgets.link_color
+    kpi, list_row, empty = widgets.kpi, widgets.list_row, widgets.empty
 
     updated_text = ft.Text("", size=11, color=muted_color())
     error_text = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
@@ -106,78 +39,8 @@ def build_qr_tracking_view(page, api, surface_card, section_header):
     )
     trail_panel = ft.Column(spacing=10, visible=False)
 
-    def chip(text, color):
-        return ft.Container(
-            content=ft.Text(text, size=11, weight=ft.FontWeight.W_600, color=color),
-            padding=ft.Padding(8, 3, 8, 3),
-            bgcolor=ft.Colors.with_opacity(0.12, color),
-            border_radius=10,
-        )
-
-    def kpi(title, value, detail, icon, accent):
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(icon, color=accent, size=18),
-                            ft.Text(title, size=12, weight=ft.FontWeight.W_600, color=body_color()),
-                        ],
-                        spacing=6,
-                    ),
-                    ft.Text(str(value), size=26, weight=ft.FontWeight.BOLD, color=heading_color()),
-                    ft.Text(detail, size=11, color=muted_color()),
-                ],
-                spacing=4,
-            ),
-            padding=14,
-            bgcolor=tone(ft.Colors.WHITE, ft.Colors.GREY_900),
-            border=ft.Border(
-                left=ft.BorderSide(4, accent),
-                top=ft.BorderSide(1, line_color()),
-                right=ft.BorderSide(1, line_color()),
-                bottom=ft.BorderSide(1, line_color()),
-            ),
-            border_radius=10,
-            col={"xs": 6, "md": 4, "xl": 2},
-        )
-
-    def list_row(controls, on_click=None):
-        return ft.Container(
-            content=ft.Row(controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            padding=ft.Padding(4, 10, 4, 10),
-            border=ft.Border(bottom=ft.BorderSide(1, line_color())),
-            on_click=on_click,
-            ink=on_click is not None,
-        )
-
-    def empty(message):
-        return ft.Container(ft.Text(message, size=12, color=muted_color()), padding=ft.Padding(4, 12, 4, 12))
-
-    def document_cell(item, expand=True):
-        return ft.Column(
-            [
-                ft.Text(item.get("tracking_number") or "-", size=12, weight=ft.FontWeight.BOLD, color=link_color()),
-                ft.Text(item.get("title") or "Untitled", size=12, color=body_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-            ],
-            spacing=1,
-            expand=expand,
-        )
-
     def event_row(event, show_document):
-        label, icon, color = EVENT_STYLES.get(event.get("type"), ("Event", ft.Icons.CIRCLE_OUTLINED, ft.Colors.BLUE_GREY_600))
-        details = [ft.Row([chip(label, color), ft.Text(event_summary(event), size=12, color=body_color(), expand=True)], spacing=8)]
-        if show_document and event.get("tracking_number"):
-            details.append(ft.Text(f"{event['tracking_number']} · {event.get('title') or 'Untitled'}", size=11, color=muted_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
-        details.append(ft.Text(f"{format_time(event.get('at'))}" + (f" · {event['actor']}" if event.get("actor") else ""), size=11, color=muted_color()))
-        tracking_number = event.get("tracking_number") if show_document else None
-        return list_row(
-            [
-                ft.Container(ft.Icon(icon, color=color, size=18), padding=7, bgcolor=ft.Colors.with_opacity(0.12, color), border_radius=8),
-                ft.Column(details, spacing=3, expand=True),
-            ],
-            on_click=(lambda _, value=tracking_number: track(value)) if tracking_number else None,
-        )
+        return widgets.event_row(event, show_document, on_open=track)
 
     def render_monitor(payload):
         summary = payload.get("summary") or {}
@@ -195,10 +58,9 @@ def build_qr_tracking_view(page, api, surface_card, section_header):
         transit_title.value = f"In transit ({len(in_transit)})"
         rows = []
         for item in in_transit:
-            waiting = format_elapsed(item.get("sent_at"))
             rows.append(list_row(
                 [
-                    document_cell(item),
+                    widgets.document_cell(item),
                     ft.Column(
                         [
                             ft.Text(f"{item.get('from_office') or '-'} → {item.get('to_office') or '-'}", size=12, color=body_color()),
@@ -207,7 +69,7 @@ def build_qr_tracking_view(page, api, surface_card, section_header):
                         spacing=1,
                         expand=True,
                     ),
-                    chip(f"Overdue · {waiting}" if item.get("overdue") else waiting, ft.Colors.RED_700 if item.get("overdue") else ft.Colors.AMBER_800),
+                    widgets.waiting_chip(item),
                 ],
                 on_click=lambda _, value=item.get("tracking_number"): track(value),
             ))
@@ -236,11 +98,7 @@ def build_qr_tracking_view(page, api, surface_card, section_header):
         else:
             where = location.get("office") or "No office recorded"
         since = f"for {format_elapsed(location.get('since'))} (since {format_time(location.get('since'))})" if location.get("since") else ""
-        reference = " · ".join(part for part in [
-            document.get("document_type"),
-            f"No. {document['document_number']}" if document.get("document_number") else None,
-            f"s. {document['series_year']}" if document.get("series_year") else None,
-        ] if part)
+        reference = document_reference(document)
 
         events = payload.get("events") or []
         trail_panel.controls = [
