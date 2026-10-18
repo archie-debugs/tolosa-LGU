@@ -1986,9 +1986,9 @@ def create_document_handoff(
         db.add(handoff)
         db.flush()
         db.refresh(handoff)
-    except exc.IntegrityError as exc:
+    except exc.IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="A pending receipt handoff already exists for this document") from exc
+        raise HTTPException(status_code=409, detail="A pending receipt handoff already exists for this document") from error
 
     result = _serialize_handoff(handoff)
     record_audit_log(
@@ -2188,12 +2188,12 @@ def confirm_document_receipt(qr_value: str, db: Session = Depends(get_db), curre
         doc.current_office = receiving_office.name if receiving_office else doc.current_office
         _ensure_document_office_association(db, doc.id, current_user.office_id)
         db.flush()
-    except exc.IntegrityError as exc:
+    except exc.IntegrityError as error:
         db.rollback()
         existing = db.query(models.DocumentReceipt).filter(models.DocumentReceipt.handoff_id == handoff.id).first()
         if existing is not None:
             return {"status": "already_confirmed", "receipt": _serialize_document_receipt(existing), "message": "Receipt already confirmed for this handoff."}
-        raise HTTPException(status_code=409, detail="Receipt confirmation could not be completed due to a duplicate handoff confirmation.") from exc
+        raise HTTPException(status_code=409, detail="Receipt confirmation could not be completed due to a duplicate handoff confirmation.") from error
 
     record_audit_log(
         db,

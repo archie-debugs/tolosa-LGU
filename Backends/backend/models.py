@@ -1,10 +1,14 @@
 import secrets
 import secrets
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint, Index, func, text
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint, Index, Sequence, func, text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from sqlalchemy import Date
 from .database import Base
+
+# Display tracking numbers come from this sequence on PostgreSQL (routes/documents.py).
+# Declared here, not only in migration 0011, so databases built by create_all have it too.
+document_tracking_number_seq = Sequence("document_tracking_number_seq", start=1, increment=1, minvalue=1, metadata=Base.metadata)
 
 
 class Role(Base):
