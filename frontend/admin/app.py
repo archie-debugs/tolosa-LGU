@@ -147,6 +147,7 @@ from frontend.admin.users_roles import (
     build_users_roles_view,
 )
 from frontend.admin.reference_data import build_reference_data_view
+from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import render_shell
 
@@ -1521,16 +1522,6 @@ def main(page: ft.Page, session=None):
     )
     page.overlay.append(archived_delete_selected_dialog)
 
-    qr_monitor_content = ft.Column(spacing=8)
-    qr_monitor_dialog = ft.AlertDialog(
-        title=ft.Text("QR Monitor"),
-        content=ft.Container(content=qr_monitor_content, padding=16, width=520),
-        actions=[
-            ft.TextButton("Close", on_click=lambda _: close_qr_monitor_dialog()),
-        ],
-    )
-    page.overlay.append(qr_monitor_dialog)
-
     qr_label_dialog_content = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
     qr_label_download_dialog = ft.AlertDialog(
         title=ft.Text("Download QR Labels"),
@@ -1858,10 +1849,6 @@ def main(page: ft.Page, session=None):
         ],
     )
     page.overlay.append(register_document_dialog)
-
-    def close_qr_monitor_dialog():
-        qr_monitor_dialog.open = False
-        page.update()
 
     def clear_selected_qr_documents():
         selected_qr_document_ids.clear()
@@ -2642,58 +2629,6 @@ def main(page: ft.Page, session=None):
             show_document_notice("Document updated successfully.")
         except Exception as exc:
             show_document_notice(f"Document update failed: {exc}")
-
-    def format_qr_monitor_details(payload):
-        summary = []
-        summary.append(ft.Text(f"Total documents: {payload.get('total_documents', 0)}", size=13, weight=ft.FontWeight.BOLD))
-        summary.append(ft.Text(f"Successful scans: {payload.get('successful_scans', 0)}", size=13))
-        summary.append(ft.Text(f"Unrecognized scans: {payload.get('unrecognized_scans', 0)}", size=13))
-        latest_scan = payload.get('latest_scan')
-        if latest_scan:
-            summary.append(ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100))
-            summary.append(ft.Text("Latest scan", size=13, weight=ft.FontWeight.BOLD))
-            summary.append(ft.Text(f"Actor: {latest_scan.get('actor', 'N/A')}", size=12))
-            summary.append(ft.Text(f"Action: {latest_scan.get('action', 'N/A')}", size=12))
-            summary.append(ft.Text(f"Target: {latest_scan.get('target_id', 'N/A')}", size=12))
-            summary.append(ft.Text(f"Time: {latest_scan.get('created_at', 'N/A')}", size=12))
-            details = latest_scan.get('details')
-            if details:
-                summary.append(ft.Text(f"Details: {details}", size=12, color=ft.Colors.BLUE_GREY_700))
-        recent_generated_qrs = payload.get('recent_generated_qrs') or []
-        if recent_generated_qrs:
-            summary.append(ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100))
-            summary.append(ft.Text("Recent generated QR codes", size=13, weight=ft.FontWeight.BOLD))
-            for qr in recent_generated_qrs[:8]:
-                summary.append(
-                    ft.Text(
-                        f"{qr.get('tracking_number', 'N/A')} — {qr.get('qr_code_value', 'N/A')} — {qr.get('created_at', 'N/A')}",
-                        size=12,
-                    )
-                )
-        documents = payload.get('documents') or []
-        if documents:
-            summary.append(ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100))
-            summary.append(ft.Text("Recent documents", size=13, weight=ft.FontWeight.BOLD))
-            for doc in documents[:8]:
-                summary.append(ft.Text(f"{doc.get('tracking_number', 'N/A')} — {doc.get('status', 'N/A')} — {doc.get('current_office', 'N/A')}", size=12))
-        return summary
-
-    def load_qr_monitor_data():
-        try:
-            response = requests.get(f"{BACKEND_URL}/documents/qr/monitor", headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.text)
-            payload = response.json() if response.content else {}
-            qr_monitor_content.controls = format_qr_monitor_details(payload)
-        except Exception as exc:
-            qr_monitor_content.controls = [ft.Text(f"Unable to load QR monitor data: {exc}", size=12, color=ft.Colors.RED_700)]
-        page.update()
-
-    def open_qr_monitor(_=None):
-        qr_monitor_dialog.open = True
-        qr_monitor_content.controls = [ft.Text("Loading QR monitor data...", size=13, color=ft.Colors.BLUE_GREY_700)]
-        page.update()
-        load_qr_monitor_data()
 
     def make_document_header(label, width):
         return ft.Container(
@@ -5588,19 +5523,7 @@ def main(page: ft.Page, session=None):
         return ft.Column([content], expand=False)
 
     def qr_tracking_view():
-        open_qr_monitor()
-        return ft.Column(
-            [
-                section_header(
-                    "QR Tracking",
-                    "Monitor document QR activity authorized for this account.",
-                    ft.Icons.QR_CODE_2,
-                    ft.Colors.BLUE_GREY_700,
-                ),
-                ft.OutlinedButton("Refresh QR Monitor", icon=ft.Icons.REFRESH, on_click=open_qr_monitor),
-            ],
-            spacing=14,
-        )
+        return build_qr_tracking_view(page, backend_api, surface_card, section_header)
 
     office_options = []
     office_management_data = []
