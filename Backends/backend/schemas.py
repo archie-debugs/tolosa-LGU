@@ -59,7 +59,7 @@ class DocumentUpdate(BaseModel):
     attachment_name: Optional[str] = None
     qr_code_value: Optional[str] = None
     created_by: Optional[str] = None
-    archived: Optional[bool] = None
+    # Archiving goes through the archive/restore routes, which check their own permissions.
 
 
 class DocumentResponse(BaseModel):

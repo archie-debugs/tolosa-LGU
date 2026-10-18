@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
-from ..auth_jwt import create_preview_token, decode_preview_token
+from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
 import uuid
 import threading
@@ -433,6 +433,8 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             doc.attachment_name = safe_stored
             if document_type:
                 doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
+            if category:
+                doc.category_id = _get_or_create_by_name(db, models.Category, category)
             if current_office:
                 doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
                 _ensure_document_office_association(db, doc.id, doc.current_office_id)
@@ -615,6 +617,8 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             doc.attachment_name = safe_name
             if document_type:
                 doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
+            if category:
+                doc.category_id = _get_or_create_by_name(db, models.Category, category)
             if current_office:
                 doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
                 _ensure_document_office_association(db, doc.id, doc.current_office_id)
@@ -880,7 +884,8 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     return db.query(models.Document).filter(models.Document.id == alias.document_id).first()
 
 
-def _public_qr_base_url() -> str:
+# The backend address as the viewer's browser reaches it (QR codes, preview and download links).
+def _public_base_url() -> str:
     backend_url = (
         os.getenv("PUBLIC_BASE_URL")
         or os.getenv("BACKEND_PUBLIC_URL")
@@ -896,7 +901,7 @@ def _compute_qr_payload(doc: models.Document) -> str:
     qr_token = (getattr(doc, "qr_token", None) or "").strip()
     if not qr_token:
         raise HTTPException(status_code=500, detail="Document has no stable QR token")
-    return f"{_public_qr_base_url()}/qr/{quote(str(qr_token), safe='')}"
+    return f"{_public_base_url()}/qr/{quote(str(qr_token), safe='')}"
 
 
 def _qr_image_path_for_document(doc: models.Document, payload: str) -> str:
@@ -1453,6 +1458,12 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
         raise HTTPException(status_code=400, detail="Tracking numbers are generated automatically and cannot be changed.")
 
     data = payload.model_dump(exclude_unset=True)
+    # The edit form sends None for a cleared field; required columns cannot be cleared.
+    for field, label in (("title", "Title"), ("status", "Status"), ("priority", "Priority"), ("is_public", "Public visibility")):
+        if field in data and (data[field] is None or (isinstance(data[field], str) and not data[field].strip())):
+            raise HTTPException(status_code=400, detail=f"{label} is required.")
+    if "series_year" in data:
+        data["series_year"] = _require_legislative_year(data["series_year"])
     previous_visibility = bool(doc.is_public)
     if "is_public" in data and data["is_public"] != previous_visibility:
         require_permission(current_user, "manage_public_visibility")
@@ -1463,17 +1474,17 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
             continue
         setattr(doc, field, value)
 
-    # handle normalized lookups
-    if data.get("document_type") is not None:
+    # handle normalized lookups; None clears both the name and its link
+    if "document_type" in data:
         doc.document_type = data.get("document_type")
         doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, data.get("document_type"))
-    if data.get("category") is not None:
+    if "category" in data:
         doc.category = data.get("category")
         doc.category_id = _get_or_create_by_name(db, models.Category, data.get("category"))
-    if data.get("originating_office") is not None:
+    if "originating_office" in data:
         doc.originating_office = data.get("originating_office")
         doc.originating_office_id = _get_or_create_by_name(db, models.Office, data.get("originating_office"))
-    if data.get("current_office") is not None:
+    if "current_office" in data:
         doc.current_office = data.get("current_office")
         doc.current_office_id = _get_or_create_by_name(db, models.Office, data.get("current_office"))
 
@@ -1538,7 +1549,11 @@ def register_document(
     priority = (priority or "Medium") or "Medium"
     uploaded_content = None
     uploaded_checksum = None
+    original_filename = os.path.basename(file.filename or "") if file is not None else None
     if file is not None:
+        _, ext = os.path.splitext(original_filename.lower())
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail="Unsupported file type. Upload a PDF, DOC, or DOCX file.")
         uploaded_content = file.file.read(MAX_FILE_SIZE + 1)
         if len(uploaded_content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
@@ -1583,7 +1598,7 @@ def register_document(
             os.makedirs(UPLOAD_DIR, exist_ok=True)
             content = uploaded_content or b""
             checksum = uploaded_checksum or hashlib.sha256(content).hexdigest()
-            safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(file.filename)}"
+            safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{original_filename}"
             dest_path = os.path.join(UPLOAD_DIR, safe_name)
             with open(dest_path, "wb") as fh:
                 fh.write(content)
@@ -1591,9 +1606,9 @@ def register_document(
             doc.attachment_name = safe_name
             att = models.Attachment(
                 document_id=doc.id,
-                original_filename=file.filename,
+                original_filename=original_filename,
                 stored_path=dest_path,
-                mime_type=file.content_type or mimetypes.guess_type(file.filename)[0],
+                mime_type=file.content_type or mimetypes.guess_type(original_filename)[0],
                 size=len(content),
                 checksum=checksum,
             )
@@ -1606,6 +1621,8 @@ def register_document(
 
     if document_type:
         doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
+    if category:
+        doc.category_id = _get_or_create_by_name(db, models.Category, category)
     if current_office:
         doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
         _ensure_document_office_association(db, doc.id, doc.current_office_id)
@@ -2476,6 +2493,8 @@ def permanently_delete_document(document_id: int, db: Session = Depends(get_db),
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if not doc.archived:
+        raise HTTPException(status_code=400, detail="Archive the document before deleting it permanently.")
 
     tracking_number = doc.tracking_number
     title = doc.title
@@ -2617,47 +2636,72 @@ def replace_attachment(
     }
 
 
-@router.post("/{document_id:int}/attachments/{attachment_id:int}/preview-token")
-def create_attachment_preview_token(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    if not (user_has_permission(current_user, "download_documents") or user_has_permission(current_user, "print_documents")):
-        raise HTTPException(status_code=403, detail="Permission denied")
+def _stored_attachment(db: Session, document_id: int, attachment_id: int, pdf_only: bool = False) -> models.Attachment:
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     attachment = db.query(models.Attachment).filter(models.Attachment.id == attachment_id, models.Attachment.document_id == document_id).first()
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    if (attachment.mime_type or "").lower() != "application/pdf" and not (attachment.original_filename or "").lower().endswith(".pdf"):
+    if pdf_only and (attachment.mime_type or "").lower() != "application/pdf" and not (attachment.original_filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF preview is only available for PDF attachments")
     if not attachment.stored_path or not os.path.isabs(attachment.stored_path) or not os.path.exists(attachment.stored_path):
         raise HTTPException(status_code=404, detail="Attachment file not found")
+    return attachment
+
+
+def _file_token_user(db: Session, payload: dict, document_id: int, attachment_id: int) -> models.User:
+    if payload.get("document_id") != document_id or payload.get("attachment_id") != attachment_id:
+        raise HTTPException(status_code=403, detail="Link does not match attachment")
+    user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Link user not found")
+    ensure_active_user(user)
+    return user
+
+
+@router.post("/{document_id:int}/attachments/{attachment_id:int}/preview-token")
+def create_attachment_preview_token(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if not (user_has_permission(current_user, "download_documents") or user_has_permission(current_user, "print_documents")):
+        raise HTTPException(status_code=403, detail="Permission denied")
+    _stored_attachment(db, document_id, attachment_id, pdf_only=True)
     token = create_preview_token({"sub": current_user.username, "document_id": document_id, "attachment_id": attachment_id})
-    backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
-    return {"preview_url": f"{backend_url}/documents/{document_id}/attachments/{attachment_id}/preview?preview_token={quote(token, safe='')}"}
+    return {"preview_url": f"{_public_base_url()}/documents/{document_id}/attachments/{attachment_id}/preview?preview_token={quote(token, safe='')}"}
 
 
 @router.get("/{document_id:int}/attachments/{attachment_id:int}/preview")
 def preview_attachment(document_id: int, attachment_id: int, preview_token: str = Query(...), db: Session = Depends(get_db)):
-    payload = decode_preview_token(preview_token)
-    if payload.get("document_id") != document_id or payload.get("attachment_id") != attachment_id:
-        raise HTTPException(status_code=403, detail="Preview token does not match attachment")
-    user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Preview user not found")
+    user = _file_token_user(db, decode_preview_token(preview_token), document_id, attachment_id)
     if not (user_has_permission(user, "download_documents") or user_has_permission(user, "print_documents")):
         raise HTTPException(status_code=403, detail="Permission denied")
-    attachment = db.query(models.Attachment).filter(models.Attachment.id == attachment_id, models.Attachment.document_id == document_id).first()
-    if not attachment:
-        raise HTTPException(status_code=404, detail="Attachment not found")
-    if (attachment.mime_type or "").lower() != "application/pdf" and not (attachment.original_filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="PDF preview is only available for PDF attachments")
-    if not attachment.stored_path or not os.path.isabs(attachment.stored_path) or not os.path.exists(attachment.stored_path):
-        raise HTTPException(status_code=404, detail="Attachment file not found")
+    attachment = _stored_attachment(db, document_id, attachment_id, pdf_only=True)
     return FileResponse(
         attachment.stored_path,
         filename=attachment.original_filename,
         media_type="application/pdf",
         content_disposition_type="inline",
+    )
+
+
+# The admin app runs in the viewer's browser, so a download has to be a link that browser
+# opens; saving the file from the app would put it on the machine running the app.
+@router.post("/{document_id:int}/attachments/{attachment_id:int}/download-token")
+def create_attachment_download_token(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    require_permission(current_user, "download_documents")
+    _stored_attachment(db, document_id, attachment_id)
+    token = create_download_token({"sub": current_user.username, "document_id": document_id, "attachment_id": attachment_id})
+    return {"download_url": f"{_public_base_url()}/documents/{document_id}/attachments/{attachment_id}/download?download_token={quote(token, safe='')}"}
+
+
+@router.get("/{document_id:int}/attachments/{attachment_id:int}/download")
+def download_attachment_by_link(document_id: int, attachment_id: int, download_token: str = Query(...), db: Session = Depends(get_db)):
+    user = _file_token_user(db, decode_download_token(download_token), document_id, attachment_id)
+    require_permission(user, "download_documents")
+    attachment = _stored_attachment(db, document_id, attachment_id)
+    return FileResponse(
+        attachment.stored_path,
+        filename=attachment.original_filename,
+        media_type=attachment.mime_type or "application/octet-stream",
     )
 
 

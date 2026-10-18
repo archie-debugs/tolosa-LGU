@@ -30,7 +30,8 @@ def refresh_development_public_urls() -> str | None:
         print("LAN IP detection unavailable; keeping configured public URLs.")
         return None
 
-    for variable, port in (("PUBLIC_BASE_URL", 8001), ("FRONTEND_PUBLIC_URL", 8550)):
+    sb_member_port = int(os.getenv("SBMEM_BACKEND_PORT", "8002"))
+    for variable, port in (("PUBLIC_BASE_URL", 8001), ("FRONTEND_PUBLIC_URL", 8550), ("SBMEM_PUBLIC_URL", sb_member_port)):
         configured = os.getenv(variable, "").strip().rstrip("/")
         if not configured:
             os.environ[variable] = f"http://{lan_ip}:{port}"

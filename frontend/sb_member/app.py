@@ -95,14 +95,12 @@ def main(page: ft.Page, session=None):
         return permission in permissions
 
     def download_document(document, attachment):
+        # The app runs in the member's browser: hand that browser a download link, since a
+        # file saved here would land on the machine running the app, not the member's.
         try:
-            response = requests.get(f"{API_URL}/documents/{document['id']}/attachments/{attachment['id']}", headers={"Authorization": f"Bearer {token}"}, timeout=30)
-            response.raise_for_status()
-            downloads = Path.home() / "Downloads"
-            downloads.mkdir(exist_ok=True)
-            target = downloads / attachment["filename"]
-            target.write_bytes(response.content)
-            notify(f"Downloaded {attachment['filename']}")
+            payload = api("POST", f"/documents/{document['id']}/attachments/{attachment['id']}/download-token")
+            page.launch_url(payload["download_url"])
+            notify(f"Downloading {attachment['filename']} in your browser")
         except Exception as exc:
             notify(str(exc))
 
