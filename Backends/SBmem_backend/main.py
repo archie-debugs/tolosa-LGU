@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -13,10 +14,13 @@ from sqlalchemy.orm import Session
 load_dotenv()
 
 from Backends.backend import models
-from Backends.backend.authentication import get_current_user
+from Backends.backend.auth_jwt import create_download_token, decode_download_token
+from Backends.backend.authentication import ensure_active_user, get_current_user
+from Backends.backend.lan import refresh_development_public_urls
 from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, lgu_today, normalize_permissions, normalize_user_role
 from Backends.backend.database import get_db
 
+refresh_development_public_urls()
 
 SB_ROLE = "SB Member"
 SB_PERMISSIONS = {
@@ -192,9 +196,7 @@ def get_document(document_id: int, db: Session = Depends(get_db), current_user: 
     return _safe_document(doc, db)
 
 
-@app.get("/documents/{document_id}/attachments/{attachment_id}")
-def download_document(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
-    require_sb_permission(current_user, "download_documents")
+def _member_attachment_path(db: Session, document_id: int, attachment_id: int) -> tuple[Path, models.Attachment]:
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -210,7 +212,47 @@ def download_document(document_id: int, attachment_id: int, db: Session = Depend
     allowed_roots = {Path(UPLOAD_DIR).resolve(), Path(LEGACY_UPLOAD_DIR).resolve()}
     if not any(root in path.parents for root in allowed_roots) or not path.is_file():
         raise HTTPException(status_code=404, detail="Attachment file not found")
-    return FileResponse(str(path), filename=attachment.original_filename, media_type=attachment.mime_type or "application/octet-stream")
+    return path, attachment
+
+
+def _attachment_response(path: Path, attachment: models.Attachment) -> FileResponse:
+    return FileResponse(str(path), filename=os.path.basename(attachment.original_filename or "") or "document", media_type=attachment.mime_type or "application/octet-stream")
+
+
+@app.get("/documents/{document_id}/attachments/{attachment_id}")
+def download_document(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    require_sb_permission(current_user, "download_documents")
+    return _attachment_response(*_member_attachment_path(db, document_id, attachment_id))
+
+
+def _public_url() -> str:
+    """This service's address as the member's browser reaches it."""
+    port = os.getenv("SBMEM_BACKEND_PORT", "8002")
+    return (os.getenv("SBMEM_PUBLIC_URL") or f"http://127.0.0.1:{port}").strip().rstrip("/")
+
+
+# The member app runs in the member's browser, so a download has to be a link that browser
+# opens; saving the file from the app would put it on the machine running the app.
+@app.post("/documents/{document_id}/attachments/{attachment_id}/download-token")
+def create_download_link(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    require_sb_permission(current_user, "download_documents")
+    _member_attachment_path(db, document_id, attachment_id)
+    token = create_download_token({"sub": current_user.username, "document_id": document_id, "attachment_id": attachment_id})
+    return {"download_url": f"{_public_url()}/documents/{document_id}/attachments/{attachment_id}/download?download_token={quote(token, safe='')}"}
+
+
+@app.get("/documents/{document_id}/attachments/{attachment_id}/download")
+def download_by_link(document_id: int, attachment_id: int, download_token: str = Query(...), db: Session = Depends(get_db)):
+    payload = decode_download_token(download_token)
+    if payload.get("document_id") != document_id or payload.get("attachment_id") != attachment_id:
+        raise HTTPException(status_code=403, detail="Link does not match attachment")
+    user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Link user not found")
+    ensure_active_user(user)
+    get_current_sb_member(user)
+    require_sb_permission(user, "download_documents")
+    return _attachment_response(*_member_attachment_path(db, document_id, attachment_id))
 
 
 @app.get("/dashboard")

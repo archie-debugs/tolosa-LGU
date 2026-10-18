@@ -1,5 +1,5 @@
 import flet as ft
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
@@ -236,9 +236,13 @@ def _prepare_single_registration_upload(selected_file, filename, access_token=No
     if response.status_code != 200:
         raise Exception(response.text)
     payload = response.json()
-    upload_info = next((item for item in payload.get("files", []) if item.get("ok")), None)
+    files = payload.get("files", [])
+    upload_info = next((item for item in files if item.get("ok")), None)
     if upload_info is None:
-        raise Exception("No temporary upload URL was returned")
+        reason = next((item.get("reason") for item in files if item.get("reason")), None)
+        if reason == "Unsupported extension":
+            raise Exception("Unsupported file type. Choose a PDF, DOC, or DOCX file.")
+        raise Exception(reason or "No temporary upload URL was returned")
     return {
         "filename": safe_name,
         "size": size,
@@ -1517,51 +1521,6 @@ def main(page: ft.Page, session=None):
     )
     page.overlay.append(archived_delete_selected_dialog)
 
-    scan_input_field = ft.TextField(label="Scan QR / Tracking", width=280, hint_text="Scan code or enter tracking number")
-    scan_destination_field = ft.TextField(label="Destination Office", width=280)
-    scan_location_field = ft.TextField(label="Current Location", width=280)
-    scan_remarks_field = ft.TextField(label="Remarks", width=280, multiline=True, min_lines=2, max_lines=4)
-    scan_action_dropdown = ft.Dropdown(
-        label="Action",
-        width=200,
-        options=[
-            ft.dropdown.Option("Scan"),
-            ft.dropdown.Option("Forward"),
-            ft.dropdown.Option("Review"),
-            ft.dropdown.Option("Return"),
-        ],
-        value="Scan",
-    )
-    scan_status_dropdown = ft.Dropdown(
-        label="Status",
-        width=200,
-        options=[
-            ft.dropdown.Option("Approved"),
-            ft.dropdown.Option("Returned"),
-        ],
-        value="Approved",
-    )
-    scan_submit_button = ft.Button("Submit Scan", icon=ft.Icons.QR_CODE_2, on_click=lambda _: submit_qr_scan())
-
-    qr_scan_dialog = ft.AlertDialog(
-        title=ft.Text("QR Scan"),
-        content=ft.Column(
-            [
-                scan_input_field,
-                ft.Row([scan_location_field, scan_destination_field], spacing=12),
-                ft.Row([scan_action_dropdown, scan_status_dropdown], spacing=12),
-                scan_remarks_field,
-            ],
-            spacing=12,
-            scroll=ft.ScrollMode.AUTO,
-        ),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_qr_scan_dialog()),
-            scan_submit_button,
-        ],
-    )
-    page.overlay.append(qr_scan_dialog)
-
     qr_monitor_content = ft.Column(spacing=8)
     qr_monitor_dialog = ft.AlertDialog(
         title=ft.Text("QR Monitor"),
@@ -1839,7 +1798,7 @@ def main(page: ft.Page, session=None):
                     spacing=3,
                     expand=True,
                 ),
-                ft.OutlinedButton("Choose file", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: file_picker.pick_files()),
+                ft.OutlinedButton("Choose file", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: file_picker.pick_files(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf", "doc", "docx"])),
             ],
             spacing=12,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1899,10 +1858,6 @@ def main(page: ft.Page, session=None):
         ],
     )
     page.overlay.append(register_document_dialog)
-
-    def close_qr_scan_dialog():
-        qr_scan_dialog.open = False
-        page.update()
 
     def close_qr_monitor_dialog():
         qr_monitor_dialog.open = False
@@ -2739,41 +2694,6 @@ def main(page: ft.Page, session=None):
         qr_monitor_content.controls = [ft.Text("Loading QR monitor data...", size=13, color=ft.Colors.BLUE_GREY_700)]
         page.update()
         load_qr_monitor_data()
-
-    def open_qr_scan_dialog(_=None):
-        qr_scan_dialog.open = True
-        scan_input_field.value = scan_input_field.value or ""
-        scan_location_field.value = scan_location_field.value or ""
-        scan_destination_field.value = scan_destination_field.value or ""
-        scan_remarks_field.value = scan_remarks_field.value or ""
-        scan_action_dropdown.value = "Scan"
-        scan_status_dropdown.value = "Pending"
-        page.update()
-
-    def submit_qr_scan():
-        qr_value = (scan_input_field.value or "").strip()
-        if not qr_value:
-            show_document_notice("QR/tracking value is required.")
-            return
-        payload = {
-            "qr_value": qr_value,
-            "scanner": current_user or "Unknown",
-            "current_location": (scan_location_field.value or "").strip() or "",
-            "destination": (scan_destination_field.value or "").strip() or "",
-            "remarks": (scan_remarks_field.value or "").strip() or scan_action_dropdown.value or "Scan",
-            "action": scan_action_dropdown.value or "Scan",
-            "status": scan_status_dropdown.value or "Pending",
-        }
-        try:
-            response = requests.post(f"{BACKEND_URL}/documents/scan", json=payload, headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.text)
-            load_documents_table()
-            hide_page = current_user
-            show_document_notice("QR scan submitted successfully.")
-            close_qr_scan_dialog()
-        except Exception as exc:
-            show_document_notice(f"QR scan failed: {exc}")
 
     def make_document_header(label, width):
         return ft.Container(
@@ -4205,13 +4125,14 @@ def main(page: ft.Page, session=None):
         attachment = attachments[0]
         document_id = doc.get("id")
         attachment_id = attachment.get("id")
+        # The app runs in the viewer's browser: hand that browser a download link, since a
+        # file saved here would land on the machine running the app, not the viewer's.
         try:
-            response = requests.get(
-                f"{BACKEND_URL}/documents/{document_id}/attachments/{attachment_id}",
+            response = requests.post(
+                f"{BACKEND_URL}/documents/{document_id}/attachments/{attachment_id}/download-token",
                 headers=get_admin_headers(),
                 verify=False,
-                timeout=60,
-                stream=True,
+                timeout=10,
             )
             if response.status_code != 200:
                 try:
@@ -4219,22 +4140,12 @@ def main(page: ft.Page, session=None):
                 except Exception:
                     detail = response.text
                 raise Exception(f"{response.status_code} {detail}")
-
-            filename = attachment.get("original_filename") or doc.get("attachment_name") or "document_attachment"
-            content_disposition = response.headers.get("content-disposition", "")
-            match = re.search(r"filename=\"?([^\";]+)", content_disposition, flags=re.IGNORECASE)
-            if match:
-                filename = match.group(1).strip()
-            filename = os.path.basename(filename) or "document_attachment"
-            download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-            os.makedirs(download_dir, exist_ok=True)
-            file_path = os.path.join(download_dir, filename)
-            with open(file_path, "wb") as handle:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        handle.write(chunk)
-            os.startfile(file_path)
-            show_document_notice(f"Downloaded {filename}.")
+            download_url = response.json().get("download_url")
+            if not download_url:
+                raise Exception("Download link was not returned")
+            page.launch_url(download_url)
+            filename = attachment.get("original_filename") or "the attachment"
+            show_document_notice(f"Downloading {filename} in your browser.")
         except Exception as exc:
             show_document_notice(f"Document download failed: {exc}")
 

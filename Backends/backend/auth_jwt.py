@@ -51,7 +51,7 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) 
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def create_preview_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def _create_file_token(data: dict, token_type: str, expires_delta: Optional[timedelta] = None) -> str:
     now = datetime.utcnow()
     expire = now + (expires_delta or timedelta(minutes=2))
     to_encode = {
@@ -60,10 +60,19 @@ def create_preview_token(data: dict, expires_delta: Optional[timedelta] = None) 
         "iat": now,
         "nbf": now,
         "jti": str(uuid.uuid4()),
-        "type": "preview",
+        "type": token_type,
     }
     to_encode.update(data)
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def create_preview_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    return _create_file_token(data, "preview", expires_delta)
+
+
+def create_download_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """A short-lived link token, so the viewer's browser can fetch an attachment itself."""
+    return _create_file_token(data, "download", expires_delta)
 
 
 def decode_access_token(token: str) -> dict:
@@ -90,13 +99,22 @@ def decode_refresh_token(token: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token invalid") from exc
 
 
-def decode_preview_token(token: str) -> dict:
+def _decode_file_token(token: str, token_type: str) -> dict:
+    label = token_type.capitalize()
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("type") != "preview":
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid preview token type")
+        if payload.get("type") != token_type:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid {token_type} token type")
         return payload
     except ExpiredSignatureError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token expired") from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"{label} token expired") from exc
     except InvalidTokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Preview token invalid") from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"{label} token invalid") from exc
+
+
+def decode_preview_token(token: str) -> dict:
+    return _decode_file_token(token, "preview")
+
+
+def decode_download_token(token: str) -> dict:
+    return _decode_file_token(token, "download")
