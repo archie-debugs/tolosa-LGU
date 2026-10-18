@@ -11,7 +11,7 @@ from sqlalchemy import Integer, String, cast, exc, exists, func, or_, text
 from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
-from ..core import UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
+from ..core import LGU_TIMEZONE, UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
 from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
 import uuid
@@ -1683,67 +1683,151 @@ def get_document_qr_image(document_id: int, db: Session = Depends(get_db), curre
     return FileResponse(image_path, media_type="image/png")
 
 
+# A pending handoff older than this is flagged as overdue on the QR Tracking screen.
+QR_TRACKING_OVERDUE_HOURS = 24
+QR_SCAN_ACTIONS = ("QR_SCAN_SUCCESS", "QR_SCAN_UNRECOGNIZED")
+
+
+def _lgu_day_start_utc() -> datetime:
+    now_local = datetime.now(LGU_TIMEZONE)
+    return now_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Stored times are UTC; SQLite returns them without a zone and PostgreSQL may use the session's."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    value = _as_utc(value)
+    return value.isoformat() if value else None
+
+
+def _document_brief(doc: models.Document | None) -> dict:
+    if doc is None:
+        return {"document_id": None, "tracking_number": None, "title": None}
+    return {"document_id": doc.id, "tracking_number": doc.tracking_number, "title": doc.title}
+
+
+def _employee_name(user: models.User | None) -> str | None:
+    return (user.full_name or user.username) if user else None
+
+
+def _handoff_event(row: models.DocumentHandoff) -> dict:
+    return {
+        "type": "sent",
+        "at": _utc_iso(row.sent_at),
+        "office": row.sending_office.name if row.sending_office else None,
+        "to_office": row.receiving_office.name if row.receiving_office else None,
+        "actor": _employee_name(row.sending_employee),
+        "detail": None,
+        **_document_brief(row.document),
+    }
+
+
+def _receipt_event(row: models.DocumentReceipt) -> dict:
+    return {
+        "type": "received",
+        "at": _utc_iso(row.confirmed_at),
+        "office": row.office.name if row.office else None,
+        "to_office": None,
+        "actor": _employee_name(row.confirmed_by),
+        "detail": None,
+        **_document_brief(row.document),
+    }
+
+
+def _action_event(row: models.DocumentAction) -> dict:
+    return {
+        "type": "action",
+        "at": _utc_iso(row.performed_at),
+        "office": row.office.name if row.office else None,
+        "to_office": None,
+        "actor": _employee_name(row.employee),
+        "detail": row.action_type + (f": {row.notes}" if row.notes else ""),
+        **_document_brief(row.document),
+    }
+
+
 @router.get("/qr/monitor")
 def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Operational summary for the QR Tracking screen: today's movement, documents in transit, recent activity."""
     require_permission(current_user, "view_qr_tracking")
-    total_documents = db.query(models.Document).filter(models.Document.archived.is_(False)).count()
-    successful_scans = db.query(models.AuditLog).filter(models.AuditLog.action == "QR_SCAN_SUCCESS").count()
-    unrecognized_scans = db.query(models.AuditLog).filter(models.AuditLog.action == "QR_SCAN_UNRECOGNIZED").count()
-    latest_scan_log = (
-        db.query(models.AuditLog)
-        .filter(models.AuditLog.action.in_(["QR_SCAN_SUCCESS", "QR_SCAN_UNRECOGNIZED"]))
-        .order_by(models.AuditLog.created_at.desc())
-        .first()
-    )
-    latest_scan = {
-        "actor": latest_scan_log.actor,
-        "action": latest_scan_log.action,
-        "target_id": latest_scan_log.target_id,
-        "details": latest_scan_log.details,
-        "created_at": latest_scan_log.created_at.isoformat() if latest_scan_log and latest_scan_log.created_at else None,
-    } if latest_scan_log else None
+    day_start = _lgu_day_start_utc()
+    # audit_logs.created_at is stored without a time zone, in UTC
+    audit_day_start = day_start.replace(tzinfo=None)
+    now = datetime.now(timezone.utc)
 
-    documents = db.query(models.Document).filter(models.Document.archived.is_(False)).order_by(models.Document.updated_at.desc()).limit(100).all()
-    documents_summary = [
-        {
-            "id": doc.id,
-            "tracking_number": doc.tracking_number,
-            "qr_code_value": doc.qr_code_value,
-            "status": doc.status,
-            "current_office": doc.current_office,
-            "last_updated": doc.updated_at.isoformat() if doc.updated_at else None,
-        }
-        for doc in documents
-    ]
+    def scans_today(action):
+        return db.query(models.AuditLog).filter(models.AuditLog.action == action, models.AuditLog.created_at >= audit_day_start).count()
 
-    recent_generated_qrs = (
-        db.query(models.Document)
-        .filter(models.Document.archived.is_(False))
-        .filter(models.Document.qr_code_value.isnot(None))
-        .order_by(models.Document.created_at.desc())
-        .limit(10)
+    pending = (
+        db.query(models.DocumentHandoff)
+        .join(models.Document, models.Document.id == models.DocumentHandoff.document_id)
+        .filter(models.DocumentHandoff.status == "Pending Receipt", models.Document.archived.is_(False))
+        .order_by(models.DocumentHandoff.sent_at.asc(), models.DocumentHandoff.id.asc())
         .all()
     )
-    recent_generated_summary = [
-        {
-            "id": doc.id,
-            "tracking_number": doc.tracking_number,
-            "qr_code_value": doc.qr_code_value,
-            "title": doc.title,
-            "document_type": doc.document_type,
-            "current_office": doc.current_office,
-            "created_at": doc.created_at.isoformat() if doc.created_at else None,
-        }
-        for doc in recent_generated_qrs
-    ]
+    in_transit = []
+    for row in pending:
+        sent_at = _as_utc(row.sent_at)
+        hours_waiting = round((now - sent_at).total_seconds() / 3600, 1) if sent_at else None
+        in_transit.append({
+            **_document_brief(row.document),
+            "handoff_id": row.id,
+            "from_office": row.sending_office.name if row.sending_office else None,
+            "to_office": row.receiving_office.name if row.receiving_office else None,
+            "sent_by": _employee_name(row.sending_employee),
+            "sent_at": _utc_iso(row.sent_at),
+            "hours_waiting": hours_waiting,
+            "overdue": hours_waiting is not None and hours_waiting >= QR_TRACKING_OVERDUE_HOURS,
+        })
+
+    feed_size = 25
+    events = [_handoff_event(row) for row in db.query(models.DocumentHandoff).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size)]
+    events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).order_by(models.DocumentReceipt.confirmed_at.desc()).limit(feed_size)]
+    events += [_action_event(row) for row in db.query(models.DocumentAction).order_by(models.DocumentAction.performed_at.desc()).limit(feed_size)]
+    scan_logs = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.action.in_(QR_SCAN_ACTIONS))
+        .order_by(models.AuditLog.created_at.desc())
+        .limit(feed_size)
+        .all()
+    )
+    scanned_ids = {int(log.target_id) for log in scan_logs if log.action == "QR_SCAN_SUCCESS" and str(log.target_id or "").isdigit()}
+    scanned_docs = {doc.id: doc for doc in db.query(models.Document).filter(models.Document.id.in_(scanned_ids))} if scanned_ids else {}
+    for log in scan_logs:
+        recognized = log.action == "QR_SCAN_SUCCESS"
+        doc = scanned_docs.get(int(log.target_id)) if recognized and str(log.target_id or "").isdigit() else None
+        events.append({
+            "type": "scan" if recognized else "unrecognized",
+            "at": _utc_iso(log.created_at),
+            "office": None,
+            "to_office": None,
+            "actor": log.actor,
+            "detail": None if recognized else f"Unrecognized code: {log.target_id}",
+            **_document_brief(doc),
+        })
+    # every "at" is UTC ISO text, so it sorts chronologically
+    events.sort(key=lambda event: event["at"] or "", reverse=True)
 
     return {
-        "total_documents": total_documents,
-        "successful_scans": successful_scans,
-        "unrecognized_scans": unrecognized_scans,
-        "latest_scan": latest_scan,
-        "documents": documents_summary,
-        "recent_generated_qrs": recent_generated_summary,
+        "generated_at": now.isoformat(),
+        "overdue_hours": QR_TRACKING_OVERDUE_HOURS,
+        "summary": {
+            "active_documents": db.query(models.Document).filter(models.Document.archived.is_(False)).count(),
+            "in_transit": len(in_transit),
+            "overdue": sum(1 for item in in_transit if item["overdue"]),
+            "sent_today": db.query(models.DocumentHandoff).filter(models.DocumentHandoff.sent_at >= day_start).count(),
+            "received_today": db.query(models.DocumentReceipt).filter(models.DocumentReceipt.confirmed_at >= day_start).count(),
+            "actions_today": db.query(models.DocumentAction).filter(models.DocumentAction.performed_at >= day_start).count(),
+            "scans_today": scans_today("QR_SCAN_SUCCESS"),
+            "unrecognized_today": scans_today("QR_SCAN_UNRECOGNIZED"),
+        },
+        "in_transit": in_transit,
+        "recent_activity": events[:feed_size],
     }
 
 
@@ -2399,6 +2483,82 @@ def generate_qr_labels(ids: str | None = Query(default=None), db: Session = Depe
     )
 
 
+def _scan_document(db: Session, current_user: models.User, qr_value: str) -> models.Document:
+    """Resolve a scanned QR code or typed tracking number, recording the scan either way."""
+    doc = _find_document_by_qr_or_tracking(db, qr_value)
+    if not doc:
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="QR_SCAN_UNRECOGNIZED",
+            target_type="qr_lookup",
+            target_id=str(qr_value),
+            details="QR identifier was not matched to a document",
+        )
+        raise HTTPException(status_code=404, detail="QR code not recognized")
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="QR_SCAN_SUCCESS",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"QR lookup resolved to {doc.tracking_number}",
+    )
+    return doc
+
+
+@router.get("/qr/{qr_value:path}/trail")
+def qr_tracking_trail(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Where a scanned document is now and every office it has passed through, newest first."""
+    require_permission(current_user, "view_qr_tracking")
+    doc = _scan_document(db, current_user, qr_value)
+
+    handoffs = db.query(models.DocumentHandoff).filter(models.DocumentHandoff.document_id == doc.id).all()
+    events = [_handoff_event(row) for row in handoffs]
+    events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).filter(models.DocumentReceipt.document_id == doc.id)]
+    events += [_action_event(row) for row in db.query(models.DocumentAction).filter(models.DocumentAction.document_id == doc.id)]
+    events.append({
+        "type": "registered",
+        "at": _utc_iso(doc.created_at),
+        "office": doc.originating_office or doc.current_office,
+        "to_office": None,
+        "actor": doc.created_by,
+        "detail": None,
+        **_document_brief(doc),
+    })
+    events.sort(key=lambda event: event["at"] or "", reverse=True)
+
+    pending = next((row for row in handoffs if row.status == "Pending Receipt"), None)
+    if doc.archived:
+        location = {"state": "archived", "office": doc.current_office, "to_office": None, "since": _utc_iso(doc.archived_at)}
+    elif pending is not None:
+        location = {
+            "state": "in_transit",
+            "office": pending.sending_office.name if pending.sending_office else None,
+            "to_office": pending.receiving_office.name if pending.receiving_office else None,
+            "since": _utc_iso(pending.sent_at),
+        }
+    elif doc.current_office:
+        last_move = next((event for event in events if event["type"] in ("received", "registered")), None)
+        location = {"state": "held", "office": doc.current_office, "to_office": None, "since": last_move["at"] if last_move else None}
+    else:
+        location = {"state": "unrouted", "office": None, "to_office": None, "since": _utc_iso(doc.created_at)}
+
+    return {
+        "document": {
+            "id": doc.id,
+            "tracking_number": doc.tracking_number,
+            "title": doc.title,
+            "document_type": doc.document_type,
+            "document_number": doc.document_number,
+            "series_year": doc.series_year,
+            "status": doc.status,
+        },
+        "location": location,
+        "events": events,
+    }
+
+
 @router.get("/qr/{qr_value:path}/office")
 @router.get("/qr/{qr_value:path}/office-access")
 def lookup_office_qr_by_value(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -2412,27 +2572,7 @@ def lookup_qr_by_value(qr_value: str, db: Session = Depends(get_db), current_use
     if qr_value.strip().lower() == "monitor":
         return monitor_qr(db=db, current_user=current_user)
 
-    doc = _find_document_by_qr_or_tracking(db, qr_value)
-    if not doc:
-        record_audit_log(
-            db,
-            actor=getattr(current_user, "username", "System"),
-            action="QR_SCAN_UNRECOGNIZED",
-            target_type="qr_lookup",
-            target_id=str(qr_value),
-            details="QR identifier was not matched to a document",
-        )
-        raise HTTPException(status_code=404, detail="QR code not recognized")
-
-    record_audit_log(
-        db,
-        actor=getattr(current_user, "username", "System"),
-        action="QR_SCAN_SUCCESS",
-        target_type="document",
-        target_id=str(doc.id),
-        details=f"QR lookup resolved to {doc.tracking_number}",
-    )
-
+    doc = _scan_document(db, current_user, qr_value)
     return {
         "document_id": doc.id,
         "tracking_number": doc.tracking_number,
