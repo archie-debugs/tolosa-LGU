@@ -6,18 +6,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_archived_documents_delete_selected_button_and_handler_exist():
-    admin_app = ROOT / "frontend" / "admin" / "app.py"
-    text = admin_app.read_text(encoding="utf-8")
-    assert 'archived_documents_delete_selected_button = ft.Button(' in text
-    assert 'def open_archived_delete_selected_dialog():' in text
-    assert 'def run_delete_selected_archived_documents_action():' in text
+    admin_app = (ROOT / "frontend" / "admin" / "app.py").read_text(encoding="utf-8")
+    documents_screen = (ROOT / "frontend" / "admin" / "documents.py").read_text(encoding="utf-8")
+    assert 'ft.OutlinedButton("Delete permanently"' in documents_screen
+    assert 'delete_selected=open_archived_delete_selected_dialog' in admin_app
+    assert 'def open_archived_delete_selected_dialog():' in admin_app
+    assert 'def run_delete_selected_archived_documents_action():' in admin_app
 
 
 def test_archived_delete_selected_flow_uses_real_permanent_delete_requests():
-    admin_app = ROOT / "frontend" / "admin" / "app.py"
-    text = admin_app.read_text(encoding="utf-8")
-    assert 'requests.delete(' in text
-    assert 'f"{BACKEND_URL}/documents/{doc_id}/permanent"' in text
+    text = (ROOT / "frontend" / "admin" / "app.py").read_text(encoding="utf-8")
+    assert 'backend_api(method, f"/documents/{doc_id}{path_suffix}")' in text
+    assert 'run_archived_bulk_action("DELETE", "/permanent", "Permanently deleted")' in text
     assert 'Delete Selected action prepared' not in text
 
 

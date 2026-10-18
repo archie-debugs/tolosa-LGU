@@ -1357,30 +1357,8 @@ def main(page: ft.Page, session=None):
 
     documents_data = []
     archived_documents_data = []
-    archived_documents_page = 1
-    archived_documents_total = 0
-    archived_documents_total_pages = 1
     selected_archived_document_ids = set()
-    archived_documents_pagination_bar = ft.Row([], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-
-    def update_pagination_bar(bar, current_page, total_pages, load_page):
-        controls = [ft.Text(f"Page {current_page} of {total_pages}", size=12, color=ft.Colors.BLUE_GREY_600)]
-        controls.append(ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous", disabled=current_page <= 1, on_click=lambda _: load_page(current_page - 1)))
-        first_page = max(1, current_page - 2)
-        last_page = min(total_pages, current_page + 2)
-        for number in range(first_page, last_page + 1):
-            controls.append(ft.TextButton(str(number), on_click=lambda _, selected_page=number: load_page(selected_page), disabled=number == current_page))
-        controls.append(ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next", disabled=current_page >= total_pages, on_click=lambda _: load_page(current_page + 1)))
-        bar.controls = controls
-
-    archived_documents_select_all_checkbox = ft.Checkbox(value=False, on_change=lambda e: archived_documents_select_all_toggle(e.control.value))
-    archived_documents_delete_selected_button = ft.Button(
-        "Delete Selected",
-        icon=ft.Icons.DELETE_FOREVER,
-        bgcolor=ft.Colors.RED_700,
-        color=ft.Colors.WHITE,
-        on_click=lambda _: open_archived_delete_selected_dialog(),
-    )
+    archived_refresh = lambda: None
 
     def get_document_status_style(status):
         normalized = (status or "").strip().lower()
@@ -1433,8 +1411,8 @@ def main(page: ft.Page, session=None):
 
     pending_restore_document = None
     archived_restore_dialog = ft.AlertDialog(
-        title=ft.Text("Restore Document"),
-        content=ft.Text("Are you sure you want to restore this document to the active document records?"),
+        title=ft.Text("Restore document?"),
+        content=ft.Text(""),
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_archived_restore_dialog()),
             ft.Button("Restore", bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE, on_click=lambda _: run_restore_archived_document_action()),
@@ -1442,10 +1420,20 @@ def main(page: ft.Page, session=None):
     )
     page.overlay.append(archived_restore_dialog)
 
+    archived_restore_selected_dialog = ft.AlertDialog(
+        title=ft.Text("Restore selected documents?"),
+        content=ft.Text(""),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_archived_restore_selected_dialog()),
+            ft.Button("Restore", bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE, on_click=lambda _: run_restore_selected_archived_documents_action()),
+        ],
+    )
+    page.overlay.append(archived_restore_selected_dialog)
+
     pending_permanent_delete_document = None
     archived_delete_dialog = ft.AlertDialog(
-        title=ft.Text("Delete Archived Document Permanently"),
-        content=ft.Text("This action permanently deletes the archived document and cannot be undone. Are you sure you want to continue?"),
+        title=ft.Text("Delete permanently?"),
+        content=ft.Text(""),
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_archived_delete_dialog()),
             ft.Button("Delete Permanently", bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE, on_click=lambda _: run_permanent_delete_archived_document_action()),
@@ -1454,8 +1442,8 @@ def main(page: ft.Page, session=None):
     page.overlay.append(archived_delete_dialog)
 
     archived_delete_selected_dialog = ft.AlertDialog(
-        title=ft.Text("Delete Selected Archived Documents"),
-        content=ft.Text("This action permanently deletes the selected archived documents and cannot be undone. Are you sure you want to continue?"),
+        title=ft.Text("Delete selected documents permanently?"),
+        content=ft.Text(""),
         actions=[
             ft.TextButton("Cancel", on_click=lambda _: close_archived_delete_selected_dialog()),
             ft.Button("Delete Permanently", bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE, on_click=lambda _: run_delete_selected_archived_documents_action()),
@@ -2453,11 +2441,9 @@ def main(page: ft.Page, session=None):
                 (registration_category, category_names),
                 (bulk_common_category, category_names),
                 (edit_document_category, category_names),
-                (archived_documents_filter_category, category_names),
                 (registration_document_type, type_names),
                 (bulk_common_document_type, type_names),
                 (edit_document_type, type_names),
-                (archived_documents_filter_type, type_names),
             ):
                 current_value = control.value
                 control.options = [ft.dropdown.Option(name) for name in names]
@@ -2576,208 +2562,6 @@ def main(page: ft.Page, session=None):
 
     selected_qr_document_ids = set()
     documents_refresh = lambda: None
-
-    archived_documents_table = ft.DataTable(
-        columns=[
-            ft.DataColumn(label=ft.Container(content=archived_documents_select_all_checkbox, width=50, alignment=ft.Alignment.CENTER)),
-            ft.DataColumn(label=make_document_header("Actions", 90)),
-            ft.DataColumn(label=make_document_header("Tracking No.", 140)),
-            ft.DataColumn(label=make_document_header("Title", 320)),
-            ft.DataColumn(label=make_document_header("Document Type", 150)),
-            ft.DataColumn(label=make_document_header("Date Archived", 150)),
-            ft.DataColumn(label=make_document_header("Archived By", 150)),
-        ],
-        rows=[],
-        width=1100,
-        column_spacing=10,
-        horizontal_margin=0,
-        data_row_min_height=52,
-        data_text_style=ft.TextStyle(size=13),
-        heading_text_style=ft.TextStyle(
-            size=12,
-            weight=ft.FontWeight.BOLD,
-        ),
-        horizontal_lines=ft.BorderSide(width=1, color=ft.Colors.BLUE_GREY_100),
-        border_radius=10,
-    )
-
-    archived_documents_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
-
-    archived_documents_empty_state = ft.Container(
-        content=ft.Text(
-            "No archived documents available.",
-            size=13,
-            color=ft.Colors.BLUE_GREY_600,
-            text_align=ft.TextAlign.CENTER,
-        ),
-        width=1600,
-        height=40,
-        alignment=ft.Alignment.CENTER,
-        visible=False,
-        padding=ft.Padding(left=0, top=8, right=0, bottom=8),
-    )
-
-    archived_documents_search_field = ft.TextField(
-        label="Search archived documents",
-        hint_text="Search by Tracking ID, title, type, status, or location...",
-        prefix_icon=ft.Icon(ft.Icons.SEARCH, size=18, color=ft.Colors.BLUE_GREY_600),
-        width=320,
-        on_change=lambda _: load_archived_documents_table(),
-        on_submit=lambda _: load_archived_documents_table(),
-    )
-
-    archived_documents_filter_status = ft.Dropdown(
-        label="Status",
-        width=140,
-        options=[
-            ft.dropdown.Option("All"),
-            ft.dropdown.Option("Received"),
-            ft.dropdown.Option("Approved"),
-            ft.dropdown.Option("Returned"),
-            ft.dropdown.Option("Archived"),
-        ],
-        value="All",
-    )
-    archived_documents_filter_type = ft.Dropdown(
-        label="Document Type",
-        width=160,
-        options=[
-            ft.dropdown.Option("All"),
-            ft.dropdown.Option("Ordinance"),
-            ft.dropdown.Option("Resolution"),
-            ft.dropdown.Option("Committee Report"),
-        ],
-        value="All",
-    )
-    archived_documents_filter_category = ft.Dropdown(
-        label="Category",
-        width=140,
-        options=[
-            ft.dropdown.Option("All"),
-            ft.dropdown.Option("Legislation"),
-            ft.dropdown.Option("Policy"),
-            ft.dropdown.Option("Report"),
-        ],
-        value="All",
-    )
-    archived_documents_filter_office = ft.Dropdown(
-        label="Current Office",
-        width=180,
-        options=[
-            ft.dropdown.Option("All"),
-            ft.dropdown.Option("SB Secretariat"),
-            ft.dropdown.Option("Office of the Mayor"),
-            ft.dropdown.Option("Committee on Health"),
-        ],
-        value="All",
-    )
-    archived_documents_sort_filter = ft.Dropdown(
-        label="Sort",
-        width=140,
-        options=[
-            ft.dropdown.Option("Newest"),
-            ft.dropdown.Option("Oldest"),
-            ft.dropdown.Option("Title"),
-        ],
-        value="Newest",
-    )
-    archived_documents_filter_start_date = ft.TextField(label="Start Date", hint_text="YYYY-MM-DD", width=140)
-    archived_documents_filter_end_date = ft.TextField(label="End Date", hint_text="YYYY-MM-DD", width=140)
-    archived_documents_year_filter = ft.TextField(label="Year", hint_text="YYYY", width=100)
-
-    archived_documents_apply_button = ft.OutlinedButton("Apply", icon=ft.Icons.FILTER_LIST, on_click=lambda _: load_archived_documents_table())
-    archived_documents_refresh_button = ft.Button(
-        "Refresh",
-        icon=ft.Icons.REFRESH,
-        on_click=lambda _: reset_archived_document_filters(),
-    )
-
-    def normalize_search_text(value):
-        if value is None:
-            return ""
-        return " ".join(str(value).strip().split()).lower()
-
-    def normalize_tracking_identifier(value):
-        if value is None:
-            return None
-        text = str(value).strip()
-        if not text:
-            return None
-
-        if text.isdigit():
-            return int(text.lstrip("0") or "0")
-
-        digits = []
-        for chunk in re.findall(r"\d+", text):
-            digits.append(chunk)
-
-        if not digits:
-            return None
-
-        last_digits = digits[-1]
-        return int(last_digits.lstrip("0") or "0")
-
-    def looks_like_tracking_search(value):
-        text = normalize_search_text(value)
-        return bool(text) and any(ch.isdigit() for ch in text)
-
-    def get_document_search_mode(search_text):
-        text = normalize_search_text(search_text)
-        if not text:
-            return "Smart search"
-        if looks_like_tracking_search(text):
-            return "ID / legislative metadata search"
-        return "Smart search"
-
-    def document_matches_search_term(doc, term):
-        query = normalize_search_text(term)
-        if not query:
-            return True
-
-        if looks_like_tracking_search(query):
-            doc_tracking = normalize_tracking_identifier(doc.get("tracking_number") or doc.get("id"))
-            search_tracking = normalize_tracking_identifier(query)
-            if doc_tracking is not None and search_tracking is not None and doc_tracking == search_tracking:
-                return True
-
-        fields = [
-            doc.get("title"),
-            doc.get("document_type"),
-            doc.get("status"),
-            doc.get("current_office"),
-            doc.get("assigned_to"),
-            doc.get("originating_office"),
-            doc.get("category"),
-            doc.get("description"),
-            doc.get("remarks"),
-            doc.get("author"),
-            doc.get("session"),
-            doc.get("tracking_number"),
-            doc.get("document_number"),
-            doc.get("series_year"),
-            doc.get("created_by"),
-        ]
-
-        for field_value in fields:
-            if field_value is None:
-                continue
-            normalized_field = normalize_search_text(field_value)
-            if normalized_field and query in normalized_field:
-                return True
-        return False
-
-    def update_document_result_indicator(display_documents, visible_count=None, total_count=None):
-        search_text = normalize_search_text(archived_documents_search_field.value)
-        mode_text = get_document_search_mode(search_text)
-        total_count = len(display_documents) if total_count is None else total_count
-        if not display_documents and total_count == 0:
-            archived_documents_notice.value = f"{mode_text} • No matching documents"
-            return
-        count_label = "document" if total_count == 1 else "documents"
-        if visible_count is not None and visible_count < total_count:
-            archived_documents_notice.value = f"{mode_text} • Showing {visible_count} of {total_count} matching {count_label}"
-            return
-        archived_documents_notice.value = f"{mode_text} • Showing {total_count} {count_label}"
 
     def show_document_notice(message):
         page.snack_bar = ft.SnackBar(ft.Text(message), open=True)
@@ -3042,9 +2826,7 @@ def main(page: ft.Page, session=None):
         archived_count = 0
         for doc_id in list(selected_qr_document_ids):
             try:
-                response = requests.delete(f"{BACKEND_URL}/documents/{doc_id}", headers=get_admin_headers(), verify=False, timeout=10)
-                if response.status_code != 200:
-                    raise Exception(response.text)
+                backend_api("DELETE", f"/documents/{doc_id}")
                 archived_count += 1
             except Exception as exc:
                 failed.append((doc_id, str(exc)))
@@ -3070,6 +2852,14 @@ def main(page: ft.Page, session=None):
         if document:
             delete_document_record(document.get("id"))
 
+    def describe_document(doc):
+        return f"{doc.get('tracking_number') or 'This document'} · {doc.get('title') or 'Untitled'}"
+
+    def describe_selected_archived():
+        names = [describe_document(doc) for doc in archived_documents_data if doc.get("id") in selected_archived_document_ids]
+        hidden = len(selected_archived_document_ids) - len(names[:5])
+        return "\n".join(names[:5]) + (f"\n…and {hidden} more" if hidden > 0 else "")
+
     def close_archived_restore_dialog():
         nonlocal pending_restore_document
         pending_restore_document = None
@@ -3079,6 +2869,7 @@ def main(page: ft.Page, session=None):
     def confirm_restore_archived_document(doc):
         nonlocal pending_restore_document
         pending_restore_document = doc
+        archived_restore_dialog.content = ft.Text(f"{describe_document(doc)}\n\nIt goes back on the Documents list with its office, file and history.")
         archived_restore_dialog.open = True
         page.update()
 
@@ -3089,19 +2880,44 @@ def main(page: ft.Page, session=None):
         if not document:
             return
         try:
-            response = requests.post(
-                f"{BACKEND_URL}/documents/{document.get('id')}/restore",
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=10,
-            )
-            if response.status_code != 200:
-                raise Exception(response.text)
-            show_document_notice("Document restored successfully.")
-            load_documents_table()
-            load_archived_documents_table()
+            backend_api("POST", f"/documents/{document.get('id')}/restore")
+            selected_archived_document_ids.discard(document.get("id"))
+            show_document_notice(f"Restored {document.get('tracking_number') or 'the document'}. It is back on Documents.")
         except Exception as exc:
             show_document_notice(f"Restore failed: {exc}")
+        archived_refresh()
+
+    def close_archived_restore_selected_dialog():
+        archived_restore_selected_dialog.open = False
+        page.update()
+
+    def open_archived_restore_selected_dialog():
+        if not selected_archived_document_ids:
+            return
+        archived_restore_selected_dialog.title = ft.Text(f"Restore {len(selected_archived_document_ids)} document(s)?")
+        archived_restore_selected_dialog.content = ft.Text(describe_selected_archived() + "\n\nThey go back on the Documents list.")
+        archived_restore_selected_dialog.open = True
+        page.update()
+
+    def run_archived_bulk_action(method, path_suffix, done_text):
+        failed = []
+        succeeded = 0
+        for doc_id in list(selected_archived_document_ids):
+            try:
+                backend_api(method, f"/documents/{doc_id}{path_suffix}")
+                selected_archived_document_ids.discard(doc_id)
+                succeeded += 1
+            except Exception as exc:
+                failed.append(str(exc))
+        if failed:
+            show_document_notice(f"{done_text} {succeeded}; {len(failed)} failed: {failed[0]}")
+        else:
+            show_document_notice(f"{done_text} {succeeded} document(s).")
+        archived_refresh()
+
+    def run_restore_selected_archived_documents_action():
+        close_archived_restore_selected_dialog()
+        run_archived_bulk_action("POST", "/restore", "Restored")
 
     def close_archived_delete_dialog():
         nonlocal pending_permanent_delete_document
@@ -3116,34 +2932,19 @@ def main(page: ft.Page, session=None):
     def open_archived_delete_selected_dialog():
         if not selected_archived_document_ids:
             return
+        archived_delete_selected_dialog.title = ft.Text(f"Delete {len(selected_archived_document_ids)} document(s) permanently?")
+        archived_delete_selected_dialog.content = ft.Text(describe_selected_archived() + "\n\nTheir records, files and tracking history are deleted. This cannot be undone.")
         archived_delete_selected_dialog.open = True
         page.update()
 
     def run_delete_selected_archived_documents_action():
         close_archived_delete_selected_dialog()
-        if not selected_archived_document_ids:
-            return
-        try:
-            selected_ids = list(selected_archived_document_ids)
-            for doc_id in selected_ids:
-                response = requests.delete(
-                    f"{BACKEND_URL}/documents/{doc_id}/permanent",
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=10,
-                )
-                if response.status_code != 200:
-                    raise Exception(response.text)
-            selected_archived_document_ids.clear()
-            clear_archived_selection_state()
-            load_archived_documents_table()
-            show_document_notice(f"Permanently deleted {len(selected_ids)} archived document(s).")
-        except Exception as exc:
-            show_document_notice(f"Delete selected archived documents failed: {exc}")
+        run_archived_bulk_action("DELETE", "/permanent", "Permanently deleted")
 
     def confirm_permanent_delete_archived_document(doc):
         nonlocal pending_permanent_delete_document
         pending_permanent_delete_document = doc
+        archived_delete_dialog.content = ft.Text(f"{describe_document(doc)}\n\nIts record, file and tracking history are deleted. This cannot be undone.")
         archived_delete_dialog.open = True
         page.update()
 
@@ -3154,18 +2955,12 @@ def main(page: ft.Page, session=None):
         if not document:
             return
         try:
-            response = requests.delete(
-                f"{BACKEND_URL}/documents/{document.get('id')}/permanent",
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=10,
-            )
-            if response.status_code != 200:
-                raise Exception(response.text)
-            show_document_notice("Archived document permanently deleted.")
-            load_archived_documents_table()
+            backend_api("DELETE", f"/documents/{document.get('id')}/permanent")
+            selected_archived_document_ids.discard(document.get("id"))
+            show_document_notice(f"Permanently deleted {document.get('tracking_number') or 'the document'}.")
         except Exception as exc:
             show_document_notice(f"Permanent delete failed: {exc}")
+        archived_refresh()
 
     def download_selected_qr_labels():
         selected_ids = sorted(doc_id for doc_id in selected_qr_document_ids if doc_id is not None)
@@ -3738,9 +3533,6 @@ def main(page: ft.Page, session=None):
 
     # QR generation/print functionality removed from frontend.
 
-    def get_visible_archived_documents():
-        return archived_documents_data
-
     def format_frontend_date(value):
         if not value:
             return "-"
@@ -3787,9 +3579,7 @@ def main(page: ft.Page, session=None):
 
     def delete_document_record(document_id):
         try:
-            response = requests.delete(f"{BACKEND_URL}/documents/{document_id}", headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.text)
+            backend_api("DELETE", f"/documents/{document_id}")
             load_documents_table()
             show_document_notice("Document archived. It is in Archived Documents.")
         except Exception as exc:
@@ -4027,281 +3817,8 @@ def main(page: ft.Page, session=None):
         except Exception as exc:
             show_document_notice(f"Visibility update failed: {exc}")
 
-    def sync_archived_document_delete_selected_button_state():
-        archived_documents_delete_selected_button.disabled = len(selected_archived_document_ids) == 0
-        archived_documents_delete_selected_button.text = (
-            f"Delete Selected ({len(selected_archived_document_ids)})" if selected_archived_document_ids else "Delete Selected"
-        )
-
-    def sync_archived_header_checkbox_from_rows(visible_docs):
-        visible_ids = {doc.get("id") for doc in visible_docs if doc.get("id") is not None}
-        archived_documents_select_all_checkbox.value = bool(visible_ids) and visible_ids.issubset(selected_archived_document_ids)
-        sync_archived_document_delete_selected_button_state()
-
-    def archived_documents_select_all_toggle(checked):
-        visible_docs = get_visible_archived_documents()
-        # Archived filters and sorting are applied by the backend.
-
-        visible_ids = [doc.get("id") for doc in visible_docs if doc.get("id") is not None]
-        if checked:
-            selected_archived_document_ids.update(visible_ids)
-        else:
-            selected_archived_document_ids.difference_update(visible_ids)
-        sync_archived_header_checkbox_from_rows(visible_docs)
-        sync_archived_document_delete_selected_button_state()
-        apply_archived_document_search_to_current_view()
-
-    def clear_archived_selection_state():
-        selected_archived_document_ids.clear()
-        archived_documents_select_all_checkbox.value = False
-        sync_archived_document_delete_selected_button_state()
-
-    def apply_archived_document_search_to_current_view():
-        visible_documents = get_visible_archived_documents()
-        # Archived filters and sorting are applied by the backend.
-
-        sync_archived_header_checkbox_from_rows(visible_documents)
-
-        rows = []
-        for doc in visible_documents:
-            doc_id = doc.get("id")
-            archive_title = str(doc.get("title", "-") or "-")
-            date_archived = doc.get("date_archived") or doc.get("archived_at") or doc.get("date_received") or "-"
-            archived_by = doc.get("archived_by") or "-"
-            rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(
-                            ft.Checkbox(
-                                value=doc_id in selected_archived_document_ids,
-                                on_change=lambda e, doc_id_value=doc_id: (
-                                    selected_archived_document_ids.add(doc_id_value) if e.control.value else selected_archived_document_ids.discard(doc_id_value),
-                                    sync_archived_header_checkbox_from_rows(visible_documents),
-                                    sync_archived_document_delete_selected_button_state(),
-                                    apply_archived_document_search_to_current_view(),
-                                ),
-                            )
-                        ),
-                        ft.DataCell(
-                            ft.Container(
-                                content=ft.PopupMenuButton(
-                                    icon=ft.Icons.MORE_VERT,
-                                    tooltip="Archived document actions",
-                                    items=[
-                                        *([ft.PopupMenuItem(content=ft.Text("View Details"), on_click=lambda _, d=doc: show_document_details(d))] if has_permission("view_document_details") else []),
-                                        *([ft.PopupMenuItem(content=ft.Text("Restore"), on_click=lambda _, d=doc: confirm_restore_archived_document(d))] if has_permission("restore_documents") else []),
-                                        *([ft.PopupMenuItem(content=ft.Text("Delete Permanently"), on_click=lambda _, d=doc: confirm_permanent_delete_archived_document(d))] if has_permission("delete_documents") else []),
-                                    ],
-                                ),
-                                width=90,
-                                alignment=ft.Alignment.CENTER,
-                            )
-                        ),
-                        ft.DataCell(ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(str(doc.get("tracking_number", doc.get("id", "-"))), size=13),
-                                    *(
-                                        [
-                                            ft.Text(
-                                                f"No. {doc.get('document_number')} / {doc.get('series_year')}",
-                                                size=10,
-                                                color=ft.Colors.BLUE_GREY_600,
-                                            )
-                                        ]
-                                        if doc.get("document_number") or doc.get("series_year")
-                                        else []
-                                    ),
-                                ],
-                                spacing=1,
-                                height=32,
-                                alignment=ft.MainAxisAlignment.START,
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                width=140,
-                            ),
-                            width=140,
-                            alignment=ft.Alignment.CENTER,
-                        )),
-                        ft.DataCell(ft.Tooltip(message=archive_title, content=ft.Container(content=ft.Text(archive_title, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, no_wrap=True), width=300, padding=ft.Padding(left=4, top=0, right=4, bottom=0), alignment=ft.Alignment.CENTER_LEFT))),
-                        ft.DataCell(ft.Container(content=ft.Text(str(doc.get("document_type", "-")), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(format_frontend_date(date_archived), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
-                        ft.DataCell(ft.Container(content=ft.Text(str(archived_by), size=13), width=150, alignment=ft.Alignment.CENTER_LEFT)),
-                    ]
-                )
-            )
-        archived_documents_table.rows = rows
-        archived_documents_empty_state.visible = len(rows) == 0
-        update_document_result_indicator(visible_documents, visible_count=len(rows), total_count=archived_documents_total)
-        page.update()
-
-    def load_archived_documents_table(requested_page=1):
-        nonlocal archived_documents_page, archived_documents_total, archived_documents_total_pages
-        try:
-            # Permission check to avoid unnecessary backend calls when user cannot view documents
-            if not has_permission("view_documents"):
-                archived_documents_data[:] = []
-                archived_documents_table.rows = []
-                archived_documents_empty_state.visible = True
-                archived_documents_notice.value = "Unable to load archived documents: Permission denied"
-                page.update()
-                return
-
-            archived_documents_page = max(1, requested_page)
-            selected_archived_document_ids.clear()
-            params = {"archived": "true", "page": archived_documents_page, "page_size": 10}
-            if archived_documents_search_field.value:
-                params["search"] = archived_documents_search_field.value
-            if archived_documents_filter_status.value and archived_documents_filter_status.value != "All":
-                params["status"] = archived_documents_filter_status.value
-            if archived_documents_filter_type.value and archived_documents_filter_type.value != "All":
-                params["document_type"] = archived_documents_filter_type.value
-            if archived_documents_filter_category.value and archived_documents_filter_category.value != "All":
-                params["category"] = archived_documents_filter_category.value
-            if archived_documents_filter_office.value and archived_documents_filter_office.value != "All":
-                params["current_office"] = archived_documents_filter_office.value
-            if archived_documents_year_filter.value:
-                params["year"] = archived_documents_year_filter.value
-            if archived_documents_filter_start_date.value:
-                params["start_date"] = archived_documents_filter_start_date.value
-            if archived_documents_filter_end_date.value:
-                params["end_date"] = archived_documents_filter_end_date.value
-            sort_map = {"Newest": ("created_at", "desc"), "Oldest": ("created_at", "asc"), "Title": ("title", "asc")}
-            params["sort_by"], params["sort_order"] = sort_map.get(archived_documents_sort_filter.value, ("created_at", "desc"))
-            response = requests.get(f"{BACKEND_URL}/documents", params=params, headers=get_admin_headers(), verify=False, timeout=10)
-            if response.status_code != 200:
-                raise Exception(response.text)
-            payload = response.json() if response.content else {}
-            archived_documents_total = payload.get("total", 0)
-            archived_documents_total_pages = max(1, payload.get("total_pages", 1))
-            archived_documents_page = min(archived_documents_page, archived_documents_total_pages)
-            archived_documents_data[:] = [normalize_document(doc) for doc in payload.get("items", [])]
-            update_pagination_bar(archived_documents_pagination_bar, archived_documents_page, archived_documents_total_pages, load_archived_documents_table)
-        except Exception as exc:
-            archived_documents_data[:] = []
-            archived_documents_table.rows = []
-            archived_documents_empty_state.visible = True
-            archived_documents_notice.value = f"Unable to load archived documents: {exc}"
-            page.update()
-            return
-
-        apply_archived_document_search_to_current_view()
-
-    def reset_archived_document_filters():
-        archived_documents_search_field.value = ""
-        archived_documents_filter_status.value = "All"
-        archived_documents_filter_type.value = "All"
-        archived_documents_filter_category.value = "All"
-        archived_documents_filter_office.value = "All"
-        archived_documents_sort_filter.value = "Newest"
-        archived_documents_year_filter.value = ""
-        archived_documents_filter_start_date.value = ""
-        archived_documents_filter_end_date.value = ""
-        load_archived_documents_table(1)
-        page.update()
-
-    def build_archived_documents_view():
-        load_active_definition_options()
-        load_archived_documents_table()
-        sync_archived_document_delete_selected_button_state()
-
-        header_card = surface_card(
-            ft.Column(
-                [
-                    section_header(
-                        "Archived Documents",
-                        "View records that have been archived and stored for reference.",
-                        ft.Icons.ARCHIVE_OUTLINED,
-                        ft.Colors.BLUE_GREY_700,
-                    ),
-                    ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
-                    ft.Row(
-                        [
-                            archived_documents_search_field,
-                            archived_documents_refresh_button,
-                            archived_documents_delete_selected_button,
-                        ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Row(
-                        [
-                            archived_documents_filter_status,
-                            archived_documents_filter_category,
-                            archived_documents_filter_type,
-                            archived_documents_year_filter,
-                            archived_documents_filter_office,
-                            archived_documents_sort_filter,
-                            archived_documents_filter_start_date,
-                            archived_documents_filter_end_date,
-                            archived_documents_apply_button,
-                        ],
-                        spacing=12,
-                        run_spacing=12,
-                        wrap=True,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                ],
-                spacing=14,
-            ),
-            padding=18,
-            expand=False,
-        )
-
-        table_card = surface_card(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Icon(ft.Icons.ARCHIVE_OUTLINED, size=20, color=ft.Colors.BLUE_GREY_700),
-                                    ft.Text("Archived Document Records", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                ],
-                                spacing=8,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            ft.Text(f"{len(archived_documents_data)} archived documents", size=12, color=ft.Colors.BLUE_GREY_600),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
-                    ft.Container(
-                        content=ft.Row(
-                            controls=[
-                                archived_documents_table,
-                            ],
-                            width=1600,
-                            scroll=ft.ScrollMode.AUTO,
-                            spacing=0,
-                            alignment=ft.MainAxisAlignment.START,
-                            vertical_alignment=ft.CrossAxisAlignment.START,
-                        ),
-                        width="100%",
-                        height=520,
-                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                    ),
-                    archived_documents_empty_state,
-                ],
-                spacing=10,
-                width=1600,
-                horizontal_alignment=ft.CrossAxisAlignment.START,
-                alignment=ft.MainAxisAlignment.START,
-            ),
-            padding=14,
-            expand=False,
-        )
-
-        return ft.Column(
-            controls=[
-                header_card,
-                ft.Container(content=archived_documents_notice, padding=ft.Padding(left=4, right=4, top=4, bottom=0)),
-                table_card,
-                archived_documents_pagination_bar,
-            ],
-            spacing=10,
-            expand=False,
-            tight=True,
-        )
+    def load_archived_documents_table():
+        archived_refresh()
 
     def load_documents_table():
         documents_refresh()
@@ -6337,7 +5854,30 @@ def main(page: ft.Page, session=None):
         show_login()
 
     def archived_documents_view():
-        return build_archived_documents_view()
+        nonlocal archived_refresh
+        if not has_permission("view_documents"):
+            return ft.Column([ft.Text("You do not have access to archived documents.")])
+        view, archived_refresh = build_documents_view(
+            page,
+            backend_api,
+            surface_card,
+            section_header,
+            normalize=normalize_document,
+            selection=selected_archived_document_ids,
+            loaded=archived_documents_data,
+            archived=True,
+            can_search=has_permission("search_documents"),
+            can_filter=has_permission("filter_documents"),
+            can_view_details=has_permission("view_document_details"),
+            can_restore=has_permission("restore_documents"),
+            can_delete=has_permission("delete_documents"),
+            open_details=show_document_details,
+            restore=confirm_restore_archived_document,
+            restore_selected=open_archived_restore_selected_dialog,
+            delete_permanently=confirm_permanent_delete_archived_document,
+            delete_selected=open_archived_delete_selected_dialog,
+        )
+        return view
 
     def open_documents_module():
         target_index = next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Documents"), 0)

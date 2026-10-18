@@ -2,7 +2,7 @@ import json
 import io
 import csv
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
@@ -1486,6 +1486,8 @@ def list_documents(
     location: str | None = Query(default=None, description="in_transit or at_office"),
     visibility: str | None = Query(default=None, description="public or private"),
     has_attachment: bool | None = Query(default=None),
+    archived_by: str | None = Query(default=None),
+    archived_within_days: int | None = Query(default=None, ge=1, le=3660),
     archived: bool | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
@@ -1513,6 +1515,11 @@ def list_documents(
         "without_attachment": query.filter(~with_attachment).count(),
     }
     available_statuses = sorted(value for (value,) in query.with_entities(models.Document.status).distinct() if value)
+    available_archivers = []
+    if archived:
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        summary["archived_last_30_days"] = query.filter(models.Document.archived_at >= recent_cutoff).count()
+        available_archivers = sorted(value for (value,) in query.with_entities(models.Document.archived_by).distinct() if value)
     available_year_query = db.query(func.min(_document_title_year_expression()))
     if archived is not None:
         available_year_query = available_year_query.filter(models.Document.archived.is_(archived))
@@ -1570,6 +1577,10 @@ def list_documents(
         raise HTTPException(status_code=400, detail="Invalid visibility: use public or private.")
     if has_attachment is not None:
         query = query.filter(with_attachment if has_attachment else ~with_attachment)
+    if archived_by:
+        query = query.filter(models.Document.archived_by == archived_by)
+    if archived_within_days:
+        query = query.filter(models.Document.archived_at >= datetime.now(timezone.utc) - timedelta(days=archived_within_days))
     if year:
         year_text = str(year).strip()
         if not re.fullmatch(r"\d{4}", year_text):
@@ -1596,6 +1607,7 @@ def list_documents(
         "tracking_number": models.Document.tracking_number,
         "status": models.Document.status,
         "priority": models.Document.priority,
+        "archived_at": models.Document.archived_at,
     }
     sort_column = sort_columns.get(sort_by, models.Document.created_at)
     if sort_by == "tracking_number":
@@ -1633,6 +1645,7 @@ def list_documents(
         "total_pages": total_pages,
         "available_years": available_years,
         "available_statuses": available_statuses,
+        "available_archivers": available_archivers,
         "summary": summary,
     }
 
@@ -2832,6 +2845,16 @@ def delete_document(document_id: int, db: Session = Depends(get_db), current_use
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.archived:
+        return {"message": "Document is already archived"}
+    pending = (
+        db.query(models.DocumentHandoff)
+        .filter(models.DocumentHandoff.document_id == doc.id, models.DocumentHandoff.status == "Pending Receipt")
+        .first()
+    )
+    if pending:
+        receiver = pending.receiving_office.name if pending.receiving_office else "the receiving office"
+        raise HTTPException(status_code=409, detail=f"{doc.tracking_number} is in transit to {receiver}. Archive it after it is received.")
 
     doc.archived = True
     doc.archived_at = datetime.now(timezone.utc)
