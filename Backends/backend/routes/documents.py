@@ -1292,6 +1292,163 @@ def get_office_document(document_id: int, db: Session = Depends(get_db), current
     return payload
 
 
+def _held_by_office(office_id: int):
+    """Documents in an office's custody, by the same rule handoffs use: the recorded
+    current office, or the office association when no current office is recorded."""
+    return or_(
+        models.Document.current_office_id == office_id,
+        (models.Document.current_office_id.is_(None)) & exists().where(
+            models.DocumentOffice.document_id == models.Document.id,
+            models.DocumentOffice.office_id == office_id,
+        ),
+    )
+
+
+def _pending_handoffs(db: Session):
+    return (
+        db.query(models.DocumentHandoff)
+        .join(models.Document, models.Document.id == models.DocumentHandoff.document_id)
+        .filter(models.DocumentHandoff.status == "Pending Receipt", models.Document.archived.is_(False))
+    )
+
+
+@router.get("/office/queue")
+def office_queue(
+    office_id: int | None = Query(default=None, ge=1),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """An office's work: documents waiting for it to receive, documents it holds,
+    documents it sent that are not received yet, and its recent activity."""
+    require_permission(current_user, "view_office_documents")
+    monitoring_office_id = _resolve_office_monitoring_id(db, current_user, office_id)
+    if search and not user_has_permission(current_user, "search_office_documents"):
+        raise HTTPException(status_code=403, detail="Permission denied")
+    office = db.get(models.Office, monitoring_office_id)
+    now = datetime.now(timezone.utc)
+    day_start = _lgu_day_start_utc()
+    order = (models.DocumentHandoff.sent_at.asc(), models.DocumentHandoff.id.asc())
+
+    incoming = [
+        _pending_handoff_item(row, now)
+        for row in _pending_handoffs(db).filter(models.DocumentHandoff.receiving_office_id == monitoring_office_id).order_by(*order)
+    ]
+    outgoing = [
+        _pending_handoff_item(row, now)
+        for row in _pending_handoffs(db).filter(models.DocumentHandoff.sending_office_id == monitoring_office_id).order_by(*order)
+    ]
+
+    sent_away = db.query(models.DocumentHandoff.document_id).filter(
+        models.DocumentHandoff.status == "Pending Receipt",
+        models.DocumentHandoff.sending_office_id == monitoring_office_id,
+    )
+    holding_query = db.query(models.Document).filter(
+        models.Document.archived.is_(False),
+        _held_by_office(monitoring_office_id),
+        ~models.Document.id.in_(sent_away),
+    )
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        conditions = [
+            models.Document.tracking_number.ilike(like),
+            models.Document.document_number.ilike(like),
+            models.Document.title.ilike(like),
+            models.Document.document_type.ilike(like),
+        ]
+        normalized_tracking = _normalize_tracking_query(search)
+        if normalized_tracking is not None:
+            conditions += [
+                models.Document.tracking_number == f"DOC-{int(normalized_tracking)}",
+                models.Document.tracking_number == f"DOC-{int(normalized_tracking):06d}",
+            ]
+        holding_query = holding_query.filter(or_(*conditions))
+    holding_total = holding_query.count()
+    held_docs = holding_query.order_by(models.Document.updated_at.desc(), models.Document.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    held_ids = [doc.id for doc in held_docs]
+    received_at = dict(
+        db.query(models.DocumentReceipt.document_id, func.max(models.DocumentReceipt.confirmed_at))
+        .filter(models.DocumentReceipt.office_id == monitoring_office_id, models.DocumentReceipt.document_id.in_(held_ids))
+        .group_by(models.DocumentReceipt.document_id)
+        .all()
+    ) if held_ids else {}
+    holding = [
+        {
+            **_document_brief(doc),
+            "document_type": doc.document_type,
+            "document_number": doc.document_number,
+            "series_year": doc.series_year,
+            "received_at": _utc_iso(received_at.get(doc.id)),
+            "since": _utc_iso(received_at.get(doc.id) or doc.created_at),
+        }
+        for doc in held_docs
+    ]
+
+    feed_size = 15
+    events = [_handoff_event(row) for row in db.query(models.DocumentHandoff).filter(
+        or_(models.DocumentHandoff.sending_office_id == monitoring_office_id, models.DocumentHandoff.receiving_office_id == monitoring_office_id)
+    ).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size)]
+    events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).filter(
+        models.DocumentReceipt.office_id == monitoring_office_id
+    ).order_by(models.DocumentReceipt.confirmed_at.desc()).limit(feed_size)]
+    events += [_action_event(row) for row in db.query(models.DocumentAction).filter(
+        models.DocumentAction.office_id == monitoring_office_id
+    ).order_by(models.DocumentAction.performed_at.desc()).limit(feed_size)]
+    # every "at" is UTC ISO text, so it sorts chronologically
+    events.sort(key=lambda event: event["at"] or "", reverse=True)
+
+    return {
+        "office": {"id": monitoring_office_id, "name": office.name if office else None},
+        "own_office": monitoring_office_id == getattr(current_user, "office_id", None),
+        "overdue_hours": QR_TRACKING_OVERDUE_HOURS,
+        "summary": {
+            "incoming": len(incoming),
+            "incoming_overdue": sum(1 for item in incoming if item["overdue"]),
+            "holding": holding_total,
+            "outgoing": len(outgoing),
+            "outgoing_overdue": sum(1 for item in outgoing if item["overdue"]),
+            "received_today": db.query(models.DocumentReceipt).filter(
+                models.DocumentReceipt.office_id == monitoring_office_id, models.DocumentReceipt.confirmed_at >= day_start
+            ).count(),
+            "sent_today": db.query(models.DocumentHandoff).filter(
+                models.DocumentHandoff.sending_office_id == monitoring_office_id, models.DocumentHandoff.sent_at >= day_start
+            ).count(),
+        },
+        "incoming": incoming,
+        "holding": {"items": holding, "total": holding_total, "page": page, "page_size": page_size,
+                    "total_pages": (holding_total + page_size - 1) // page_size},
+        "outgoing": outgoing,
+        "recent_activity": events[:feed_size],
+    }
+
+
+@router.get("/office/overview")
+def office_overview(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Every active office's workload at a glance, for the Super Administrator's Office Dashboard."""
+    if normalize_user_role(getattr(current_user, "role", None)) != "Super Administrator":
+        raise HTTPException(status_code=403, detail="Super Administrator access required")
+    now = datetime.now(timezone.utc)
+    offices = db.query(models.Office).filter(models.Office.is_active.is_(True)).order_by(models.Office.name.asc()).all()
+    pending = _pending_handoffs(db).all()
+    items = []
+    for office in offices:
+        incoming = [row for row in pending if row.receiving_office_id == office.id]
+        outgoing_ids = {row.document_id for row in pending if row.sending_office_id == office.id}
+        held_ids = {document_id for (document_id,) in db.query(models.Document.id).filter(models.Document.archived.is_(False), _held_by_office(office.id))}
+        items.append({
+            "id": office.id,
+            "name": office.name,
+            "office_code": office.office_code,
+            "incoming": len(incoming),
+            "incoming_overdue": sum(1 for row in incoming if _pending_handoff_item(row, now)["overdue"]),
+            "holding": len(held_ids - outgoing_ids),
+            "outgoing": len(outgoing_ids),
+        })
+    return {"overdue_hours": QR_TRACKING_OVERDUE_HOURS, "items": items}
+
+
 @router.get("/office/history")
 def list_office_history(
     office_id: int | None = Query(default=None, ge=1),
@@ -1751,6 +1908,21 @@ def _action_event(row: models.DocumentAction) -> dict:
     }
 
 
+def _pending_handoff_item(row: models.DocumentHandoff, now: datetime) -> dict:
+    sent_at = _as_utc(row.sent_at)
+    hours_waiting = round((now - sent_at).total_seconds() / 3600, 1) if sent_at else None
+    return {
+        **_document_brief(row.document),
+        "handoff_id": row.id,
+        "from_office": row.sending_office.name if row.sending_office else None,
+        "to_office": row.receiving_office.name if row.receiving_office else None,
+        "sent_by": _employee_name(row.sending_employee),
+        "sent_at": _utc_iso(row.sent_at),
+        "hours_waiting": hours_waiting,
+        "overdue": hours_waiting is not None and hours_waiting >= QR_TRACKING_OVERDUE_HOURS,
+    }
+
+
 @router.get("/qr/monitor")
 def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """Operational summary for the QR Tracking screen: today's movement, documents in transit, recent activity."""
@@ -1770,20 +1942,7 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
         .order_by(models.DocumentHandoff.sent_at.asc(), models.DocumentHandoff.id.asc())
         .all()
     )
-    in_transit = []
-    for row in pending:
-        sent_at = _as_utc(row.sent_at)
-        hours_waiting = round((now - sent_at).total_seconds() / 3600, 1) if sent_at else None
-        in_transit.append({
-            **_document_brief(row.document),
-            "handoff_id": row.id,
-            "from_office": row.sending_office.name if row.sending_office else None,
-            "to_office": row.receiving_office.name if row.receiving_office else None,
-            "sent_by": _employee_name(row.sending_employee),
-            "sent_at": _utc_iso(row.sent_at),
-            "hours_waiting": hours_waiting,
-            "overdue": hours_waiting is not None and hours_waiting >= QR_TRACKING_OVERDUE_HOURS,
-        })
+    in_transit = [_pending_handoff_item(row, now) for row in pending]
 
     feed_size = 25
     events = [_handoff_event(row) for row in db.query(models.DocumentHandoff).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size)]

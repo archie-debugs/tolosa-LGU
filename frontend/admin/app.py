@@ -147,6 +147,7 @@ from frontend.admin.users_roles import (
     build_users_roles_view,
 )
 from frontend.admin.reference_data import build_reference_data_view
+from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import render_shell
@@ -7589,107 +7590,16 @@ def main(page: ft.Page, session=None):
 
     office_dashboard_refresh = lambda: None
 
-    def office_overview_view():
-        overview_notice = ft.Text("Loading active offices...", size=12, color=ft.Colors.BLUE_GREY_600)
-        office_rows = ft.Column(spacing=0)
+    def office_dashboard_index():
+        return next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Office Dashboard"), 0)
 
+    def office_overview_view():
         def open_office(office):
             nonlocal selected_monitoring_office
             selected_monitoring_office = office
-            render_shell(
-                page,
-                current_user,
-                logout_user,
-                nav_items,
-                office_monitoring_view(office),
-                initial_selected_index=next(
-                    (idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Office Dashboard"),
-                    0,
-                ),
-            )
+            render_shell(page, current_user, logout_user, nav_items, office_monitoring_view(office), initial_selected_index=office_dashboard_index())
 
-        def load_office_overview():
-            try:
-                response = requests.get(
-                    f"{BACKEND_URL}/offices",
-                    params={"active_only": True},
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=15,
-                )
-                if response.status_code != 200:
-                    raise RuntimeError(response.text)
-                offices = response.json() or []
-                rows = []
-                for office in offices:
-                    office_id = office.get("id")
-                    count_response = requests.get(
-                        f"{BACKEND_URL}/documents/office/received-count",
-                        params={"office_id": office_id},
-                        headers=get_admin_headers(),
-                        verify=False,
-                        timeout=15,
-                    )
-                    if count_response.status_code != 200:
-                        raise RuntimeError(count_response.text)
-                    document_count = count_response.json().get("total", 0)
-                    handoff_response = requests.get(
-                        f"{BACKEND_URL}/documents/office/handoffs",
-                        params={"office_id": office_id, "direction": "incoming", "page": 1, "page_size": 100},
-                        headers=get_admin_headers(),
-                        verify=False,
-                        timeout=15,
-                    )
-                    if handoff_response.status_code != 200:
-                        raise RuntimeError(handoff_response.text)
-                    pending_count = sum(
-                        item.get("status") == "Pending Receipt"
-                        for item in (handoff_response.json().get("items", []) or [])
-                    )
-                    rows.append(
-                        ft.Container(
-                            content=ft.Row(
-                                [
-                                    ft.TextButton(
-                                        office.get("name") or "Unnamed Office",
-                                        on_click=lambda _, selected=office: open_office(selected),
-                                    ),
-                                    ft.Text(f"{document_count} documents", size=12, color=ft.Colors.BLUE_GREY_700),
-                                    ft.Text(f"{pending_count} pending", size=12, color=ft.Colors.ORANGE_700),
-                                ],
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            ),
-                            padding=ft.Padding(8, 4, 8, 4),
-                            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_100)),
-                        )
-                    )
-                office_rows.controls = rows
-                overview_notice.value = "Select an office name to monitor its documents and activity." if rows else "No active offices found."
-            except Exception as exc:
-                office_rows.controls = []
-                overview_notice.value = f"Unable to load active offices: {exc}"
-            page.update()
-
-        load_office_overview()
-        return ft.Column(
-            [
-                section_header(
-                    "Office Dashboard",
-                    "Monitor documents and handoff activity across active offices.",
-                    ft.Icons.LOCATION_CITY_OUTLINED,
-                    ft.Colors.BLUE_700,
-                ),
-                ft.Text("Office Overview", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                overview_notice,
-                ft.Container(
-                    content=office_rows,
-                    border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
-                    border_radius=10,
-                    padding=10,
-                ),
-            ],
-            spacing=12,
-        )
+        return build_office_overview_view(page, backend_api, surface_card, section_header, open_office)
 
     def office_dashboard_view():
         if (current_user_role or "").strip().lower() == "super administrator":
@@ -7701,17 +7611,7 @@ def main(page: ft.Page, session=None):
     def return_to_office_overview():
         nonlocal selected_monitoring_office
         selected_monitoring_office = None
-        render_shell(
-            page,
-            current_user,
-            logout_user,
-            nav_items,
-            office_overview_view(),
-            initial_selected_index=next(
-                (idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Office Dashboard"),
-                0,
-            ),
-        )
+        render_shell(page, current_user, logout_user, nav_items, office_overview_view(), initial_selected_index=office_dashboard_index())
 
     def office_monitoring_view(selected_office=None):
         nonlocal office_dashboard_refresh
@@ -7720,387 +7620,27 @@ def main(page: ft.Page, session=None):
         if not current_user or not getattr(current_user, "strip", lambda: "")():
             return ft.Column([ft.Text("Please log in to view your office dashboard.")])
 
-        selected_office_id = selected_office.get("id") if selected_office else None
-        selected_office_name = selected_office.get("name") if selected_office else "your office"
-        office_notice = ft.Text("Loading office documents...", size=12, color=ft.Colors.BLUE_GREY_600)
-        pending_receipt_indicator = ft.Text("Pending Receipts: 0", size=12, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_700)
-        incoming_handoff_notice = ft.Text("Loading incoming handoffs...", size=12, color=ft.Colors.BLUE_GREY_600)
-        sent_handoff_notice = ft.Text("Loading sent handoffs...", size=12, color=ft.Colors.BLUE_GREY_600)
-        recent_activity_notice = ft.Text("Loading recent activity...", size=12, color=ft.Colors.BLUE_GREY_600)
-        recent_activity_table = ft.DataTable(columns=[
-            ft.DataColumn(ft.Text("Document")),
-            ft.DataColumn(ft.Text("Status")),
-            ft.DataColumn(ft.Text("Confirmed")),
-        ], rows=[])
-        table = ft.DataTable(columns=[
-            ft.DataColumn(ft.Text("Tracking No.")),
-            ft.DataColumn(ft.Text("Title")),
-            ft.DataColumn(ft.Text("Document Type")),
-            ft.DataColumn(ft.Text("Legislative Year")),
-            ft.DataColumn(ft.Text("Receipt Status")),
-            ft.DataColumn(ft.Text("Confirmed")),
-            *([ft.DataColumn(ft.Text("Action"))] if has_permission("view_office_document_details") or has_permission("pass_office_documents") else []),
-        ], rows=[])
-        incoming_handoff_table = ft.DataTable(columns=[
-            ft.DataColumn(ft.Text("Tracking No.")),
-            ft.DataColumn(ft.Text("Document")),
-            ft.DataColumn(ft.Text("From")),
-            ft.DataColumn(ft.Text("To")),
-            ft.DataColumn(ft.Text("Sent")),
-            ft.DataColumn(ft.Text("Status")),
-            ft.DataColumn(ft.Text("Action")),
-        ], rows=[])
-        sent_handoff_table = ft.DataTable(columns=[
-            ft.DataColumn(ft.Text("Tracking No.")),
-            ft.DataColumn(ft.Text("Document")),
-            ft.DataColumn(ft.Text("From")),
-            ft.DataColumn(ft.Text("To")),
-            ft.DataColumn(ft.Text("Sent")),
-            ft.DataColumn(ft.Text("Status")),
-            ft.DataColumn(ft.Text("Action")),
-        ], rows=[])
-        page_size = 10
-        current_page = 1
-        total_pages = 0
-        search_field = ft.TextField(
-            label="Search office documents",
-            prefix_icon=ft.Icons.SEARCH,
-            expand=True,
-            on_submit=lambda _: load_office_documents(1),
-        ) if has_permission("search_office_documents") else None
-        receipt_status_filter = ft.Dropdown(
-            label="Receipt Status",
-            width=190,
-            value="all",
-            options=[
-                ft.dropdown.Option("all", "All statuses"),
-                ft.dropdown.Option("received", "Received"),
-                ft.dropdown.Option("not_yet_received", "Not Yet Received"),
-            ],
-            on_change=lambda _: load_office_documents(1),
-        )
-        page_label = ft.Text("Page 1 of 0", size=12, color=ft.Colors.BLUE_GREY_600)
-
-        def render_handoff_status(status_value):
-            status_text = str(status_value or "Unknown").strip() or "Unknown"
-            if status_text == "Pending Receipt":
-                color = ft.Colors.ORANGE_700
-                bgcolor = ft.Colors.ORANGE_50
-            elif status_text == "Received":
-                color = ft.Colors.GREEN_700
-                bgcolor = ft.Colors.GREEN_50
-            else:
-                color = ft.Colors.BLUE_GREY_700
-                bgcolor = ft.Colors.BLUE_GREY_50
-            return ft.Container(
-                content=ft.Text(status_text, size=11, weight=ft.FontWeight.W_600, color=color),
-                padding=ft.Padding(8, 4, 8, 4),
-                bgcolor=bgcolor,
-                border_radius=8,
-                alignment=ft.Alignment.CENTER,
-            )
-
-        def load_handoff_sections():
-            nonlocal pending_receipt_indicator
-            pending_count = 0
-
-            def fetch_direction(direction_name):
-                headers = {}
-                if runtime_token:
-                    headers["Authorization"] = f"Bearer {runtime_token}"
-                try:
-                    response = requests.get(
-                        f"{BACKEND_URL}/documents/office/handoffs",
-                        params={
-                            "direction": direction_name,
-                            "page": 1,
-                            "page_size": 100,
-                            **({"office_id": selected_office_id} if selected_office_id else {}),
-                        },
-                        headers=headers,
-                        verify=False,
-                        timeout=20,
-                    )
-                    if response.status_code == 401:
-                        refresh_runtime_token_if_needed(force=True)
-                        if runtime_token:
-                            headers["Authorization"] = f"Bearer {runtime_token}"
-                            response = requests.get(
-                                f"{BACKEND_URL}/documents/office/handoffs",
-                                params={
-                                    "direction": direction_name,
-                                    "page": 1,
-                                    "page_size": 100,
-                                    **({"office_id": selected_office_id} if selected_office_id else {}),
-                                },
-                                headers=headers,
-                                verify=False,
-                                timeout=20,
-                            )
-                    if response.status_code != 200:
-                        try:
-                            detail = response.json().get("detail") if response.headers.get("content-type", "").startswith("application/json") else str(response.text)
-                        except Exception:
-                            detail = str(response.text)
-                        raise RuntimeError(detail or "Unable to load handoff records.")
-                    payload = response.json()
-                    return payload.get("items", []) or []
-                except Exception:
-                    return None
-
-            incoming_items = fetch_direction("incoming")
-            sent_items = fetch_direction("sent")
-            if incoming_items is None:
-                incoming_handoff_notice.value = "Unable to load incoming handoffs."
-                incoming_handoff_table.rows = []
-            else:
-                incoming_rows = []
-                for item in incoming_items:
-                    status_text = str(item.get("status") or "Unknown")
-                    if status_text == "Pending Receipt":
-                        pending_count += 1
-                    document_title = item.get("document_title") or item.get("title") or "Untitled document"
-                    tracking_number = item.get("tracking_number") or str(item.get("document_id") or "—")
-                    sent_at = item.get("sent_at")
-                    try:
-                        if sent_at:
-                            sent_at = datetime.fromisoformat(str(sent_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
-                    except ValueError:
-                        pass
-                    doc_summary = {"id": item.get("document_id"), "tracking_number": tracking_number, "title": document_title}
-                    incoming_rows.append(ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(tracking_number))),
-                        ft.DataCell(ft.Text(str(document_title)[:65] + ("..." if len(str(document_title)) > 65 else ""))),
-                        ft.DataCell(ft.Text(str(item.get("sending_office_name") or "—"))),
-                        ft.DataCell(ft.Text(str(item.get("receiving_office_name") or "—"))),
-                        ft.DataCell(ft.Text(str(sent_at or "—"))),
-                        ft.DataCell(render_handoff_status(status_text)),
-                        ft.DataCell(ft.IconButton(
-                            icon=ft.Icons.VISIBILITY_OUTLINED,
-                            tooltip="View Document",
-                            on_click=lambda _, document=doc_summary: show_document_details(document),
-                        )),
-                    ]))
-                incoming_handoff_table.rows = incoming_rows
-                incoming_handoff_notice.value = "No incoming document handoffs." if not incoming_rows else ""
-
-            if sent_items is None:
-                sent_handoff_notice.value = "Unable to load sent handoffs."
-                sent_handoff_table.rows = []
-            else:
-                sent_rows = []
-                for item in sent_items:
-                    status_text = str(item.get("status") or "Unknown")
-                    document_title = item.get("document_title") or item.get("title") or "Untitled document"
-                    tracking_number = item.get("tracking_number") or str(item.get("document_id") or "—")
-                    sent_at = item.get("sent_at")
-                    try:
-                        if sent_at:
-                            sent_at = datetime.fromisoformat(str(sent_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
-                    except ValueError:
-                        pass
-                    doc_summary = {"id": item.get("document_id"), "tracking_number": tracking_number, "title": document_title}
-                    sent_rows.append(ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(tracking_number))),
-                        ft.DataCell(ft.Text(str(document_title)[:65] + ("..." if len(str(document_title)) > 65 else ""))),
-                        ft.DataCell(ft.Text(str(item.get("sending_office_name") or "—"))),
-                        ft.DataCell(ft.Text(str(item.get("receiving_office_name") or "—"))),
-                        ft.DataCell(ft.Text(str(sent_at or "—"))),
-                        ft.DataCell(render_handoff_status(status_text)),
-                        ft.DataCell(ft.IconButton(
-                            icon=ft.Icons.VISIBILITY_OUTLINED,
-                            tooltip="View Document",
-                            on_click=lambda _, document=doc_summary: show_document_details(document),
-                        )),
-                    ]))
-                sent_handoff_table.rows = sent_rows
-                sent_handoff_notice.value = "No documents have been passed by this office." if not sent_rows else ""
-
-            pending_receipt_indicator.value = f"Pending Receipts: {pending_count}"
-            page.update()
-
-        def load_recent_activity():
-            try:
-                response = requests.get(
-                    f"{BACKEND_URL}/documents/office/history",
-                    params={**({"office_id": selected_office_id} if selected_office_id else {})},
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=20,
-                )
-                if response.status_code != 200:
-                    raise RuntimeError(response.text)
-                items = response.json().get("items", []) or []
-                recent_activity_table.rows = [
-                    ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(item.get("document_id") or "—"))),
-                        ft.DataCell(ft.Text(str(item.get("status") or "—"))),
-                        ft.DataCell(ft.Text(str(item.get("confirmed_at") or "—"))),
-                    ])
-                    for item in items[:10]
-                ]
-                recent_activity_notice.value = "No recent receipt activity." if not items else ""
-            except Exception as exc:
-                recent_activity_table.rows = []
-                recent_activity_notice.value = f"Unable to load recent activity: {exc}"
-            page.update()
-
-        def load_office_documents(requested_page=None):
-            nonlocal table, office_notice, current_page, total_pages
-            if requested_page is not None:
-                current_page = requested_page
-            headers = {}
-            if runtime_token:
-                headers["Authorization"] = f"Bearer {runtime_token}"
-            params = {"page": current_page, "page_size": page_size}
-            if selected_office_id:
-                params["office_id"] = selected_office_id
-            if search_field and (search_field.value or "").strip():
-                params["search"] = search_field.value.strip()
-            if receipt_status_filter.value != "all":
-                params["receipt_status"] = receipt_status_filter.value
-            try:
-                response = requests.get(f"{BACKEND_URL}/documents/office", params=params, headers=headers, verify=False, timeout=20)
-                if response.status_code == 200:
-                    payload = response.json()
-                    items = payload.get("items", [])
-                    total_pages = payload.get("total_pages", 0)
-                    current_page = payload.get("page", current_page)
-                    office_notice.value = f"{payload.get('total', 0)} document(s) associated with your office"
-                    data_rows = []
-                    for item in items:
-                        confirmed_at = item.get("office_receipt_confirmed_at")
-                        if confirmed_at:
-                            try:
-                                confirmed_at = datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
-                            except ValueError:
-                                pass
-                        cells = [
-                            ft.DataCell(ft.Text(item.get("tracking_number") or "—")),
-                            ft.DataCell(ft.Text(item.get("title") or "Untitled document")),
-                            ft.DataCell(ft.Text(item.get("document_type") or "—")),
-                            ft.DataCell(ft.Text(str(item.get("series_year") or "—"))),
-                            ft.DataCell(ft.Text(item.get("office_receipt_status") or "Not Yet Received")),
-                            ft.DataCell(ft.Text(confirmed_at or "—")),
-                        ]
-                        if has_permission("view_office_document_details") or has_permission("pass_office_documents"):
-                            action_controls = []
-                            if has_permission("view_office_document_details"):
-                                action_controls.append(ft.IconButton(
-                                    icon=ft.Icons.VISIBILITY_OUTLINED,
-                                    tooltip="View Details",
-                                    on_click=lambda _, document=item: show_document_details(document),
-                                ))
-                            if can_pass_office_document() and item.get("office_receipt_status") not in ("Pending Receipt", "Received"):
-                                action_controls.append(ft.IconButton(
-                                    icon=ft.Icons.SEND_OUTLINED,
-                                    tooltip="Pass Document",
-                                    on_click=lambda _, document=item: open_pass_document_dialog(document),
-                                ))
-                            if action_controls:
-                                cells.append(ft.DataCell(ft.Row(action_controls, spacing=4, alignment=ft.MainAxisAlignment.START)))
-                            else:
-                                cells.append(ft.DataCell(ft.Text("—")))
-                        data_rows.append(ft.DataRow(cells=cells))
-                    table.rows = data_rows
-                    if not items:
-                        office_notice.value = "No Documents Found. There are currently no documents associated with your office."
-                else:
-                    detail = ""
-                    try:
-                        detail = str(response.json().get("detail", ""))
-                    except (ValueError, AttributeError):
-                        pass
-                    office_notice.value = (
-                        "No Office Assigned. Your account has not been assigned to an office. Please contact the administrator."
-                        if "Office assignment required" in detail
-                        else "Unable to load office documents."
-                    )
-                    table.rows = []
-                    total_pages = 0
-                page.update()
-            except Exception:
-                office_notice.value = "Unable to load office documents."
-                table.rows = []
-                total_pages = 0
-                page.update()
-            page_label.value = f"Page {current_page} of {total_pages}"
-            previous_button.disabled = current_page <= 1
-            next_button.disabled = current_page >= total_pages
-            if callable(load_handoff_sections):
-                load_handoff_sections()
-            page.update()
-
-        def refresh_dashboard():
-            load_office_documents(current_page)
-            load_handoff_sections()
-            load_recent_activity()
-
-        office_dashboard_refresh = refresh_dashboard
-
-        previous_button = ft.IconButton(
-            icon=ft.Icons.CHEVRON_LEFT,
-            tooltip="Previous page",
-            disabled=True,
-            on_click=lambda _: load_office_documents(max(1, current_page - 1)),
-        )
-        next_button = ft.IconButton(
-            icon=ft.Icons.CHEVRON_RIGHT,
-            tooltip="Next page",
-            disabled=True,
-            on_click=lambda _: load_office_documents(min(total_pages, current_page + 1)),
-        )
-
-        load_office_documents()
-        load_handoff_sections()
-        load_recent_activity()
-        back_control = ft.TextButton(
-            "Back",
-            on_click=lambda _: return_to_office_overview(),
-        ) if selected_office_id else None
-        return ft.Column([
-            *([back_control] if back_control else []),
-            section_header("Office Dashboard", f"Monitoring {selected_office_name}.", ft.Icons.LOCATION_CITY_OUTLINED, ft.Colors.BLUE_700),
-            ft.Row([
-                *([search_field] if search_field else []),
-                receipt_status_filter,
-                ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Refresh", on_click=lambda _: refresh_dashboard()),
-            ], alignment=ft.MainAxisAlignment.END),
-            office_notice,
-            ft.Container(content=table, border=ft.border.all(1, ft.Colors.BLUE_GREY_200), border_radius=10, padding=10),
-            ft.Row([previous_button, page_label, next_button], alignment=ft.MainAxisAlignment.END),
-            ft.Container(
-                content=ft.Column([
-                    ft.Row([
-                        ft.Text("Handoff Activity", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                        pending_receipt_indicator,
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Column([
-                        ft.Text("Incoming Handoffs", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_800),
-                        incoming_handoff_notice,
-                        ft.Container(content=incoming_handoff_table, border=ft.border.all(1, ft.Colors.BLUE_GREY_200), border_radius=10, padding=10),
-                    ], spacing=8),
-                    ft.Column([
-                        ft.Text("Sent / Passed Documents", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_800),
-                        sent_handoff_notice,
-                        ft.Container(content=sent_handoff_table, border=ft.border.all(1, ft.Colors.BLUE_GREY_200), border_radius=10, padding=10),
-                    ], spacing=8),
-                ], spacing=12),
-                padding=10,
-                border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
-                border_radius=10,
+        view, refresh = build_office_queue_view(
+            page,
+            backend_api,
+            surface_card,
+            section_header,
+            office_id=selected_office.get("id") if selected_office else None,
+            can_receive=(
+                is_employee()
+                and has_permission("scan_qr")
+                and has_permission("confirm_document_receipt")
+                and has_permission("view_office_document_details")
             ),
-            ft.Container(
-                content=ft.Column([
-                    ft.Text("Recent Activity", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                    recent_activity_notice,
-                    ft.Container(content=recent_activity_table, border=ft.border.all(1, ft.Colors.BLUE_GREY_200), border_radius=10, padding=10),
-                ], spacing=8),
-                padding=10,
-                border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
-                border_radius=10,
-            ),
-        ], spacing=12)
+            can_pass=can_pass_office_document(),
+            can_view_details=has_permission("view_office_document_details"),
+            can_search=has_permission("search_office_documents"),
+            open_details=show_document_details,
+            open_pass=open_pass_document_dialog,
+            on_back=return_to_office_overview if selected_office else None,
+        )
+        office_dashboard_refresh = refresh
+        return view
 
     def build_nav_items():
         # Each item is (icon, label, view, section). Items are kept in section
