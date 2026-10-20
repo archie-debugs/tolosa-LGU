@@ -1,38 +1,75 @@
-"""Employee screen for Today's Documents: set the documents SB Members see for a day."""
+"""Documents for SB Members: the documents employees set for SB Members to have at hand on a day."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import flet as ft
 
+from frontend.admin.tracking_ui import TrackingWidgets, document_reference
+
 
 def document_label(document):
-    number = document.get("document_number")
-    series = document.get("series_year")
-    reference = f"No. {number}" + (f" s. {series}" if series else "") if number else "No number"
-    return f"{document.get('tracking_number') or '-'} · {reference}"
+    reference = document_reference(document)
+    return f"{document.get('tracking_number') or '-'} · {reference}" if reference else (document.get("tracking_number") or "-")
 
 
-def build_todays_documents_view(page, api, surface_card, section_header, today=None):
-    """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises."""
+def has_file(document):
+    if "has_attachment" in document:
+        return bool(document["has_attachment"])
+    return bool(document.get("attachments"))
+
+
+def picked_date(value):
+    """The day a DatePicker returned; newer Flet releases send it as a zoned time."""
+    if isinstance(value, datetime):
+        return (value.astimezone() if value.tzinfo else value).date()
+    return value if isinstance(value, date) else None
+
+
+def build_todays_documents_view(page, api, surface_card, section_header, today=None, open_details=None):
+    """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
+    `open_details(document)` opens a document's details, when the user may see them."""
+    widgets = TrackingWidgets(page)
     today = today or date.today()
-    state = {"date": today, "today": today, "items": []}
+    state = {
+        "date": today, "today": today, "items": [], "upcoming": [],
+        "results": [], "results_page": 1, "results_pages": 1, "results_total": 0,
+        "editing": None, "removed": None, "notice": ("", False),
+    }
 
-    date_text = ft.Text(size=15, weight=ft.FontWeight.BOLD)
-    date_hint = ft.Text(size=12, color=ft.Colors.BLUE_GREY_600)
-    list_column = ft.Column(spacing=6)
-    status_text = ft.Text("", size=12, color=ft.Colors.RED_700)
-    search_field = ft.TextField(hint_text="Search by title, tracking or document number", prefix_icon=ft.Icons.SEARCH, expand=True, height=44, content_padding=ft.padding.symmetric(horizontal=12, vertical=4))
-    note_field = ft.TextField(hint_text="Note for SB Members (optional), e.g. 'For second reading'", expand=True, height=44, max_length=500, counter_text="", content_padding=ft.padding.symmetric(horizontal=12, vertical=4))
-    results_column = ft.Column(spacing=4)
+    date_text = ft.Text(size=16, weight=ft.FontWeight.BOLD, color=widgets.heading_color())
+    date_hint = widgets.hint("")
+    counts_text = ft.Text("", size=12, color=widgets.body_color())
+    notice_row = ft.Row([], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    upcoming_row = ft.Row([], spacing=8, wrap=True, run_spacing=8)
+    list_column = ft.Column(spacing=0)
+    results_column = ft.Column(spacing=0)
+    results_summary = widgets.hint("")
+    previous_results = ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous page", on_click=lambda _: load_documents(state["results_page"] - 1))
+    next_results = ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next page", on_click=lambda _: load_documents(state["results_page"] + 1))
+    search_field = ft.TextField(
+        hint_text="Search by title, tracking or document number",
+        prefix_icon=ft.Icons.SEARCH,
+        expand=True,
+        height=44,
+        content_padding=ft.Padding(12, 4, 12, 4),
+    )
+    search_section = ft.Column(spacing=8)
+    date_picker = ft.DatePicker(first_date=datetime(2020, 1, 1), last_date=datetime(2100, 12, 31))
 
     def editable():
         return state["date"] >= state["today"]
 
-    def show_error(message):
-        status_text.value = message
-        page.update()
+    def notify(message, error=False, undo=None):
+        state["notice"] = (message, error)
+        state["removed"] = undo
 
-    def render_list():
+    def render_notice():
+        message, error = state["notice"]
+        notice_row.controls = [ft.Text(message, size=12, color=ft.Colors.RED_700 if error else ft.Colors.GREEN_700)] if message else []
+        if message and state["removed"]:
+            notice_row.controls.append(ft.TextButton("Undo", icon=ft.Icons.UNDO, on_click=undo_remove))
+
+    def render_header():
         day = state["date"]
         date_text.value = day.strftime("%A, %B %d, %Y")
         if day == state["today"]:
@@ -40,69 +77,216 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
         elif day > state["today"]:
             date_hint.value = "SB Members will see this list on that day."
         else:
-            date_hint.value = "A past day, shown for reference."
+            date_hint.value = "A past day, shown for reference. It can no longer be changed."
         items = state["items"]
-        if not items:
-            list_column.controls = [ft.Text("No documents set for this day yet.", size=12, color=ft.Colors.BLUE_GREY_500)]
-            return
-        rows = []
-        for index, entry in enumerate(items):
-            document = entry["document"]
-            controls = [
-                ft.Text(f"{index + 1}.", width=28, weight=ft.FontWeight.BOLD),
-                ft.Column([
-                    ft.Text(document.get("title") or "Untitled", size=13, weight=ft.FontWeight.W_600),
-                    ft.Text(document_label(document), size=11, color=ft.Colors.BLUE_GREY_600),
-                    *([ft.Text(entry["note"], size=11, italic=True, color=ft.Colors.BLUE_700)] if entry.get("note") else []),
-                ], spacing=2, expand=True),
-            ]
-            if editable():
-                controls += [
-                    ft.IconButton(ft.Icons.ARROW_UPWARD, tooltip="Move up", disabled=index == 0, on_click=lambda _, i=index: move(i, -1)),
-                    ft.IconButton(ft.Icons.ARROW_DOWNWARD, tooltip="Move down", disabled=index == len(items) - 1, on_click=lambda _, i=index: move(i, 1)),
-                    ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove from this day", icon_color=ft.Colors.RED_600, on_click=lambda _, e=entry: remove(e)),
-                ]
-            rows.append(ft.Container(ft.Row(controls, vertical_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.padding.symmetric(horizontal=8, vertical=6), border=ft.border.all(1, ft.Colors.BLUE_GREY_100), border_radius=8))
-        list_column.controls = rows
+        hidden = sum(1 for entry in items if entry["document"].get("archived"))
+        no_file = sum(1 for entry in items if not has_file(entry["document"]))
+        parts = [f"{len(items)} document{'s' if len(items) != 1 else ''}"]
+        if hidden:
+            parts.append(f"{hidden} hidden from members")
+        if no_file:
+            parts.append(f"{no_file} without a file")
+        counts_text.value = " · ".join(parts)
 
-    def load(update=True):
-        status_text.value = ""
+    def render_upcoming():
+        chips = []
+        for item in state["upcoming"]:
+            day = date.fromisoformat(item["date"])
+            selected = day == state["date"]
+            label = ("Today" if day == state["today"] else day.strftime("%a, %b %d")) + f" · {item['count']}"
+            color = ft.Colors.RED_700 if item.get("hidden") else widgets.link_color()
+            chips.append(ft.Container(
+                content=ft.Text(label, size=12, weight=ft.FontWeight.BOLD if selected else ft.FontWeight.W_500, color=color),
+                padding=ft.Padding(10, 5, 10, 5),
+                bgcolor=ft.Colors.with_opacity(0.16 if selected else 0.06, color),
+                border_radius=12,
+                tooltip=f"{item['count']} document(s)" + (f", {item['hidden']} hidden from members" if item.get("hidden") else ""),
+                on_click=lambda _, d=day: go_to(d),
+                ink=True,
+            ))
+        upcoming_row.controls = [widgets.hint("Upcoming lists:"), *chips] if chips else [widgets.hint("No upcoming lists yet.")]
+
+    def entry_row(index, entry):
+        document = entry["document"]
+        items = state["items"]
+        tags = []
+        if document.get("archived"):
+            tags.append(widgets.chip("Archived · hidden from members", ft.Colors.RED_700))
+        if not has_file(document):
+            tags.append(widgets.chip("No file", ft.Colors.AMBER_800))
+        details = [
+            ft.Text(document_label(document), size=12, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+            ft.Text(document.get("title") or "Untitled", size=13, weight=ft.FontWeight.W_600, color=widgets.heading_color()),
+        ]
+        if tags:
+            details.append(ft.Row(tags, spacing=6, wrap=True))
+        if state["editing"] == entry["id"]:
+            note_field = ft.TextField(value=entry.get("note") or "", hint_text="Note for SB Members, e.g. 'For second reading'", max_length=500)
+            details += [
+                note_field,
+                ft.Row([
+                    ft.FilledButton("Save note", icon=ft.Icons.CHECK, on_click=lambda _, e=entry, f=note_field: save_note(e, f)),
+                    ft.TextButton("Cancel", on_click=lambda _: set_editing(None)),
+                ], spacing=8),
+            ]
+        elif entry.get("note"):
+            details.append(ft.Text(entry["note"], size=12, italic=True, color=widgets.body_color()))
+        if entry.get("added_by"):
+            details.append(widgets.hint(f"Added by {entry['added_by']}"))
+
+        actions = []
+        if open_details:
+            actions.append(ft.IconButton(ft.Icons.VISIBILITY_OUTLINED, tooltip="View details", on_click=lambda _, d=document: open_details(d)))
+        if editable():
+            actions += [
+                ft.IconButton(ft.Icons.EDIT_NOTE, tooltip="Edit note" if entry.get("note") else "Add note", on_click=lambda _, e=entry: set_editing(e["id"])),
+                ft.IconButton(ft.Icons.ARROW_UPWARD, tooltip="Move up", disabled=index == 0, on_click=lambda _, i=index: move(i, -1)),
+                ft.IconButton(ft.Icons.ARROW_DOWNWARD, tooltip="Move down", disabled=index == len(items) - 1, on_click=lambda _, i=index: move(i, 1)),
+                ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Remove from this day", icon_color=ft.Colors.RED_600, on_click=lambda _, e=entry, i=index: remove(e, i)),
+            ]
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text(f"{index + 1}.", width=28, size=14, weight=ft.FontWeight.BOLD, color=widgets.muted_color()),
+                    ft.Column(details, spacing=4, expand=True),
+                    *actions,
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            padding=ft.Padding(4, 10, 4, 10),
+            border=ft.Border(bottom=ft.BorderSide(1, widgets.line_color())),
+        )
+
+    def render_list():
+        items = state["items"]
+        list_column.controls = [entry_row(index, entry) for index, entry in enumerate(items)] or [
+            widgets.empty("No documents set for this day yet." + (" Search below to add some." if editable() else ""))
+        ]
+
+    def render_results():
+        results = state["results"]
+        searching = bool((search_field.value or "").strip())
+        total, page_number, pages = state["results_total"], state["results_page"], state["results_pages"]
+        results_summary.value = (
+            f"{total} document{'s' if total != 1 else ''}" + (" match" if searching else "") + f" · page {page_number} of {pages}"
+        )
+        previous_results.disabled = page_number <= 1
+        next_results.disabled = page_number >= pages
+        on_list = {entry["document"]["id"] for entry in state["items"]}
+        rows = []
+        for document in results:
+            tags = [widgets.chip("No file", ft.Colors.AMBER_800)] if not has_file(document) else []
+            action = (
+                widgets.chip("On this list", ft.Colors.GREEN_700)
+                if document["id"] in on_list
+                else ft.OutlinedButton("Add", icon=ft.Icons.ADD, on_click=lambda _, d=document: add(d))
+            )
+            rows.append(widgets.list_row([
+                ft.Column(
+                    [
+                        ft.Text(document_label(document), size=12, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+                        ft.Text(document.get("title") or "Untitled", size=12, color=widgets.body_color()),
+                        *([ft.Row(tags, spacing=6)] if tags else []),
+                    ],
+                    spacing=2,
+                    expand=True,
+                ),
+                action,
+            ]))
+        results_column.controls = rows or [widgets.empty("No documents match your search." if searching else "There are no active documents yet.")]
+
+    def render(update=True):
+        render_header()
+        render_upcoming()
+        render_notice()
+        render_list()
+        render_results()
+        search_section.visible = editable()
+        if update:
+            page.update()
+
+    def load_upcoming():
+        try:
+            state["upcoming"] = api("GET", "/todays-documents/upcoming").get("items", [])
+        except Exception:
+            state["upcoming"] = []
+
+    def load(update=True, keep_notice=False):
+        if not keep_notice:
+            notify("")
         try:
             payload = api("GET", "/todays-documents", params={"date": state["date"].isoformat()})
             state["items"] = payload.get("items", [])
             state["today"] = date.fromisoformat(payload.get("today") or state["today"].isoformat())
         except Exception as exc:
             state["items"] = []
-            status_text.value = f"Unable to load the list: {exc}"
-        render_list()
-        search_section.visible = editable()
-        if update:
-            page.update()
+            notify(f"Unable to load the list: {exc}", error=True)
+        load_upcoming()
+        render(update)
 
-    def change_day(days):
-        state["date"] = state["date"] + timedelta(days=days)
-        results_column.controls = []
+    def go_to(day):
+        state.update(date=day, editing=None)
         load()
 
-    def go_today(_=None):
-        state["date"] = state["today"]
-        results_column.controls = []
-        load()
+    def pick_date(_=None):
+        date_picker.value = datetime.combine(state["date"], datetime.min.time())
+        (getattr(page, "open", None) or page.show_dialog)(date_picker)
+
+    def on_date_picked(e):
+        day = picked_date(e.control.value)
+        if day and day != state["date"]:
+            go_to(day)
+
+    date_picker.on_change = on_date_picked
+
+    def set_editing(entry_id):
+        state["editing"] = entry_id
+        notify("")
+        render()
+
+    def save_note(entry, field):
+        try:
+            api("PATCH", f"/todays-documents/{entry['id']}", json={"note": field.value or None})
+            state["editing"] = None
+            notify("Note saved. SB Members see it with the document.")
+        except Exception as exc:
+            notify(f"Unable to save the note: {exc}", error=True)
+        load(keep_notice=True)
 
     def add(document):
         try:
-            api("POST", "/todays-documents", json={"scheduled_for": state["date"].isoformat(), "document_id": document["id"], "note": note_field.value or None})
-            note_field.value = ""
-            load()
+            api("POST", "/todays-documents", json={"scheduled_for": state["date"].isoformat(), "document_id": document["id"]})
+            notify(f"Added {document.get('tracking_number') or 'the document'}. Use the note button to add a note for SB Members.")
         except Exception as exc:
-            show_error(f"Unable to add: {exc}")
+            notify(f"Unable to add: {exc}", error=True)
+        load(keep_notice=True)
 
-    def remove(entry):
+    def remove(entry, index):
+        document = entry["document"]
         try:
             api("DELETE", f"/todays-documents/{entry['id']}")
-            load()
+            undo = {"document_id": document["id"], "note": entry.get("note"), "position": index, "date": state["date"]}
+            notify(f"Removed {document.get('tracking_number') or 'the document'} from this day.", undo=undo)
         except Exception as exc:
-            show_error(f"Unable to remove: {exc}")
+            notify(f"Unable to remove: {exc}", error=True)
+        load(keep_notice=True)
+
+    def undo_remove(_=None):
+        removed = state["removed"]
+        if not removed:
+            return
+        try:
+            api("POST", "/todays-documents", json={
+                "scheduled_for": removed["date"].isoformat(),
+                "document_id": removed["document_id"],
+                "note": removed["note"],
+                "position": removed["position"],
+            })
+            notify("Put back.")
+        except Exception as exc:
+            notify(f"Unable to put it back: {exc}", error=True)
+        load(keep_notice=True)
 
     def move(index, delta):
         ids = [entry["id"] for entry in state["items"]]
@@ -110,54 +294,77 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
         try:
             payload = api("PUT", "/todays-documents/order", json={"scheduled_for": state["date"].isoformat(), "entry_ids": ids})
             state["items"] = payload.get("items", [])
-            render_list()
-            page.update()
+            notify("")
         except Exception as exc:
-            show_error(f"Unable to reorder: {exc}")
+            notify(f"Unable to reorder: {exc}", error=True)
+        render()
+
+    def fetch_documents(page_number):
+        """Every document except archived ones, newest first, narrowed by the search box."""
+        params = {"archived": "false", "page": max(1, page_number), "page_size": 10, "sort_by": "created_at", "sort_order": "desc"}
+        query = (search_field.value or "").strip()
+        if query:
+            params["search"] = query
+        try:
+            payload = api("GET", "/documents", params=params)
+            state.update(
+                results=payload.get("items", []),
+                results_page=payload.get("page", params["page"]),
+                results_pages=max(payload.get("total_pages") or 1, 1),
+                results_total=payload.get("total", len(payload.get("items", []))),
+            )
+        except Exception as exc:
+            state.update(results=[], results_page=1, results_pages=1, results_total=0)
+            notify(f"Unable to load documents: {exc}", error=True)
+
+    def load_documents(page_number=1):
+        fetch_documents(page_number)
+        render()
 
     def search(_=None):
-        query = (search_field.value or "").strip()
-        if not query:
-            results_column.controls = []
-            page.update()
-            return
-        try:
-            payload = api("GET", "/documents", params={"search": query, "archived": "false", "page_size": 10})
-        except Exception as exc:
-            show_error(f"Search failed: {exc}")
-            return
-        already_set = {entry["document"]["id"] for entry in state["items"]}
-        rows = []
-        for document in payload.get("items", []):
-            is_set = document["id"] in already_set
-            rows.append(ft.Row([
-                ft.Column([
-                    ft.Text(document.get("title") or "Untitled", size=12, weight=ft.FontWeight.W_600),
-                    ft.Text(document_label(document), size=11, color=ft.Colors.BLUE_GREY_600),
-                ], spacing=1, expand=True),
-                ft.Text("Already set", size=11, color=ft.Colors.GREEN_700) if is_set else ft.OutlinedButton("Add", icon=ft.Icons.ADD, on_click=lambda _, d=document: add(d)),
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
-        results_column.controls = rows or [ft.Text("No matching documents.", size=12, color=ft.Colors.BLUE_GREY_500)]
-        page.update()
+        notify("")
+        load_documents(1)
+
+    def clear_search(_=None):
+        search_field.value = ""
+        search(None)
 
     search_field.on_submit = search
-    search_section = ft.Column([
-        ft.Text("Add a document", size=14, weight=ft.FontWeight.BOLD),
-        ft.Row([search_field, ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=search)], spacing=8),
-        note_field,
+    search_section.controls = [
+        widgets.title("Add a document"),
+        widgets.hint("All documents except archived ones, newest first. Archived documents are left out because SB Members cannot see them."),
+        ft.Row(
+            [
+                search_field,
+                ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=search, height=44),
+                ft.TextButton("Clear", on_click=clear_search),
+            ],
+            spacing=8,
+        ),
         results_column,
-    ], spacing=8)
+        ft.Row([results_summary, previous_results, next_results], alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+    ]
 
-    date_bar = ft.Row([
-        ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous day", on_click=lambda _: change_day(-1)),
-        ft.Column([date_text, date_hint], spacing=1),
-        ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next day", on_click=lambda _: change_day(1)),
-        ft.TextButton("Today", icon=ft.Icons.TODAY, on_click=go_today),
-    ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    date_bar = ft.Row(
+        [
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous day", on_click=lambda _: go_to(state["date"] - timedelta(days=1))),
+            ft.Column([date_text, date_hint], spacing=1, expand=True),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next day", on_click=lambda _: go_to(state["date"] + timedelta(days=1))),
+            ft.IconButton(ft.Icons.CALENDAR_MONTH_OUTLINED, tooltip="Pick a date", on_click=pick_date),
+            ft.TextButton("Today", icon=ft.Icons.TODAY, on_click=lambda _: go_to(state["today"])),
+        ],
+        spacing=4,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
 
-    load(update=False)
-    return ft.Column([
-        section_header("Documents for SB Members", "Set the documents SB Members need for the day. They appear right away in the SB Member app.", ft.Icons.EVENT_NOTE_OUTLINED, ft.Colors.BLUE_700),
-        surface_card(ft.Column([date_bar, status_text, list_column], spacing=10)),
-        surface_card(search_section),
-    ], spacing=16)
+    fetch_documents(1)
+    load(update=False, keep_notice=True)
+    return ft.Column(
+        [
+            section_header("Documents for SB Members", "Set the documents SB Members need for the day. They appear right away in the SB Member app.", ft.Icons.EVENT_NOTE_OUTLINED, ft.Colors.BLUE_700),
+            surface_card(ft.Column([date_bar, upcoming_row], spacing=10), padding=18),
+            surface_card(ft.Column([ft.Row([widgets.title("On this day's list"), counts_text], spacing=10, wrap=True), notice_row, list_column], spacing=8), padding=18),
+            surface_card(search_section, padding=18),
+        ],
+        spacing=16,
+    )

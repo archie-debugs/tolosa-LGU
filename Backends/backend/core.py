@@ -326,6 +326,9 @@ def user_has_permission(user: models.User, permission: str) -> bool:
         role != "Employee" or getattr(user, "office_id", None) is None
     ):
         return False
+    # SB Members are read-only, whatever was saved on their account.
+    if role == "SB Member" and normalized_permission not in DEFAULT_ROLE_PERMISSIONS["SB Member"]:
+        return False
     permissions = normalize_permissions(getattr(user, "permissions", None))
     if "*" in permissions:
         return True

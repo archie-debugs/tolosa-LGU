@@ -7,7 +7,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -22,6 +22,12 @@ class TodaysDocumentCreate(BaseModel):
     scheduled_for: date
     document_id: int = Field(..., gt=0)
     note: str | None = Field(default=None, max_length=500)
+    # Where to insert it, e.g. to undo a removal; the end of the list when omitted.
+    position: int | None = Field(default=None, ge=0)
+
+
+class TodaysDocumentNote(BaseModel):
+    note: str | None = Field(default=None, max_length=500)
 
 
 class TodaysDocumentOrder(BaseModel):
@@ -29,9 +35,10 @@ class TodaysDocumentOrder(BaseModel):
     entry_ids: list[int]
 
 
-def serialize_entry(entry: models.TodaysDocument) -> dict:
+def serialize_entry(entry: models.TodaysDocument, db: Session) -> dict:
     doc = entry.document
     added_by = entry.added_by
+    has_attachment = db.query(models.Attachment.id).filter(models.Attachment.document_id == doc.id).first() is not None
     return {
         "id": entry.id,
         "scheduled_for": entry.scheduled_for.isoformat(),
@@ -47,6 +54,7 @@ def serialize_entry(entry: models.TodaysDocument) -> dict:
             "document_type": doc.document_type,
             "status": doc.status,
             "archived": bool(doc.archived),
+            "has_attachment": has_attachment,
         },
     }
 
@@ -68,7 +76,30 @@ def list_todays_documents(
 ):
     require_permission(current_user, "set_documents_for_sb_members")
     day = scheduled_for or lgu_today()
-    return {"date": day.isoformat(), "today": lgu_today().isoformat(), "items": [serialize_entry(entry) for entry in entries_for(db, day)]}
+    return {"date": day.isoformat(), "today": lgu_today().isoformat(), "items": [serialize_entry(entry, db) for entry in entries_for(db, day)]}
+
+
+@router.get("/upcoming")
+def upcoming_todays_documents(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Today and later dates that have a list, with how many entries members cannot see (archived)."""
+    require_permission(current_user, "set_documents_for_sb_members")
+    rows = (
+        db.query(
+            models.TodaysDocument.scheduled_for,
+            func.count(models.TodaysDocument.id),
+            func.sum(case((models.Document.archived.is_(True), 1), else_=0)),
+        )
+        .join(models.Document, models.Document.id == models.TodaysDocument.document_id)
+        .filter(models.TodaysDocument.scheduled_for >= lgu_today())
+        .group_by(models.TodaysDocument.scheduled_for)
+        .order_by(models.TodaysDocument.scheduled_for.asc())
+        .limit(30)
+        .all()
+    )
+    return {"items": [{"date": day.isoformat(), "count": count, "hidden": int(hidden or 0)} for day, count, hidden in rows]}
 
 
 @router.post("")
@@ -92,13 +123,14 @@ def add_todays_document(
     if existing is not None:
         raise HTTPException(status_code=409, detail="This document is already set for that date")
 
-    last_position = db.query(func.max(models.TodaysDocument.position)).filter(
-        models.TodaysDocument.scheduled_for == payload.scheduled_for
-    ).scalar()
+    siblings = entries_for(db, payload.scheduled_for)
+    position = len(siblings) if payload.position is None else min(payload.position, len(siblings))
+    for index, sibling in enumerate(siblings):
+        sibling.position = index + 1 if index >= position else index
     entry = models.TodaysDocument(
         scheduled_for=payload.scheduled_for,
         document_id=doc.id,
-        position=(last_position + 1) if last_position is not None else 0,
+        position=position,
         note=(payload.note or "").strip() or None,
         added_by_id=current_user.id,
     )
@@ -115,7 +147,35 @@ def add_todays_document(
     )
     db.commit()
     db.refresh(entry)
-    return serialize_entry(entry)
+    return serialize_entry(entry, db)
+
+
+@router.patch("/{entry_id}")
+def change_todays_document_note(
+    entry_id: int,
+    payload: TodaysDocumentNote,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    require_permission(current_user, "set_documents_for_sb_members")
+    entry = db.query(models.TodaysDocument).filter(models.TodaysDocument.id == entry_id).first()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.scheduled_for < lgu_today():
+        raise HTTPException(status_code=400, detail="Notes can only be changed for today or a later date")
+    entry.note = (payload.note or "").strip() or None
+    record_audit_log(
+        db,
+        actor=current_user.username,
+        action="TODAYS_DOCUMENT_NOTE_CHANGED",
+        target_type="Document",
+        target_id=str(entry.document_id),
+        details=f"Note for {entry.document.tracking_number} on {entry.scheduled_for.isoformat()} changed",
+        commit=False,
+    )
+    db.commit()
+    db.refresh(entry)
+    return serialize_entry(entry, db)
 
 
 @router.delete("/{entry_id}")
@@ -157,4 +217,4 @@ def reorder_todays_documents(
     for position, entry_id in enumerate(payload.entry_ids):
         entries[entry_id].position = position
     db.commit()
-    return {"date": payload.scheduled_for.isoformat(), "items": [serialize_entry(entry) for entry in entries_for(db, payload.scheduled_for)]}
+    return {"date": payload.scheduled_for.isoformat(), "items": [serialize_entry(entry, db) for entry in entries_for(db, payload.scheduled_for)]}
