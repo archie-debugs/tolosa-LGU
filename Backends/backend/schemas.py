@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
@@ -59,6 +59,7 @@ class DocumentUpdate(BaseModel):
     attachment_name: Optional[str] = None
     qr_code_value: Optional[str] = None
     created_by: Optional[str] = None
+    due_date: Optional[str] = None
     # Archiving goes through the archive/restore routes, which check their own permissions.
 
 
@@ -95,6 +96,7 @@ class DocumentResponse(BaseModel):
     attachments: Optional[list[dict]] = None
     archived: bool
     archived_at: Optional[datetime] = None
+    due_date: Optional[date] = None
     archived_by: Optional[str] = None
     office_receipt_status: Optional[str] = None
     office_receipt_confirmed_at: Optional[datetime] = None

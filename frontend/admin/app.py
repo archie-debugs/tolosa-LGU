@@ -2050,6 +2050,7 @@ def main(page: ft.Page, session=None):
             "attachments": doc.get("attachments") or [],
             "document_number": doc.get("document_number"),
             "series_year": doc.get("series_year"),
+            "due_date": doc.get("due_date"),
             "current_office_id": doc.get("current_office_id"),
             "is_public": bool(doc.get("is_public", False)),
             "archived": bool(doc.get("archived", False)),

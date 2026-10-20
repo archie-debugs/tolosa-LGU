@@ -128,3 +128,36 @@ def test_saving_needs_a_title_and_shows_the_backend_reason():
     press(dialog, "Save changes")
     assert "Category 'X' is not an active entry in Reference Data." in texts(dialog.content)
     assert dialog.open is True
+
+
+def test_due_date_is_shown_edited_and_cleared():
+    api = FakeApi()
+    page = DummyPage()
+    dialog = ft.AlertDialog()
+    open_edit_document_dialog(page, dialog, api, {**DOCUMENT, "due_date": "2026-11-05"})
+    due = field(dialog, "Due date")
+    assert due.value == "2026-11-05"
+
+    due.value = "05-11-2026"
+    press(dialog, "Save changes")
+    assert "Enter the due date as YYYY-MM-DD, for example 2026-11-05." in texts(dialog.content)
+    assert [c for c in api.calls if c[0] == "PUT"] == []
+
+    due.value = ""
+    press(dialog, "Save changes")
+    assert api.calls[-1][2]["json"]["due_date"] is None
+
+
+def test_placeholder_dashes_from_the_details_screen_count_as_blank():
+    # Document details passes the normalized record, where missing values are "-".
+    api = FakeApi()
+    page = DummyPage()
+    dialog = ft.AlertDialog()
+    open_edit_document_dialog(page, dialog, api, {**DOCUMENT, "category": "-", "document_type": "-", "author": "-"})
+
+    assert field(dialog, "Category").value == NO_CATEGORY
+    assert "-" not in options(field(dialog, "Category"))
+    assert field(dialog, "Document Type").value == NO_TYPE
+    press(dialog, "Save changes")
+    payload = api.calls[-1][2]["json"]
+    assert (payload["category"], payload["document_type"], payload["author"]) == (None, None, None)

@@ -1,6 +1,6 @@
 """Building blocks shared by the document tracking screens (QR Tracking, Office Dashboard)."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import flet as ft
 
@@ -56,6 +56,42 @@ def event_summary(event):
     if kind == "action":
         return f"{event.get('detail') or 'Action'} · {office}"
     return event.get("detail") or ""
+
+
+# Due within this many days counts as "soon".
+DUE_SOON_DAYS = 3
+DUE_COLORS = {"overdue": ft.Colors.RED_700, "soon": ft.Colors.AMBER_800, "later": ft.Colors.BLUE_GREY_600}
+DUE_DATE_HINT = "Enter the due date as YYYY-MM-DD, for example 2026-11-05."
+
+
+def parse_due_date(value):
+    """A date from 'YYYY-MM-DD', or None when blank or malformed."""
+    text = str(value or "").strip()
+    if len(text) != 10:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def due_status(value, today=None):
+    """('Due in 3 days', 'soon') for a due date, or None without one. Kinds: overdue, soon, later."""
+    due = parse_due_date(value)
+    if due is None:
+        return None
+    today = today or date.today()
+    days = (due - today).days
+    if days < 0:
+        late = -days
+        return f"Overdue · {late} day{'s' if late != 1 else ''}", "overdue"
+    if days == 0:
+        return "Due today", "soon"
+    if days == 1:
+        return "Due tomorrow", "soon"
+    if days <= DUE_SOON_DAYS:
+        return f"Due in {days} days", "soon"
+    return f"Due {due.strftime('%b %d') if due.year == today.year else due.strftime('%b %d, %Y')}", "later"
 
 
 def document_reference(item):
@@ -161,6 +197,14 @@ class TrackingWidgets:
             spacing=1,
             expand=expand,
         )
+
+    def due_chip(self, item, today=None):
+        """The document's due chip, or None when it has no due date or is archived."""
+        status = None if item.get("archived") else due_status(item.get("due_date"), today)
+        if status is None:
+            return None
+        text, kind = status
+        return self.chip(text, DUE_COLORS[kind])
 
     def waiting_chip(self, item):
         """How long a handoff has waited for receipt, red once it is overdue."""
