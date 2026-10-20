@@ -152,7 +152,8 @@ from frontend.admin.reference_data import build_reference_data_view
 from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.todays_documents import build_todays_documents_view
-from frontend.admin.admin_shell import render_shell
+from frontend.admin.admin_shell import MENU_SECTION, render_shell
+from frontend.admin.change_password import open_change_password_dialog
 
 
 def clear_stale_session_state(state):
@@ -1406,6 +1407,12 @@ def main(page: ft.Page, session=None):
     registration_files = PickerFiles(page, registration_picker)
     current_file_picker_context = None
 
+    change_password_dialog = ft.AlertDialog()
+    page.overlay.append(change_password_dialog)
+
+    def open_change_password(_=None):
+        open_change_password_dialog(page, change_password_dialog, backend_api)
+
     def registration_api(method, path, **kwargs):
         # Registering many files can take a while.
         return backend_api(method, path, timeout=180, **kwargs)
@@ -2578,10 +2585,6 @@ def main(page: ft.Page, session=None):
             expand=False,
         )
 
-        def open_password_notice(_):
-            page.snack_bar = ft.SnackBar(ft.Text("Password change is handled through My Account."), open=True)
-            page.update()
-
         security_card = surface_card(
             ft.Column([
                 section_header("Security", "Manage account security preferences.", ft.Icons.SECURITY, ft.Colors.BLUE_700),
@@ -2590,7 +2593,7 @@ def main(page: ft.Page, session=None):
                 switch_row("Login Notifications", "login_notifications", "security"),
                 ft.Row([
                     ft.Text("Password", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200, width=220),
-                    ft.OutlinedButton("Change Password", icon=ft.Icons.LOCK_RESET, on_click=open_password_notice),
+                    ft.OutlinedButton("Change Password", icon=ft.Icons.LOCK_RESET, on_click=open_change_password),
                 ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
             ], spacing=10),
             padding=18,
@@ -2688,11 +2691,7 @@ def main(page: ft.Page, session=None):
         refreshed_nav = build_nav_items()
         if [item[1] for item in refreshed_nav] != [item[1] for item in nav_items]:
             nav_items[:] = refreshed_nav
-            render_shell(
-                page,
-                current_user,
-                logout_user,
-                nav_items,
+            show_shell(
                 ft.Column([]),
                 initial_selected_index=next(
                     (index for index, item in enumerate(nav_items) if item[1] == "My Account"),
@@ -2704,28 +2703,19 @@ def main(page: ft.Page, session=None):
         is_dark = page.theme_mode == ft.ThemeMode.DARK
         profile_user = {"full_name": None, "username": current_user, "email": None, "role": current_user_role or "Employee", "status": "Active", "created_at": None, "updated_at": None, "last_login": None, "id": None, "permissions": current_user_permissions or []}
 
-        try:
-            resp = requests.get(f"{BACKEND_URL}/auth/users", headers=get_admin_headers(), verify=False, timeout=15)
-            if resp.status_code == 200:
-                users = resp.json() or []
-                for user in users:
-                    username = (user.get("username") or "").strip()
-                    if username and current_user and username.lower() == str(current_user).lower():
-                        profile_user.update({
-                            "id": user.get("id"),
-                            "full_name": user.get("full_name") or user.get("username") or "Not provided",
-                            "username": user.get("username") or current_user or "Not provided",
-                            "email": user.get("email") or None,
-                            "role": user.get("role") or (current_user_role or "Employee"),
-                            "status": user.get("status") or "Active",
-                            "created_at": user.get("created") or user.get("created_at") or None,
-                            "updated_at": user.get("updated_at") or user.get("updated") or None,
-                            "last_login": user.get("last_login") or None,
-                            "permissions": user.get("permissions") or current_user_permissions or [],
-                        })
-                        break
-        except Exception:
-            pass
+        me = load_current_profile(force=True)
+        if me:
+            profile_user.update({
+                "id": me.get("id"),
+                "full_name": me.get("full_name") or me.get("username") or "Not provided",
+                "username": me.get("username") or current_user or "Not provided",
+                "email": me.get("email") or None,
+                "role": me.get("role") or (current_user_role or "Employee"),
+                "status": me.get("status") or "Active",
+                "created_at": me.get("created_at") or None,
+                "last_login": me.get("last_login") or None,
+                "permissions": me.get("permissions") or current_user_permissions or [],
+            })
 
         def normalize_display(value, fallback="Not provided"):
             if value is None or str(value).strip() == "":
@@ -3079,6 +3069,7 @@ def main(page: ft.Page, session=None):
                 ft.Text("My Account", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900 if not is_dark else ft.Colors.WHITE),
                 ft.Text("Manage your profile, account information, and security settings.", size=12, color=ft.Colors.BLUE_GREY_600 if not is_dark else ft.Colors.BLUE_GREY_300),
             ], spacing=2, expand=True),
+            ft.OutlinedButton("Change Password", icon=ft.Icons.LOCK_RESET, on_click=open_change_password),
             ft.ElevatedButton("Edit Profile", icon=ft.Icons.EDIT, on_click=lambda _: open_edit_profile_dialog()),
         ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
@@ -4394,6 +4385,31 @@ def main(page: ft.Page, session=None):
         dialog.open = False
         page.update()
 
+    # The signed-in account (GET /auth/me), for the profile menu and My Account.
+    current_profile = {}
+
+    def load_current_profile(force=False):
+        if force or current_profile.get("username") != current_user:
+            current_profile.clear()
+            try:
+                current_profile.update(backend_api("GET", "/auth/me"))
+            except Exception:
+                pass
+        return current_profile
+
+    def show_shell(view, initial_selected_index=0):
+        profile = load_current_profile()
+        render_shell(
+            page, current_user, logout_user, nav_items, view,
+            initial_selected_index=initial_selected_index,
+            account={
+                "name": profile.get("full_name") or current_user,
+                "role": profile.get("role") or current_user_role,
+                "office": profile.get("office"),
+                "on_change_password": open_change_password,
+            },
+        )
+
     def backend_api(method, path, timeout=15, **kwargs):
         response = requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=timeout, **kwargs)
         if response.status_code >= 400:
@@ -4430,6 +4446,7 @@ def main(page: ft.Page, session=None):
         current_user_permissions = []
         runtime_token = None
         refresh_token = None
+        current_profile.clear()
         clear_session_state()
         clear_pending_qr_token()
         show_login()
@@ -4462,11 +4479,11 @@ def main(page: ft.Page, session=None):
 
     def open_documents_module():
         target_index = next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Documents"), 0)
-        render_shell(page, current_user, logout_user, nav_items, documents_view(), initial_selected_index=target_index)
+        show_shell(documents_view(), initial_selected_index=target_index)
 
     def open_archived_documents_module():
         target_index = next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Archived Documents"), 0)
-        render_shell(page, current_user, logout_user, nav_items, archived_documents_view(), initial_selected_index=target_index)
+        show_shell(archived_documents_view(), initial_selected_index=target_index)
 
     def dashboard_view():
         analytics_payload = {}
@@ -4852,7 +4869,7 @@ def main(page: ft.Page, session=None):
             quick_action("Archived Documents", "View archived records", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_700, lambda _: open_archived_documents_module()),
         ]
         if "view_analytics" in {(p or "").strip().lower().replace(" ", "_") for p in (current_user_permissions or [])} or current_user_role == "Super Administrator":
-            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: render_shell(page, current_user, logout_user, nav_items, analytics_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Analytics"), 0))))
+            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: show_shell(analytics_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Analytics"), 0))))
 
         normalized_permissions = sorted({str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])})
         if current_user_role == "Super Administrator" and not normalized_permissions:
@@ -5106,7 +5123,7 @@ def main(page: ft.Page, session=None):
                         initial_view = nav_items[0][2]()
                     else:
                         initial_view = ft.Column([ft.Text("No available modules for this account.")])
-                    render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)
+                    show_shell(initial_view, initial_selected_index=0)
                     if role not in {"Super Administrator", "Employee", "SB Member"}:
                         page.snack_bar = ft.SnackBar(ft.Text("Your account is not approved for access yet."), open=True)
                         page.update()
@@ -5200,7 +5217,7 @@ def main(page: ft.Page, session=None):
         def open_office(office):
             nonlocal selected_monitoring_office
             selected_monitoring_office = office
-            render_shell(page, current_user, logout_user, nav_items, office_monitoring_view(office), initial_selected_index=office_dashboard_index())
+            show_shell(office_monitoring_view(office), initial_selected_index=office_dashboard_index())
 
         return build_office_overview_view(page, backend_api, surface_card, section_header, open_office)
 
@@ -5214,7 +5231,7 @@ def main(page: ft.Page, session=None):
     def return_to_office_overview():
         nonlocal selected_monitoring_office
         selected_monitoring_office = None
-        render_shell(page, current_user, logout_user, nav_items, office_overview_view(), initial_selected_index=office_dashboard_index())
+        show_shell(office_overview_view(), initial_selected_index=office_dashboard_index())
 
     def office_monitoring_view(selected_office=None):
         nonlocal office_dashboard_refresh
@@ -5284,8 +5301,8 @@ def main(page: ft.Page, session=None):
         if is_super_admin or has_permission("view_audit_logs"):
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view(), "Administration"))
 
-        # Account (pinned to the bottom of the sidebar)
-        items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view(), "Account"))
+        # Account: My Account opens from the profile menu; Settings is pinned to the bottom of the sidebar.
+        items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view(), MENU_SECTION))
         items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view(), "Account"))
         return items
 
@@ -5329,7 +5346,7 @@ def main(page: ft.Page, session=None):
             refresh_runtime_token_if_needed(force=True)
             nav_items[:] = build_nav_items()
             initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
-            render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)
+            show_shell(initial_view, initial_selected_index=0)
             return True
         except Exception:
             return False
@@ -5347,7 +5364,7 @@ def main(page: ft.Page, session=None):
             return
         nav_items[:] = build_nav_items()
         initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
-        render_shell(page, current_user, logout_user, nav_items, initial_view, initial_selected_index=0)
+        show_shell(initial_view, initial_selected_index=0)
     elif not restore_saved_session():
         show_login()
 
