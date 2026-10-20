@@ -33,6 +33,9 @@ def render_shell(
     account = account or {}
     selected_index = initial_selected_index
     shell_nav_items = list(nav_items)
+    # Below COMPACT_WIDTH the sidebar becomes a drawer opened from the profile bar.
+    compact = (getattr(page, "width", None) or 1200) < COMPACT_WIDTH
+    drawer_open = False
     is_dark = page.theme_mode == ft.ThemeMode.DARK
     try:
         stored_night_mode = page.client_storage.get("sb_night_mode")
@@ -138,6 +141,7 @@ def render_shell(
         selected_index = index
         build_nav()
         build_profile_bar()
+        set_drawer(False)
 
         try:
             next_view = shell_nav_items[index][2]()
@@ -250,6 +254,8 @@ def render_shell(
             pass
         page.bgcolor = surface_color
         content_holder.bgcolor = surface_color
+        main_panel.bgcolor = surface_color
+        style_sidebar()
         switch_view(selected_index)
 
     # =========================================================
@@ -386,7 +392,6 @@ def render_shell(
     def build_profile_bar():
         name = account.get("name") or current_user or "Signed in"
         muted = ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_500
-        compact = (getattr(page, "width", None) or 1200) < COMPACT_WIDTH
 
         avatar = ft.CircleAvatar(
             content=ft.Text(initials(name), size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
@@ -424,8 +429,11 @@ def render_shell(
             menu_entry(ft.Icons.LOGOUT, "Log out", lambda e: logout_user(), color=(ft.Colors.RED_300 if is_dark else ft.Colors.RED_700)),
         ]
 
+        leading = []
+        if compact:
+            leading = [ft.IconButton(ft.Icons.MENU, icon_color=heading_color, tooltip="Menu", on_click=lambda e: set_drawer(not drawer_open))]
         profile_bar.content = ft.Row(
-            [
+            leading + [
                 ft.PopupMenuButton(
                     content=ft.Container(
                         content=ft.Row(button, spacing=8, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -437,10 +445,97 @@ def render_shell(
                     tooltip="Account",
                 ),
             ],
-            alignment=ft.MainAxisAlignment.END,
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN if compact else ft.MainAxisAlignment.END,
         )
         profile_bar.bgcolor = surface_color
         profile_bar.border = ft.Border(bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_GREY_100))
+
+    # =========================================================
+    # LAYOUT: sidebar beside the screen, or a drawer over it
+    # =========================================================
+
+    sidebar_panel = ft.Container(
+        width=220,
+        padding=ft.Padding(left=0, top=8, right=6, bottom=0),
+        content=ft.Column(
+            controls=[
+                ft.Column(controls=[nav_container], expand=True, scroll=ft.ScrollMode.AUTO),
+                ft.Divider(height=1, color=(ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_GREY_100)),
+                ft.Container(content=footer_container, padding=ft.Padding(left=0, top=4, right=0, bottom=8)),
+            ],
+            expand=True,
+            spacing=0,
+        ),
+        border=None,
+        border_radius=0,
+        alignment=ft.Alignment.TOP_CENTER,
+    )
+    main_panel = ft.Container(
+        expand=True,
+        padding=ft.Padding(top=8, left=8, right=8, bottom=8),
+        bgcolor=surface_color,
+        border=None,
+        border_radius=0,
+        content=ft.Column([profile_bar, content_holder], expand=True, spacing=4),
+    )
+    scrim = ft.Container(
+        left=0, top=0, right=0, bottom=0,
+        bgcolor=ft.Colors.with_opacity(0.45, ft.Colors.BLACK),
+        visible=False,
+        on_click=lambda e: set_drawer(False),
+    )
+
+    def style_sidebar():
+        # The drawer floats over the screen, so it needs a solid background.
+        sidebar_panel.bgcolor = sidebar_color or (surface_color if compact else None)
+        sidebar_panel.shadow = ft.BoxShadow(blur_radius=16, color=ft.Colors.with_opacity(0.3, ft.Colors.BLACK)) if compact else None
+
+    def set_drawer(opened):
+        nonlocal drawer_open
+        drawer_open = bool(opened) and compact
+        scrim.visible = drawer_open
+        if compact:
+            sidebar_panel.visible = drawer_open
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def layout():
+        style_sidebar()
+        if compact:
+            sidebar_panel.height = None
+            sidebar_panel.left, sidebar_panel.top, sidebar_panel.bottom = 0, 0, 0
+            sidebar_panel.visible = drawer_open
+            scrim.visible = drawer_open
+            main_panel.left, main_panel.top, main_panel.right, main_panel.bottom = 0, 0, 0, 0
+            return ft.Stack([main_panel, scrim, sidebar_panel], expand=True)
+        sidebar_panel.height = float("inf")
+        sidebar_panel.left = sidebar_panel.top = sidebar_panel.bottom = None
+        sidebar_panel.visible = True
+        main_panel.left = main_panel.top = main_panel.right = main_panel.bottom = None
+        return ft.Row([sidebar_panel, main_panel], expand=True, spacing=0, vertical_alignment=ft.CrossAxisAlignment.START)
+
+    def show_layout():
+        page.clean()
+        page.add(layout())
+
+    def page_resized(_=None):
+        nonlocal compact, drawer_open
+        now_compact = (getattr(page, "width", None) or 1200) < COMPACT_WIDTH
+        if now_compact == compact:
+            return
+        compact = now_compact
+        drawer_open = False
+        build_profile_bar()
+        show_layout()
+        page.update()
+
+    # Flet 0.28 names the resize event on_resized; other releases use on_resize.
+    if hasattr(type(page), "on_resized"):
+        page.on_resized = page_resized
+    else:
+        page.on_resize = page_resized
 
     # =========================================================
     # INITIAL NAVIGATION
@@ -449,81 +544,10 @@ def render_shell(
     build_nav()
     build_profile_bar()
 
-    # =========================================================
-    # RESET PAGE
-    # =========================================================
-
-    page.clean()
-
     page.horizontal_alignment = ft.CrossAxisAlignment.START
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.bgcolor = surface_color
-
-    # =========================================================
-    # MAIN LAYOUT
-    # =========================================================
-
-    page.add(
-        ft.Row(
-            [
-                # =================================================
-                # SIDEBAR
-                # =================================================
-
-                ft.Container(
-                    width=220,
-                    height=float("inf"),
-                    padding=ft.Padding(
-                        left=0,
-                        top=8,
-                        right=6,
-                        bottom=0,
-                    ),
-                    content=ft.Column(
-                        controls=[
-                            ft.Column(
-                                controls=[nav_container],
-                                expand=True,
-                                scroll=ft.ScrollMode.AUTO,
-                            ),
-                            ft.Divider(height=1, color=(ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_GREY_100)),
-                            ft.Container(
-                                content=footer_container,
-                                padding=ft.Padding(left=0, top=4, right=0, bottom=8),
-                            ),
-                        ],
-                        expand=True,
-                        spacing=0,
-                    ),
-                    bgcolor=sidebar_color,
-                    border=None,
-                    border_radius=0,
-                    alignment=ft.Alignment.TOP_CENTER,
-                ),
-
-                # =================================================
-                # MAIN CONTENT
-                # =================================================
-
-                ft.Container(
-                    expand=True,
-                    padding=ft.Padding(
-                        top=8,
-                        left=8,
-                        right=8,
-                        bottom=8,
-                    ),
-                    bgcolor=surface_color,
-                    border=None,
-                    border_radius=0,
-                    content=ft.Column([profile_bar, content_holder], expand=True, spacing=4),
-                ),
-            ],
-            expand=True,
-            spacing=0,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-        )
-    )
+    show_layout()
 
     # =========================================================
     # UPDATE PAGE
