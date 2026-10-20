@@ -3,6 +3,7 @@ import flet as ft
 
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.change_password import open_change_password_dialog
+from frontend.admin.edit_profile import open_edit_profile_dialog
 
 
 class Storage:
@@ -260,3 +261,53 @@ def test_change_password_success_posts_and_confirms():
     assert any("Your password has been changed." in text for text in shown)
     assert any("signed out" in text for text in shown)
     assert not find(dialog.content, ft.TextField)
+
+
+class ProfileApi:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def __call__(self, method, path, **kwargs):
+        self.calls.append((method, path, kwargs))
+        if self.error:
+            raise Exception(self.error)
+        return {"full_name": kwargs["json"]["full_name"], "email": kwargs["json"]["email"]}
+
+
+def profile_dialog(api, saved):
+    page = DummyPage()
+    dialog = ft.AlertDialog()
+    open_edit_profile_dialog(page, dialog, api, {"full_name": "Ana Bautista", "email": "ana@example.com", "username": "ana"},
+                             on_saved=saved.append)
+    name, email = find(dialog.content, ft.TextField)
+    return dialog, name, email
+
+
+def test_edit_profile_saves_through_the_own_account_endpoint():
+    api, saved = ProfileApi(), []
+    dialog, name, email = profile_dialog(api, saved)
+    assert (name.value, email.value) == ("Ana Bautista", "ana@example.com")
+
+    name.value = "Ana B. Reyes"
+    press(next(b for b in walk(dialog) if "Save changes" in texts(b) or getattr(b, "text", None) == "Save changes"))
+
+    assert api.calls == [("PUT", "/auth/me", {"json": {"full_name": "Ana B. Reyes", "email": "ana@example.com"}})]
+    assert saved == [{"full_name": "Ana B. Reyes", "email": "ana@example.com"}]
+    assert dialog.open is False
+
+
+def test_edit_profile_checks_fields_and_shows_the_backend_reason():
+    api, saved = ProfileApi(error="Enter a valid email address."), []
+    dialog, name, email = profile_dialog(api, saved)
+    save = next(b for b in walk(dialog) if "Save changes" in texts(b) or getattr(b, "text", None) == "Save changes")
+
+    name.value = " "
+    press(save)
+    assert "Full name is required." in texts(dialog.content)
+    assert api.calls == []
+
+    name.value, email.value = "Ana", "nope"
+    press(save)
+    assert "Enter a valid email address." in texts(dialog.content)
+    assert dialog.open is True and saved == []

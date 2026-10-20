@@ -119,3 +119,46 @@ def test_change_password_signs_out_other_sessions_but_keeps_this_one(client):
 
 def test_change_password_requires_a_signed_in_user(client):
     assert change_password(client, {}).status_code == 401
+
+
+def update_me(client, headers, **payload):
+    return client.put("/auth/me", headers=headers, json=payload)
+
+
+def test_update_me_changes_your_own_name_and_email_and_audits_it(client):
+    response = update_me(client, headers_for(client), full_name="  Ana B. Reyes ", email="ana.reyes@example.com")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["full_name"], body["email"], body["office"]) == ("Ana B. Reyes", "ana.reyes@example.com", "Treasury Office")
+    with SessionLocal() as db:
+        user = db.query(models.User).filter_by(username="ana").one()
+        assert (user.full_name, user.email, user.role) == ("Ana B. Reyes", "ana.reyes@example.com", "Employee")
+        audit = db.query(models.AuditLog).filter_by(action="PROFILE_UPDATED").one()
+        assert audit.actor == "ana"
+
+
+@pytest.mark.parametrize("payload, message", [
+    ({"full_name": "  ", "email": "ana@example.com"}, "Full name is required."),
+    ({"full_name": "Ana", "email": ""}, "Email is required."),
+    ({"full_name": "Ana", "email": "not-an-email"}, "Enter a valid email address."),
+])
+def test_update_me_validates_name_and_email(client, payload, message):
+    response = update_me(client, headers_for(client), **payload)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == message
+
+
+def test_update_me_cannot_change_role_office_or_username(client):
+    response = update_me(client, headers_for(client), full_name="Ana", email="ana@example.com",
+                         role="Super Administrator", username="boss", office_id=None, permissions=["*"])
+
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        user = db.query(models.User).filter_by(full_name="Ana").one()
+        assert (user.username, user.role, user.office_id is not None) == ("ana", "Employee", True)
+
+
+def test_update_me_requires_a_signed_in_user(client):
+    assert update_me(client, {}, full_name="Ana", email="ana@example.com").status_code == 401
