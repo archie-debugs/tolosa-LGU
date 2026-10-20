@@ -5345,7 +5345,10 @@ def main(page: ft.Page, session=None):
         return response.json() if response.content else {}
 
     def todays_documents_page():
-        return build_todays_documents_view(page, backend_api, surface_card, section_header)
+        return build_todays_documents_view(
+            page, backend_api, surface_card, section_header,
+            open_details=show_document_details if has_permission("view_document_details") else None,
+        )
 
     def users_role_page():
         return users_roles_view()
