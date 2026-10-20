@@ -155,6 +155,7 @@ from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.change_password import open_change_password_dialog
+from frontend.admin.edit_profile import open_edit_profile_dialog as open_profile_dialog
 
 
 def clear_stale_session_state(state):
@@ -1412,6 +1413,16 @@ def main(page: ft.Page, session=None):
 
     def open_change_password(_=None):
         open_change_password_dialog(page, change_password_dialog, backend_api)
+
+    edit_profile_dialog = ft.AlertDialog()
+    page.overlay.append(edit_profile_dialog)
+
+    def profile_saved(account):
+        current_profile.clear()
+        current_profile.update(account)
+        show_document_notice("Profile updated.")
+        # Redraw the shell so the profile bar shows the new name.
+        show_shell(account_view(), initial_selected_index=next((i for i, item in enumerate(nav_items) if item[1] == "My Account"), 0))
 
     def registration_api(method, path, **kwargs):
         # Registering many files can take a while.
@@ -2679,86 +2690,7 @@ def main(page: ft.Page, session=None):
             return ft.Wrap(chips, spacing=8, run_spacing=8)
 
         def open_edit_profile_dialog():
-            user_id = profile_user.get("id")
-            full_name_field = ft.TextField(label="Full Name", value=profile_user.get("full_name") or "", width=260)
-            email_field = ft.TextField(label="Email", value=profile_user.get("email") or "", width=260)
-            note_text = ft.Text("You can update your profile details here. Username, role, and permissions remain read-only.", size=12, color=ft.Colors.BLUE_GREY_600)
-            error_text = ft.Text("", size=12, color=ft.Colors.RED_700)
-
-            def save_profile(_):
-                name = (full_name_field.value or "").strip()
-                email = (email_field.value or "").strip()
-                if not name or not email:
-                    error_text.value = "Full name and email are required."
-                    page.update()
-                    return
-                payload = {
-                    "full_name": name,
-                    "username": profile_user.get("username") or current_user,
-                    "email": email,
-                    "role": profile_user.get("role") or current_user_role or "Employee",
-                    "status": profile_user.get("status") or "Active",
-                    "permissions": normalized_permissions,
-                }
-                if user_id is None:
-                    profile_user["full_name"] = name
-                    profile_user["email"] = email
-                    page.snack_bar = ft.SnackBar(ft.Text("Profile updated locally for this session."), open=True)
-                    page.update()
-                    return
-                try:
-                    response = requests.put(
-                        f"{BACKEND_URL}/auth/users/{user_id}",
-                        json=payload,
-                        headers=get_admin_headers(),
-                        verify=False,
-                        timeout=20,
-                    )
-                    if response.status_code != 200:
-                        detail = response.text
-                        try:
-                            detail = response.json().get("detail", detail)
-                        except Exception:
-                            pass
-                        raise ValueError(detail)
-                    body = response.json()
-                    profile_user["full_name"] = body.get("full_name") or name
-                    profile_user["email"] = body.get("email") or email
-                    page.snack_bar = ft.SnackBar(ft.Text("Profile updated successfully."), open=True)
-                    page.update()
-                except Exception as exc:
-                    error_text.value = f"Unable to save profile: {exc}"
-                    page.update()
-                    return
-                dialog.open = False
-                page.update()
-
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Edit Profile"),
-                content=ft.Container(
-                    content=ft.Column([
-                        note_text,
-                        full_name_field,
-                        email_field,
-                        error_text,
-                    ], width=420, spacing=12),
-                    padding=ft.Padding(0, 0, 0, 0),
-                ),
-                actions=[
-                    ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
-                    ft.Button("Save Changes", on_click=save_profile, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-                ],
-            )
-
-            def close_dialog(dialog_ref):
-                dialog_ref.open = False
-                page.update()
-
-            if dialog not in page.overlay:
-                page.overlay.append(dialog)
-            dialog.open = True
-            page.update()
+            open_profile_dialog(page, edit_profile_dialog, backend_api, profile_user, on_saved=profile_saved)
 
         avatar_text = (profile_user["full_name"] or profile_user["username"] or "User").split()
         initials = "".join(part[0].upper() for part in avatar_text[:2]) if avatar_text else "U"

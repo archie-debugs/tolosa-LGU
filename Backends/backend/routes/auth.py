@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import timedelta
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
@@ -38,6 +39,14 @@ class UserUpdate(BaseModel):
 class PasswordReset(BaseModel):
     new_password: str
     confirm_password: str
+
+
+class ProfileUpdate(BaseModel):
+    full_name: str = ""
+    email: str = ""
+
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class PasswordChange(BaseModel):
@@ -435,21 +444,59 @@ def reset_user_password(
     return {"message": "User password reset successfully", "id": user.id}
 
 
+def _my_account(user: models.User) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "full_name": getattr(user, "full_name", None) or None,
+        "email": getattr(user, "email", None) or None,
+        "role": normalize_user_role(user.role),
+        "office": user.office.name if getattr(user, "office", None) else None,
+        "status": getattr(user, "status", None) or "Active",
+        "permissions": sorted(normalize_permissions(getattr(user, "permissions", None))),
+        "last_login": user.last_login.isoformat() if user.last_login else None,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
 @router.get("/auth/me")
 def read_my_account(current_user: models.User = Depends(get_current_user)):
     """The signed-in account, for the profile menu and My Account."""
-    return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "full_name": getattr(current_user, "full_name", None) or None,
-        "email": getattr(current_user, "email", None) or None,
-        "role": normalize_user_role(current_user.role),
-        "office": current_user.office.name if getattr(current_user, "office", None) else None,
-        "status": getattr(current_user, "status", None) or "Active",
-        "permissions": sorted(normalize_permissions(getattr(current_user, "permissions", None))),
-        "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
-        "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
-    }
+    return _my_account(current_user)
+
+
+@router.put("/auth/me")
+def update_my_account(
+    payload: ProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Change your own name and email. Username, role, office and permissions stay with the Super Admin."""
+    full_name = (payload.full_name or "").strip()
+    email = (payload.email or "").strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Full name is required.")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+    if not EMAIL_PATTERN.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+
+    user = db.query(models.User).filter(models.User.id == current_user.id).one()
+    changed = [field for field, value in (("full_name", full_name), ("email", email)) if getattr(user, field) != value]
+    user.full_name = full_name
+    user.email = email
+    db.commit()
+    db.refresh(user)
+    if changed:
+        record_audit_log(
+            db,
+            actor=user.username,
+            action="PROFILE_UPDATED",
+            target_type="User",
+            target_id=str(user.id),
+            details=f"{user.username} updated their own profile; fields={','.join(changed)}",
+        )
+    return _my_account(user)
 
 
 @router.post("/auth/me/password")
