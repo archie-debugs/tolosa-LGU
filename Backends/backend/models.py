@@ -172,6 +172,8 @@ class User(Base):
     status = Column(String, nullable=False, default="Active", index=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
     last_login = Column(DateTime, nullable=True, index=True)
+    # Notifications that happened after this are unread (routes/notifications.py).
+    notifications_seen_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
