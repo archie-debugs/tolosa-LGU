@@ -156,6 +156,7 @@ from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.change_password import open_change_password_dialog
 from frontend.admin.edit_profile import open_edit_profile_dialog as open_profile_dialog
+from frontend.admin.two_step import login_needs_code, two_step_row
 
 
 def clear_stale_session_state(state):
@@ -1422,6 +1423,13 @@ def main(page: ft.Page, session=None):
         current_profile.update(account)
         show_document_notice("Profile updated.")
         # Redraw the shell so the profile bar shows the new name.
+        show_shell(account_view(), initial_selected_index=next((i for i, item in enumerate(nav_items) if item[1] == "My Account"), 0))
+
+    two_step_dialog = ft.AlertDialog()
+    page.overlay.append(two_step_dialog)
+
+    def two_step_changed():
+        show_document_notice("Two-step login updated.")
         show_shell(account_view(), initial_selected_index=next((i for i, item in enumerate(nav_items) if item[1] == "My Account"), 0))
 
     def registration_api(method, path, **kwargs):
@@ -2842,6 +2850,9 @@ def main(page: ft.Page, session=None):
                     ft.Text("Last Login", size=12, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400, width=120),
                     ft.Text(format_datetime(profile_user["last_login"]), size=13, weight=ft.FontWeight.W_500),
                 ]),
+                *([two_step_row(page, two_step_dialog, backend_api, me or {}, on_changed=two_step_changed,
+                                label_color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400)]
+                  if profile_user["role"] == "Super Administrator" else []),
             ], spacing=12),
             padding=18,
             expand=False,
@@ -4908,6 +4919,8 @@ def main(page: ft.Page, session=None):
 
         username_field = ft.TextField(label="Username", prefix_icon=ft.Icons.PERSON_OUTLINE, autofocus=True)
         password_field = ft.TextField(label="Password", password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK_OUTLINE)
+        # Shown when the backend asks for the second step; recovery codes go in the same field.
+        code_field = ft.TextField(label="6-digit code or recovery code", prefix_icon=ft.Icons.PIN_OUTLINED, visible=False)
         login_error = ft.Text("", size=12, color=ft.Colors.RED_700)
 
         def attempt_login(_):
@@ -4922,7 +4935,17 @@ def main(page: ft.Page, session=None):
                 return
 
             try:
-                res = requests.post(f"{BACKEND_URL}/auth/login", data={"username": username, "password": password}, verify=False, timeout=10)
+                data = {"username": username, "password": password}
+                if code_field.visible:
+                    data["code"] = "".join((code_field.value or "").split())
+                res = requests.post(f"{BACKEND_URL}/auth/login", data=data, verify=False, timeout=10)
+                if login_needs_code(res):
+                    code_field.visible = True
+                    code_field.value = ""
+                    login_error.value = res.json().get("detail") or "Enter the 6-digit code from your authenticator app."
+                    page.update()
+                    code_field.focus()
+                    return
                 if res.status_code == 200:
                     payload = res.json()
                     runtime_token = payload.get("access_token")
@@ -5006,6 +5029,7 @@ def main(page: ft.Page, session=None):
                                     ft.Text("Sign in to continue to the management system.", size=13, color=ft.Colors.BLUE_GREY_600),
                                     username_field,
                                     password_field,
+                                    code_field,
                                     login_error,
                                     ft.Container(
                                         content=login_btn,

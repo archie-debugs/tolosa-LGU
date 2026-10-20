@@ -32,6 +32,27 @@ python scripts/run/run_flet_employee.py
 
 Frontend roles are physically organized under `frontend/admin`, `frontend/employee`, and `frontend/sb_member`. Administrators and employees share the permission-aware document workspace so they see the same records, while each role has its own entrypoint and launcher.
 
+## Database updates
+
+Starting the backend does **not** update the database. After every `git pull`, run:
+
+```
+.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m alembic current
+```
+
+`alembic` reads `DATABASE_URL` from `.env`, so there is no need to type the password. `current` should end with `(head)`. Skipping this makes new features fail with database errors.
+
+## Two-step login
+
+A Super Admin can turn on two-step login under My Account → Security. Login then asks for the 6-digit code from an authenticator app, or one of the recovery codes shown when it was turned on.
+
+If someone loses both their phone and their recovery codes, turn it off on the server:
+
+```
+.venv\Scripts\python.exe scripts\reset_two_step.py <username>
+```
+
 ## Local HTTP / HTTPS behavior
 
 This project is configured for local development over HTTP by default. The `.env` file can set `DEV_HTTP=1` to force HTTP even when certificate files are present.
