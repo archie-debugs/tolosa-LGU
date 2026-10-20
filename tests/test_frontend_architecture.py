@@ -39,3 +39,11 @@ def test_employee_login_routes_to_employee_entrypoint():
     admin_app = (ROOT / "frontend" / "admin" / "app.py").read_text(encoding="utf-8")
     assert "from frontend.employee.app import main as employee_main" in admin_app
     assert "employee_main(page, session=payload)" in admin_app
+
+
+def test_document_details_dialog_lives_in_its_own_module():
+    admin_app = (ROOT / "frontend" / "admin" / "app.py").read_text(encoding="utf-8")
+    assert "from frontend.admin.document_details import open_document_details" in admin_app
+    # What an office may do with a document comes from the backend's overview, not from client-side receipt checks.
+    assert "office_receipt_status" not in admin_app
+    assert "/receipts" not in admin_app

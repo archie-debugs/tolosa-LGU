@@ -1259,6 +1259,21 @@ def count_received_office_documents(
     return {"office_id": monitoring_office_id, "total": total}
 
 
+def _associated_with_office(db: Session, office_id: int):
+    """Documents an office may open: ones it is associated with, or ones sent to it."""
+    return or_(
+        models.Document.id.in_(
+            db.query(models.DocumentOffice.document_id).filter(models.DocumentOffice.office_id == office_id)
+        ),
+        models.Document.id.in_(
+            db.query(models.DocumentHandoff.document_id).filter(
+                models.DocumentHandoff.receiving_office_id == office_id,
+                models.DocumentHandoff.status.in_(("Pending Receipt", "Received")),
+            )
+        ),
+    )
+
+
 @router.get("/office/{document_id:int}")
 def get_office_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     require_permission(current_user, "view_office_document_details")
@@ -1266,19 +1281,7 @@ def get_office_document(document_id: int, db: Session = Depends(get_db), current
         raise HTTPException(status_code=403, detail="Office assignment required")
     doc = db.query(models.Document).filter(
         models.Document.id == document_id,
-        or_(
-            models.Document.id.in_(
-                db.query(models.DocumentOffice.document_id).filter(
-                    models.DocumentOffice.office_id == current_user.office_id
-                )
-            ),
-            models.Document.id.in_(
-                db.query(models.DocumentHandoff.document_id).filter(
-                    models.DocumentHandoff.receiving_office_id == current_user.office_id,
-                    models.DocumentHandoff.status.in_(("Pending Receipt", "Received")),
-                )
-            ),
-        ),
+        _associated_with_office(db, current_user.office_id),
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found or not associated with your office")
@@ -2570,6 +2573,8 @@ def create_document_action(
     )
     if receipt is None:
         raise HTTPException(status_code=403, detail="A completed receipt is required before recording an action")
+    if not _office_holds_document(db, doc, current_user.office_id):
+        raise HTTPException(status_code=403, detail="This document is no longer held by your office")
 
     action = models.DocumentAction(
         document_id=doc.id,
@@ -2763,16 +2768,35 @@ def _scan_document(db: Session, current_user: models.User, qr_value: str) -> mod
     return doc
 
 
-@router.get("/qr/{qr_value:path}/trail")
-def qr_tracking_trail(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """Where a scanned document is now and every office it has passed through, newest first."""
-    require_permission(current_user, "view_qr_tracking")
-    doc = _scan_document(db, current_user, qr_value)
+def _office_holds_document(db: Session, doc: models.Document, office_id: int | None) -> bool:
+    """Whether an office has the document now: by the custody rule handoffs use, and
+    neither archived nor on its way to another office."""
+    if office_id is None or doc.archived:
+        return False
+    if doc.current_office_id is not None:
+        holds = doc.current_office_id == office_id
+    else:
+        holds = db.query(models.DocumentOffice.id).filter(
+            models.DocumentOffice.document_id == doc.id,
+            models.DocumentOffice.office_id == office_id,
+        ).first() is not None
+    in_transit = db.query(models.DocumentHandoff.id).filter(
+        models.DocumentHandoff.document_id == doc.id,
+        models.DocumentHandoff.status == "Pending Receipt",
+    ).first() is not None
+    return holds and not in_transit
 
+
+def _document_trail(db: Session, doc: models.Document, actions_of_office: int | None = None) -> tuple[list[dict], dict]:
+    """Every tracking event of a document, newest first, and where it is now.
+    With `actions_of_office`, only that office's actions are included."""
     handoffs = db.query(models.DocumentHandoff).filter(models.DocumentHandoff.document_id == doc.id).all()
+    actions = db.query(models.DocumentAction).filter(models.DocumentAction.document_id == doc.id)
+    if actions_of_office is not None:
+        actions = actions.filter(models.DocumentAction.office_id == actions_of_office)
     events = [_handoff_event(row) for row in handoffs]
     events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).filter(models.DocumentReceipt.document_id == doc.id)]
-    events += [_action_event(row) for row in db.query(models.DocumentAction).filter(models.DocumentAction.document_id == doc.id)]
+    events += [_action_event(row) for row in actions]
     events.append({
         "type": "registered",
         "at": _utc_iso(doc.created_at),
@@ -2786,20 +2810,35 @@ def qr_tracking_trail(qr_value: str, db: Session = Depends(get_db), current_user
 
     pending = next((row for row in handoffs if row.status == "Pending Receipt"), None)
     if doc.archived:
-        location = {"state": "archived", "office": doc.current_office, "to_office": None, "since": _utc_iso(doc.archived_at)}
+        location = {"state": "archived", "office": doc.current_office, "to_office": None, "since": _utc_iso(doc.archived_at), "actor": doc.archived_by}
     elif pending is not None:
         location = {
             "state": "in_transit",
             "office": pending.sending_office.name if pending.sending_office else None,
             "to_office": pending.receiving_office.name if pending.receiving_office else None,
             "since": _utc_iso(pending.sent_at),
+            "actor": _employee_name(pending.sending_employee),
         }
     elif doc.current_office:
         last_move = next((event for event in events if event["type"] in ("received", "registered")), None)
-        location = {"state": "held", "office": doc.current_office, "to_office": None, "since": last_move["at"] if last_move else None}
+        location = {
+            "state": "held",
+            "office": doc.current_office,
+            "to_office": None,
+            "since": last_move["at"] if last_move else None,
+            "actor": last_move["actor"] if last_move else None,
+        }
     else:
-        location = {"state": "unrouted", "office": None, "to_office": None, "since": _utc_iso(doc.created_at)}
+        location = {"state": "unrouted", "office": None, "to_office": None, "since": _utc_iso(doc.created_at), "actor": None}
+    return events, location
 
+
+@router.get("/qr/{qr_value:path}/trail")
+def qr_tracking_trail(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Where a scanned document is now and every office it has passed through, newest first."""
+    require_permission(current_user, "view_qr_tracking")
+    doc = _scan_document(db, current_user, qr_value)
+    events, location = _document_trail(db, doc)
     return {
         "document": {
             "id": doc.id,
@@ -2813,6 +2852,60 @@ def qr_tracking_trail(qr_value: str, db: Session = Depends(get_db), current_user
         "location": location,
         "events": events,
     }
+
+
+@router.get("/{document_id:int}/overview")
+def document_overview(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Everything the document details screen shows: the document, where it is, its trail,
+    and what the current user's office can do with it now.
+
+    Users who may view any document get the full record and trail. Office staff get the
+    office view of documents associated with their office, with only their office's actions.
+    """
+    full_access = user_has_permission(current_user, "view_document_details")
+    office_id = getattr(current_user, "office_id", None)
+    if not full_access and not user_has_permission(current_user, "view_office_document_details"):
+        raise HTTPException(status_code=403, detail="Permission denied")
+    query = db.query(models.Document).filter(models.Document.id == document_id)
+    if not full_access:
+        if office_id is None:
+            raise HTTPException(status_code=403, detail="Office assignment required")
+        query = query.filter(_associated_with_office(db, office_id))
+    doc = query.first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if full_access:
+        document = _serialize_document(doc)
+    else:
+        document = _serialize_office_document(doc)
+        document["attachments"] = [
+            {"id": row.id, "original_filename": row.original_filename, "mime_type": row.mime_type, "size": row.size}
+            for row in db.query(models.Attachment).filter(models.Attachment.document_id == doc.id)
+        ]
+    events, location = _document_trail(db, doc, actions_of_office=None if full_access else office_id)
+
+    holds = _office_holds_document(db, doc, office_id)
+    sent_here = office_id is not None and not doc.archived and db.query(models.DocumentHandoff.id).filter(
+        models.DocumentHandoff.document_id == doc.id,
+        models.DocumentHandoff.receiving_office_id == office_id,
+        models.DocumentHandoff.status == "Pending Receipt",
+    ).first() is not None
+    received_here = holds and db.query(models.DocumentReceipt.id).filter(
+        models.DocumentReceipt.document_id == doc.id,
+        models.DocumentReceipt.office_id == office_id,
+        models.DocumentReceipt.status == "Received",
+    ).first() is not None
+    office_staff = user_has_permission(current_user, "scan_qr") and user_has_permission(current_user, "view_office_document_details")
+    can = {
+        "receive": sent_here and office_staff and user_has_permission(current_user, "confirm_document_receipt"),
+        "pass": holds
+        and normalize_user_role(getattr(current_user, "role", None)) in {"Employee", "Super Administrator"}
+        and user_has_permission(current_user, "pass_office_documents"),
+        # Actions belong to a receipt, so the registering office records none until it receives the document back.
+        "record_action": received_here and office_staff,
+    }
+    return {"document": document, "location": location, "events": events, "can": can}
 
 
 @router.get("/qr/{qr_value:path}/office")
