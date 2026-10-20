@@ -6,7 +6,7 @@ from datetime import date
 
 import flet as ft
 
-from frontend.admin.tracking_ui import TrackingWidgets
+from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date
 
 ALLOWED_EXTENSIONS = ("pdf", "doc", "docx")
 PRIORITIES = ("Low", "Medium", "High")
@@ -142,9 +142,14 @@ class _Form:
             disabled=options["office_locked"],
         )
         self.priority = ft.Dropdown(label="Priority", options=[ft.dropdown.Option(name) for name in PRIORITIES], value="Medium", width=240)
+        self.due_date = ft.TextField(label="Due date", hint_text="YYYY-MM-DD (optional)", width=240)
         self.assigned_to = ft.TextField(label="Assigned to", width=240)
         self.author = ft.TextField(label="Author", width=240)
         self.description = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=3)
+
+    def due_problem(self):
+        text = (self.due_date.value or "").strip()
+        return DUE_DATE_HINT if text and parse_due_date(text) is None else None
 
     def office_name(self):
         return next((office["name"] for office in self.options["offices"] if str(office["id"]) == str(self.office.value)), None)
@@ -164,13 +169,14 @@ class _Form:
             "category": self.category.value if self.category.value not in (None, "", NO_CATEGORY) else None,
             "office_id": int(self.office.value) if self.office.value else None,
             "priority": self.priority.value or "Medium",
+            "due_date": (self.due_date.value or "").strip() or None,
             "assigned_to": (self.assigned_to.value or "").strip() or None,
             "author": (self.author.value or "").strip() or None,
             "description": (self.description.value or "").strip() or None,
         }
 
     def lock(self, locked):
-        for control in (self.document_type, self.category, self.priority, self.assigned_to, self.author, self.description):
+        for control in (self.document_type, self.category, self.priority, self.due_date, self.assigned_to, self.author, self.description):
             control.disabled = locked
         self.office.disabled = locked or self.options["office_locked"]
 
@@ -329,7 +335,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
             message.value = "Enter the document's title."
             page.update()
             return
-        problem = form.office_problem()
+        problem = form.office_problem() or form.due_problem()
         if problem:
             message.value = problem
             page.update()
@@ -471,7 +477,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         form.section("The document"),
         title,
         ft.Row([number, year, form.document_type], spacing=12, wrap=True, run_spacing=12),
-        ft.Row([form.category, form.priority], spacing=12, wrap=True, run_spacing=12),
+        ft.Row([form.category, form.priority, form.due_date], spacing=12, wrap=True, run_spacing=12),
         form.section("Where it starts"),
         form.office,
         widgets.hint("Employees register into their own office." if options["office_locked"] else "The office that holds the document first."),
@@ -696,7 +702,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
         if status["busy"]:
             return
         message.value = ""
-        problem = form.office_problem()
+        problem = form.office_problem() or form.due_problem()
         if problem:
             message.value = problem
             page.update()
@@ -776,7 +782,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
     content = ft.Column([
         form.section("Shared by every file"),
         ft.Row([form.document_type, form.category], spacing=12, wrap=True, run_spacing=12),
-        ft.Row([form.office, form.priority], spacing=12, wrap=True, run_spacing=12),
+        ft.Row([form.office, form.priority, form.due_date], spacing=12, wrap=True, run_spacing=12),
         widgets.hint("Employees register into their own office." if options["office_locked"] else "The office that holds the documents first."),
         ft.Row([form.assigned_to, form.author], spacing=12, wrap=True, run_spacing=12),
         form.section("Files"),

@@ -162,6 +162,9 @@ def open_document_details(
             chips.append(widgets.chip(f"{document['priority']} priority", PRIORITY_COLORS.get(str(document["priority"]).lower(), ft.Colors.BLUE_GREY_600)))
         if document.get("status"):
             chips.append(widgets.chip(document["status"], ft.Colors.INDIGO_600))
+        due = widgets.due_chip(document)
+        if due is not None:
+            chips.append(due)
         if document.get("archived"):
             chips.append(widgets.chip("Archived", ft.Colors.BLUE_GREY_600))
         return chips

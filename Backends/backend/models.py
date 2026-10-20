@@ -95,6 +95,9 @@ class Document(Base):
     created_by_rel = relationship("User", foreign_keys=[created_by_id])
     assigned_to_rel = relationship("User", foreign_keys=[assigned_to_id])
 
+    # When the document needs to be acted on; drives the due chips and reminders.
+    due_date = Column(Date, nullable=True, index=True)
+
     archived = Column(Boolean, nullable=False, default=False, index=True)
     archived_at = Column(DateTime, nullable=True, index=True)
     archived_by = Column(String, nullable=True, index=True)

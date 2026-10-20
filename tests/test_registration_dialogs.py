@@ -269,3 +269,36 @@ def test_files_whose_number_is_used_can_be_retried_on_their_own():
     assert "Registered DOC-000001" in texts(dialog) and "Registered DOC-000002" in texts(dialog)
     assert all(c.disabled for c in walk(dialog) if type(c).__name__ == "TextField" and c.label == "Title")
 
+
+
+def test_a_due_date_is_sent_with_a_single_registration():
+    page, dialog, files, api, _ = open_single()
+    field(dialog, "Title").value = "Market code"
+    field(dialog, "Due date").value = "2026-11-05"
+
+    press(dialog, "Register")
+
+    assert api.posted("/documents/register")[0]["data"]["due_date"] == "2026-11-05"
+
+
+def test_a_malformed_due_date_is_caught_before_registering():
+    page, dialog, files, api, _ = open_single()
+    field(dialog, "Title").value = "Market code"
+    field(dialog, "Due date").value = "Nov 5"
+
+    press(dialog, "Register")
+
+    assert api.posted("/documents/register") == []
+    assert "Enter the due date as YYYY-MM-DD, for example 2026-11-05." in texts(dialog)
+
+
+def test_several_files_share_one_due_date():
+    page, dialog, files, api, _ = open_multiple()
+    field(dialog, "Due date").value = "2026-12-01"
+    press(dialog, "Choose files")
+    files.on_picked([{"name": "a.pdf", "size": 1}])
+    files.on_progress("a.pdf", 1.0, None)
+
+    press(dialog, "Register 1 document")
+
+    assert api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["due_date"] == "2026-12-01"

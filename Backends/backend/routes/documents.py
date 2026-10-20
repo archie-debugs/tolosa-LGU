@@ -2,7 +2,7 @@ import json
 import io
 import csv
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
@@ -345,7 +345,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
     placement = _registration_placement(
         db, current_user,
         office_id=payload.get("office_id"), office_name=payload.get("current_office"),
-        category=payload.get("category"), document_type=payload.get("document_type"),
+        category=payload.get("category"), document_type=payload.get("document_type"), due_date=payload.get("due_date"),
     )
     type_name = placement["document_type"].name if placement["document_type"] else None
     allow_duplicate_number = payload.get("allow_duplicate_number") is True
@@ -522,6 +522,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                           assigned_to: str | None = Form(None),
                           author: str | None = Form(None),
                           priority: str | None = Form("Medium"),
+                          due_date: str | None = Form(None),
                           db: Session = Depends(get_db),
                           current_user: models.User = Depends(get_current_user)):
     """Process bulk registration: create Document records and store attachments.
@@ -533,6 +534,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     validated_years = [_require_legislative_year(year) for year in series_years]
     placement = _registration_placement(
         db, current_user, office_id=office_id, office_name=current_office, category=category, document_type=document_type,
+        due_date=due_date,
     )
     _ensure_upload_dirs()
 
@@ -721,9 +723,28 @@ def _active_reference(db: Session, Model, name: str | None, label: str):
     return row
 
 
-def _registration_placement(db: Session, current_user: models.User, *, office_id=None, office_name=None, category=None, document_type=None) -> dict:
+DUE_DATE_ERROR = "Due date must be a date like 2026-11-05."
+
+
+def _parse_due_date(value) -> date | None:
+    """A YYYY-MM-DD due date, or None when blank."""
+    if value is None or isinstance(value, date):
+        return value
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text_value):
+        raise HTTPException(status_code=400, detail=DUE_DATE_ERROR)
+    try:
+        return date.fromisoformat(text_value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=DUE_DATE_ERROR)
+
+
+def _registration_placement(db: Session, current_user: models.User, *, office_id=None, office_name=None, category=None, document_type=None, due_date=None) -> dict:
     """Check where a new document goes and what it is, before anything is written."""
     return {
+        "due_date": _parse_due_date(due_date),
         "office": _registration_office(db, current_user, office_id, office_name),
         "category": _active_reference(db, models.Category, category, "Category"),
         "document_type": _active_reference(db, models.DocumentType, document_type, "Document type"),
@@ -780,6 +801,7 @@ def _new_registered_document(db: Session, current_user: models.User, placement: 
         author=(fields.get("author") or None),
         status="Approved",
         priority=(fields.get("priority") or "Medium"),
+        due_date=placement.get("due_date"),
         is_public=False,
         date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         qr_code_value=None,
@@ -913,6 +935,7 @@ def _serialize_document(doc: models.Document):
         "category_id": getattr(doc, "category_id", None),
         "originating_office_id": getattr(doc, "originating_office_id", None),
         "current_office_id": getattr(doc, "current_office_id", None),
+        "due_date": doc.due_date.isoformat() if doc.due_date else None,
         "archived": bool(doc.archived),
         "archived_at": doc.archived_at,
         "archived_by": doc.archived_by,
@@ -1245,6 +1268,7 @@ def _serialize_office_document(doc: models.Document):
         "date_registered": doc.date_registered,
         "attachment_name": doc.attachment_name,
         "qr_code_value": doc.qr_code_value,
+        "due_date": doc.due_date.isoformat() if doc.due_date else None,
         "archived": bool(doc.archived),
         "archived_at": doc.archived_at,
         "created_at": doc.created_at,
@@ -1831,6 +1855,8 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
             raise HTTPException(status_code=400, detail=f"{label} is required.")
     if "series_year" in data:
         data["series_year"] = _require_legislative_year(data["series_year"])
+    if "due_date" in data:
+        data["due_date"] = _parse_due_date(data["due_date"])
     for field in SYSTEM_MANAGED_FIELDS:
         if field in data and data[field] != getattr(doc, field):
             raise HTTPException(status_code=400, detail="This field is managed by the system and cannot be edited.")
@@ -1891,6 +1917,7 @@ def register_document(
     assigned_to: Optional[str] = Form(None),
     author: Optional[str] = Form(None),
     priority: Optional[str] = Form("Medium"),
+    due_date: Optional[str] = Form(None),
     allow_duplicate_number: bool = Form(False),
     tracking_number: Optional[str] = Form(None),
     file: UploadFile | None = File(None),
@@ -1910,6 +1937,7 @@ def register_document(
 
     placement = _registration_placement(
         db, current_user, office_id=office_id, office_name=current_office, category=category, document_type=document_type,
+        due_date=due_date,
     )
 
     inferred_number = _extract_legislative_number(file.filename if file and file.filename else title)

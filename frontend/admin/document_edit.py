@@ -3,7 +3,7 @@
 import flet as ft
 
 from frontend.admin.registration import PRIORITIES, error_detail
-from frontend.admin.tracking_ui import TrackingWidgets
+from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date
 
 NO_CATEGORY = "No category"
 NO_TYPE = "No document type"
@@ -38,6 +38,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     assigned_to = ft.TextField(label="Assigned To", value=_text(document.get("assigned_to")), width=280)
     author = ft.TextField(label="Author", value=_text(document.get("author")), width=280)
     session = ft.TextField(label="Session", value=_text(document.get("session")), width=180)
+    due_date = ft.TextField(label="Due date", hint_text="YYYY-MM-DD (optional)", value=_text(document.get("due_date")), width=180)
     remarks = ft.TextField(label="Remarks", value=_text(document.get("remarks")), multiline=True, min_lines=2, max_lines=3)
     message = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
 
@@ -45,8 +46,9 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
         reference = api("GET", "/documents/edit-options")
     except Exception:
         reference = {}
-    _choices(category, NO_CATEGORY, reference.get("categories") or [], document.get("category"))
-    _choices(document_type, NO_TYPE, reference.get("document_types") or [], document.get("document_type"))
+    # Document details passes its display record, where a missing value is "-".
+    _choices(category, NO_CATEGORY, reference.get("categories") or [], _text(document.get("category")) or None)
+    _choices(document_type, NO_TYPE, reference.get("document_types") or [], _text(document.get("document_type")) or None)
 
     def close():
         dialog.open = False
@@ -65,6 +67,10 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
         if not (title.value or "").strip():
             show_error("Title is required.")
             return
+        due = (due_date.value or "").strip()
+        if due and parse_due_date(due) is None:
+            show_error(DUE_DATE_HINT)
+            return
         payload = {
             "title": title.value.strip(),
             "document_number": (number.value or "").strip() or None,
@@ -73,6 +79,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             "category": chosen(category, NO_CATEGORY),
             "document_type": chosen(document_type, NO_TYPE),
             "priority": priority.value or "Medium",
+            "due_date": due or None,
             "assigned_to": (assigned_to.value or "").strip() or None,
             "author": (author.value or "").strip() or None,
             "session": (session.value or "").strip() or None,
@@ -94,7 +101,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
         [
             ui.hint(f"Currently in {office}. To move it to another office, use Pass."),
             title,
-            ft.Row([number, year, priority], spacing=12, wrap=True),
+            ft.Row([number, year, priority, due_date], spacing=12, wrap=True),
             description,
             ft.Row([category, document_type], spacing=12, wrap=True),
             ft.Row([assigned_to, author, session], spacing=12, wrap=True),
