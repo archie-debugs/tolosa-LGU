@@ -15,8 +15,9 @@ LOCATION_STYLES = {
 }
 
 
-def build_qr_tracking_view(page, api, surface_card, section_header):
-    """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises."""
+def build_qr_tracking_view(page, api, surface_card, section_header, open_details=None):
+    """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
+    `open_details(document)` opens a tracked document's details, when the user may see them."""
 
     widgets = TrackingWidgets(page)
     heading_color, body_color, muted_color, link_color = widgets.heading_color, widgets.body_color, widgets.muted_color, widgets.link_color
@@ -113,6 +114,7 @@ def build_qr_tracking_view(page, api, surface_card, section_header):
                         spacing=2,
                         expand=True,
                     ),
+                    *([ft.OutlinedButton("Details", icon=ft.Icons.DESCRIPTION_OUTLINED, on_click=lambda _, d=document: open_details(d))] if open_details and document.get("id") else []),
                     ft.IconButton(ft.Icons.CLOSE, tooltip="Clear", on_click=clear_trail),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.START,

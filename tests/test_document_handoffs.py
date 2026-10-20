@@ -524,6 +524,9 @@ def test_received_document_can_record_multiple_actions_and_list_history():
             priority="Medium",
             qr_token="action-test-token-001",
             qr_code_value="https://example.test/qr/action-test-token-001",
+            # Receipt moves custody to the receiving office, as confirm_document_receipt does.
+            current_office="Action Receiver Office",
+            current_office_id=office_b.id,
         )
         db.add(doc)
         db.commit()

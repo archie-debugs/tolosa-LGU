@@ -137,6 +137,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
 
 from frontend.admin.committees import build_committees_view
 from frontend.admin.documents import build_documents_view
+from frontend.admin.document_details import open_document_details
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
 from frontend.admin.users_roles import (
@@ -433,10 +434,7 @@ def main(page: ft.Page, session=None):
         page_state["qr_authorization"] = qr_state
         page.data = page_state
         _render_qr_authorization_state(qr_state)
-        if not show_document_details({
-            "id": document_id,
-            "qr_handoff_status": qr_state.get("handoff_status"),
-        }):
+        if not show_document_details({"id": document_id}):
             qr_state["details_opened"] = False
             page_state["qr_authorization"] = qr_state
             page.data = page_state
@@ -2977,558 +2975,75 @@ def main(page: ft.Page, session=None):
         except Exception as exc:
             show_document_notice(f"QR label download failed: {exc}")
 
-    def show_document_details(doc):
-        nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
-        mobile_view = (page.width or 1024) <= 600
-        qr_handoff_status = doc.get("qr_handoff_status")
-        details_endpoint = "/documents/office/" if is_employee() else "/documents/"
-        details_url = f"{BACKEND_URL}{details_endpoint}{doc.get('id')}"
+    class DetailsSessionExpired(Exception):
+        pass
+
+    def details_api(method, path, **kwargs):
+        """backend_api for the details dialog; an employee whose session lapsed is signed in again first."""
+        def send():
+            return requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=15, **kwargs)
+
+        response = send()
+        if response.status_code == 401 and is_employee():
+            refresh_runtime_token_if_needed(force=True)
+            if not runtime_token:
+                raise DetailsSessionExpired("Your session has expired. Please sign in again.")
+            response = send()
+        if response.status_code == 401 and is_employee():
+            raise DetailsSessionExpired("Your session has expired. Please sign in again.")
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail", response.text)
+            except Exception:
+                detail = response.text
+            raise Exception(detail)
+        return response.json() if response.content else {}
+
+    def load_document_qr_image(document_id):
+        if is_employee() and not has_permission("view_qr_tracking"):
+            return None
         try:
-            headers = get_admin_headers()
-            if is_employee() and not runtime_token:
-                _return_to_login_after_qr_details_401()
-                return False
-            response = requests.get(details_url, headers=headers, verify=False, timeout=10)
-            if is_employee() and response.status_code == 401:
-                refresh_runtime_token_if_needed(force=True)
-                if not runtime_token:
-                    _return_to_login_after_qr_details_401()
-                    return False
-                response = requests.get(
-                    details_url,
-                    headers={"Authorization": f"Bearer {runtime_token}"},
-                    verify=False,
-                    timeout=10,
-                )
-                if response.status_code == 401:
-                    _return_to_login_after_qr_details_401()
-                    return False
+            response = requests.get(f"{BACKEND_URL}/documents/{document_id}/qr-image", headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code == 200:
-                response_document = response.json()
-                doc = normalize_document(response_document)
-                doc["qr_handoff_status"] = qr_handoff_status
-                if is_employee():
-                    for field in (
-                        "qr_token",
-                        "document_number",
-                        "series_year",
-                        "office_receipt_status",
-                        "office_receipt_confirmed_at",
-                    ):
-                        doc[field] = response_document.get(field)
-            else:
-                raise Exception(response.text)
+                return base64.b64encode(response.content).decode("ascii")
+        except Exception:
+            pass
+        return None
+
+    def refresh_after_document_change():
+        for refresh in (office_dashboard_refresh, documents_refresh):
+            try:
+                refresh()
+            except Exception:
+                pass
+
+    def show_document_details(doc):
+        if is_employee() and not runtime_token:
+            _return_to_login_after_qr_details_401()
+            return False
+        try:
+            open_document_details(
+                page,
+                documents_details_dialog,
+                details_api,
+                doc.get("id"),
+                normalize=normalize_document,
+                load_qr_image=load_document_qr_image,
+                can_edit=has_permission("edit_documents"),
+                can_download=has_permission("download_documents"),
+                can_print=has_permission("print_documents"),
+                open_pass=open_pass_document_dialog,
+                open_edit=open_edit_document_dialog,
+                preview=preview_document_pdf,
+                download=download_document_attachment,
+                on_change=refresh_after_document_change,
+            )
+        except DetailsSessionExpired:
+            _return_to_login_after_qr_details_401()
+            return False
         except Exception as exc:
             show_document_notice(f"Unable to load document details: {exc}")
             return False
-
-        qr_image = ft.Image(width=220, height=220, fit=ft.ImageFit.CONTAIN)
-
-        def update_qr_image(document_id: int | None):
-            if not document_id:
-                qr_image.src_base64 = ""
-                return
-            if is_employee() and not has_permission("view_qr_tracking"):
-                qr_image.src_base64 = ""
-                return
-            try:
-                response = requests.get(
-                    f"{BACKEND_URL}/documents/{document_id}/qr-image",
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=10,
-                )
-                if response.status_code != 200:
-                    raise Exception(response.text)
-                qr_image.src_base64 = base64.b64encode(response.content).decode("ascii")
-            except Exception as exc:
-                show_document_notice(f"Unable to load QR image: {exc}")
-                qr_image.src_base64 = ""
-
-        update_qr_image(doc.get("id"))
-        status_color, status_bg = get_document_status_style(doc.get("status", "Pending"))
-        receipt_history_panel = ft.Column([
-            ft.Text("Loading receipt history...", size=12, color=ft.Colors.BLUE_GREY_600),
-        ], spacing=8)
-        confirmed_at = doc.get("office_receipt_confirmed_at")
-        if confirmed_at:
-            try:
-                confirmed_at = datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00")).strftime("%b %d, %Y %I:%M %p")
-            except ValueError:
-                confirmed_at = str(confirmed_at)
-        receipt_status_text = ft.Text(
-            f"Receipt Status: {doc.get('office_receipt_status') or 'Not Yet Received'}"
-            + (f" · {confirmed_at}" if confirmed_at else ""),
-            size=12,
-            weight=ft.FontWeight.BOLD,
-            color=ft.Colors.GREEN_700 if doc.get("office_receipt_status") not in (None, "Not Yet Received") else ft.Colors.BLUE_GREY_700,
-        )
-        mobile_workflow_notice = None
-        mobile_action_panel = None
-        if mobile_view and qr_handoff_status == "Pending Receipt" and doc.get("office_receipt_status") in (None, "Not Yet Received"):
-            mobile_workflow_notice = ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Document Pending Receipt", size=18, weight=ft.FontWeight.BOLD),
-                        ft.Text("Has the physical document been received by your office?", size=13),
-                    ],
-                    spacing=6,
-                ),
-                padding=12,
-                bgcolor=ft.Colors.ORANGE_50,
-                border_radius=10,
-            )
-        elif mobile_view and doc.get("office_receipt_status") == "Received":
-            mobile_workflow_notice = ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Document Received", size=18, weight=ft.FontWeight.BOLD),
-                        ft.Text(
-                            "The document can now be processed for the next office from the PC.",
-                            size=13,
-                        ),
-                    ],
-                    spacing=6,
-                ),
-                padding=12,
-                bgcolor=ft.Colors.GREEN_50,
-                border_radius=10,
-            )
-
-        action_history_panel = ft.Column([], spacing=6)
-
-        def load_action_history(document_id: int | None):
-            if not mobile_view or not document_id or not has_permission("view_office_history"):
-                action_history_panel.controls = []
-                return
-            try:
-                response = requests.get(
-                    f"{BACKEND_URL}/documents/{document_id}/actions",
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=15,
-                )
-                if response.status_code != 200:
-                    raise Exception(response.text)
-                items = response.json() or []
-                if not items:
-                    action_history_panel.controls = [
-                        ft.Text("No actions recorded yet.", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ]
-                    return
-                rows = []
-                for item in items:
-                    performed_at = item.get("performed_at") or item.get("created_at")
-                    try:
-                        performed_label = datetime.fromisoformat(
-                            str(performed_at).replace("Z", "+00:00")
-                        ).strftime("%b %d, %Y %I:%M %p")
-                    except (TypeError, ValueError):
-                        performed_label = str(performed_at or "—")
-                    rows.append(
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(
-                                        str(item.get("action_type") or "Action"),
-                                        size=12,
-                                        weight=ft.FontWeight.W_600,
-                                        color=ft.Colors.BLUE_900,
-                                    ),
-                                    ft.Text(
-                                        f"By: {item.get('employee_name') or item.get('employee_username') or 'Unknown user'}",
-                                        size=11,
-                                        color=ft.Colors.BLUE_GREY_700,
-                                    ),
-                                    ft.Text(
-                                        f"Office: {item.get('office_name') or '—'}",
-                                        size=11,
-                                        color=ft.Colors.BLUE_GREY_700,
-                                    ),
-                                    ft.Text(performed_label, size=11, color=ft.Colors.BLUE_GREY_600),
-                                    *(
-                                        [ft.Text(str(item.get("notes")), size=11, color=ft.Colors.BLUE_GREY_700)]
-                                        if item.get("notes")
-                                        else []
-                                    ),
-                                ],
-                                spacing=2,
-                            ),
-                            padding=8,
-                            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_100)),
-                        )
-                    )
-                action_history_panel.controls = rows
-            except Exception:
-                action_history_panel.controls = [
-                    ft.Text("Unable to load action history.", size=12, color=ft.Colors.RED_700),
-                ]
-
-        if mobile_view and doc.get("office_receipt_status") == "Received":
-            selected_action = {"value": None}
-            action_notes = ft.TextField(
-                label="Notes (optional)",
-                multiline=True,
-                min_lines=2,
-                max_lines=4,
-                visible=False,
-                expand=True,
-            )
-            action_notice = ft.Text("", size=12)
-            action_saving = {"value": False}
-            action_buttons = ft.Row([], spacing=8, wrap=True)
-            save_action_button = ft.FilledButton(
-                "Save Action",
-                icon=ft.Icons.SAVE_OUTLINED,
-                visible=False,
-            )
-
-            def render_action_buttons():
-                action_buttons.controls = [
-                    (
-                        ft.FilledButton(
-                            action_type,
-                            on_click=lambda _, value=action_type: select_action(value),
-                        )
-                        if selected_action["value"] == action_type
-                        else ft.OutlinedButton(
-                            action_type,
-                            on_click=lambda _, value=action_type: select_action(value),
-                        )
-                    )
-                    for action_type in ("Received", "Signed", "Reviewed", "Approved", "Noted", "Other")
-                ]
-
-            def select_action(action_type):
-                selected_action["value"] = action_type
-                action_notes.visible = True
-                save_action_button.visible = True
-                action_notice.value = f"Selected: {action_type}"
-                action_notice.color = ft.Colors.BLUE_700
-                render_action_buttons()
-                page.update()
-
-            def save_action(_):
-                if action_saving["value"] or not selected_action["value"]:
-                    return
-                qr_token = doc.get("qr_token")
-                if not qr_token:
-                    action_notice.value = "This document does not have a valid QR identity."
-                    action_notice.color = ft.Colors.RED_700
-                    page.update()
-                    return
-                action_saving["value"] = True
-                save_action_button.disabled = True
-                action_notice.value = "Saving action..."
-                action_notice.color = ft.Colors.BLUE_GREY_700
-                page.update()
-                try:
-                    response = requests.post(
-                        f"{BACKEND_URL}/documents/qr/{quote(str(qr_token), safe='')}/actions",
-                        json={
-                            "action_type": selected_action["value"],
-                            "notes": (action_notes.value or "").strip() or None,
-                        },
-                        headers=get_admin_headers(),
-                        verify=False,
-                        timeout=15,
-                    )
-                    if response.status_code == 401:
-                        _return_to_login_after_qr_details_401()
-                        return
-                    if response.status_code == 403:
-                        raise RuntimeError("You are not authorized to record an action for this document.")
-                    if response.status_code == 404:
-                        raise RuntimeError("This document is no longer available for action recording.")
-                    if response.status_code == 409:
-                        show_document_details(doc)
-                        return
-                    if response.status_code != 200:
-                        raise RuntimeError("Unable to record this action. Please try again.")
-                    action_notice.value = (
-                        f"Action Recorded: {selected_action['value']}. "
-                        "The next office handoff must be done from the PC."
-                    )
-                    action_notice.color = ft.Colors.GREEN_700
-                    action_buttons.visible = False
-                    save_action_button.visible = False
-                    action_notes.visible = False
-                    load_action_history(doc.get("id"))
-                except Exception as exc:
-                    action_notice.value = str(exc) or "Unable to record this action. Please try again."
-                    action_notice.color = ft.Colors.RED_700
-                finally:
-                    action_saving["value"] = False
-                    save_action_button.disabled = False
-                    page.update()
-
-            save_action_button.on_click = save_action
-            render_action_buttons()
-            mobile_action_panel = ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text(
-                            "What was done to this document?",
-                            size=14,
-                            weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.BLUE_900,
-                        ),
-                        action_buttons,
-                        action_notes,
-                        save_action_button,
-                        action_notice,
-                    ],
-                    spacing=8,
-                ),
-                padding=12,
-                border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                border_radius=12,
-                bgcolor=ft.Colors.BLUE_GREY_50,
-            )
-
-        def load_receipt_history(document_id: int | None):
-            has_history_access = has_permission("view_office_history")
-            if not document_id or not has_history_access:
-                receipt_history_panel.controls = [
-                    ft.Text("No receipt history available for this account.", size=12, color=ft.Colors.BLUE_GREY_600),
-                ]
-                return
-            headers = get_admin_headers()
-            try:
-                response = requests.get(f"{BACKEND_URL}/documents/{document_id}/receipts", headers=headers, verify=False, timeout=15)
-                if response.status_code != 200:
-                    raise Exception(response.text)
-                items = response.json().get("receipts") or []
-                if not items:
-                    receipt_history_panel.controls = [
-                        ft.Text("No Receipt History", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
-                        ft.Text("This document has not yet been received by your office.", size=12, color=ft.Colors.BLUE_GREY_600),
-                    ]
-                    return
-                rows = []
-                for item in items:
-                    confirmed_by = item.get("confirmed_by") or {}
-                    confirmed_at = item.get("confirmed_at")
-                    try:
-                        if confirmed_at:
-                            parsed = datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00"))
-                            confirmed_label = parsed.strftime("%b %d, %Y %I:%M %p")
-                        else:
-                            confirmed_label = "—"
-                    except Exception:
-                        confirmed_label = str(confirmed_at) if confirmed_at else "—"
-                    rows.append(
-                        ft.Column([
-                            ft.Text((item.get("status") or "Received").title(), size=12, weight=ft.FontWeight.W_600, color=ft.Colors.GREEN_700),
-                            ft.Row([
-                                ft.Text("Confirmed By", size=11, color=ft.Colors.BLUE_GREY_600, width=120),
-                                ft.Text(str(confirmed_by.get("full_name") or confirmed_by.get("username") or "Unknown user"), size=12),
-                            ], vertical_alignment=ft.CrossAxisAlignment.START),
-                            ft.Row([
-                                ft.Text("Office", size=11, color=ft.Colors.BLUE_GREY_600, width=120),
-                                ft.Text(str(item.get("office_name") or "—"), size=12),
-                            ], vertical_alignment=ft.CrossAxisAlignment.START),
-                            ft.Row([
-                                ft.Text("Confirmed", size=11, color=ft.Colors.BLUE_GREY_600, width=120),
-                                ft.Text(confirmed_label, size=12),
-                            ], vertical_alignment=ft.CrossAxisAlignment.START),
-                        ], spacing=4)
-                    )
-                receipt_history_panel.controls = [
-                    ft.Text("Receipt History", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
-                    *rows,
-                ]
-            except Exception:
-                receipt_history_panel.controls = [
-                    ft.Text("Unable to load receipt history.", size=12, color=ft.Colors.RED_700),
-                ]
-
-        def confirm_receipt(_):
-            qr_token = doc.get("qr_token")
-            if not qr_token:
-                show_document_notice("This document does not have a valid QR identity.")
-                return
-            try:
-                response = requests.post(
-                    f"{BACKEND_URL}/documents/qr/{quote(str(qr_token), safe='')}/receipt",
-                    headers=get_admin_headers(),
-                    verify=False,
-                    timeout=15,
-                )
-                if response.status_code != 200:
-                    raise Exception("Receipt confirmation was denied.")
-                show_document_details(doc)
-            except Exception:
-                show_document_notice("Unable to confirm receipt.")
-
-        receipt_action = ft.FilledButton(
-            "Confirm Receipt",
-            icon=ft.Icons.CHECK_CIRCLE_OUTLINE,
-            on_click=confirm_receipt,
-        ) if (
-            is_employee()
-            and has_permission("confirm_document_receipt")
-            and has_permission("scan_qr")
-            and doc.get("office_receipt_status") in (None, "Not Yet Received")
-        ) else None
-
-        pass_document_action = ft.OutlinedButton(
-            "Pass Document",
-            icon=ft.Icons.SEND_OUTLINED,
-            on_click=lambda _: open_pass_document_dialog(doc),
-        ) if (
-            not mobile_view
-            and
-            can_pass_office_document()
-            and doc.get("office_receipt_status") not in ("Pending Receipt", "Received")
-        ) else None
-
-        details_content = ft.Column(
-            [
-                ft.Row(
-                    [
-                        ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=ft.Colors.BLUE_700, size=26),
-                        ft.Column(
-                            [
-                                ft.Text(doc.get("tracking_number", doc.get("id", "-")), size=13, weight=ft.FontWeight.BOLD),
-                                ft.Text(doc.get("title", "-"), size=16, weight=ft.FontWeight.BOLD),
-                            ],
-                            spacing=2,
-                            expand=True,
-                        ),
-                        ft.Container(
-                            content=ft.Text(doc.get("status", "Pending"), size=12, weight=ft.FontWeight.BOLD, color=status_color),
-                            bgcolor=status_bg,
-                            padding=8,
-                            border_radius=14,
-                        ),
-                    ],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                ft.Divider(height=1),
-                ft.Text(doc.get("description", "No description provided."), size=13, color=ft.Colors.BLUE_GREY_700),
-                *([mobile_workflow_notice] if mobile_workflow_notice else []),
-                receipt_status_text,
-                *([mobile_action_panel] if mobile_action_panel else []),
-                *([ft.Row([pass_document_action, receipt_action] if pass_document_action and receipt_action else ([pass_document_action] if pass_document_action else [receipt_action]), spacing=8)] if (pass_document_action or receipt_action) else []),
-                ft.Row(
-                    [
-                        ft.Column([ft.Text("Legislative Document Number", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("document_number") or "-", size=13)], spacing=2, expand=True),
-                        ft.Column([ft.Text("Series Year", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("series_year") or "-", size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                ),
-                ft.Row(
-                    [
-                        ft.Column([ft.Text("Document Type", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("document_type", "-"), size=13)], spacing=2, expand=True),
-                        ft.Column([ft.Text("Category", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("category", "-"), size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                ),
-                *([] if is_employee() else [ft.Row(
-                    [
-                        ft.Column([ft.Text("Originating Office", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("originating_office", "-"), size=13)], spacing=2, expand=True),
-                        ft.Column([ft.Text("Current Office", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("current_office", "-"), size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                )]),
-                *([] if is_employee() else [ft.Row(
-                    [
-                        ft.Column([ft.Text("Assigned User", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("assigned_to", "-"), size=13)], spacing=2, expand=True),
-                        ft.Column([ft.Text("Priority", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("priority", "-"), size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                )]),
-                ft.Row(
-                    [
-                        ft.Column([ft.Text("QR Code", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("canonical_qr_url") or doc.get("qr_code_value", "-"), size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                ),
-                *([] if is_employee() and not has_permission("view_qr_tracking") else [ft.Row(
-                    [
-                        ft.Column(
-                            [
-                                ft.Text("Scanable QR", size=12, color=ft.Colors.BLUE_GREY_600),
-                                ft.Container(
-                                    content=qr_image,
-                                    width=220,
-                                    height=220,
-                                    alignment=ft.alignment.center,
-                                    bgcolor=ft.Colors.WHITE,
-                                    border_radius=14,
-                                    padding=8,
-                                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                                ),
-                            ],
-                            spacing=6,
-                            expand=True,
-                        ),
-                    ],
-                    spacing=16,
-                )]),
-                *([] if is_employee() else [ft.Row(
-                    [
-                        ft.Column([ft.Text("Author", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("author", "-"), size=13)], spacing=2, expand=True),
-                        ft.Column([ft.Text("Session", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("session", "-"), size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                )]),
-                ft.Row(
-                    [
-                        ft.Column([ft.Text("Date Registered", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("date_registered", doc.get("date_received", "-")), size=13)], spacing=2, expand=True),
-                        *([] if is_employee() else [ft.Column([ft.Text("Created By", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("created_by", "-"), size=13)], spacing=2, expand=True)]),
-                    ],
-                    spacing=16,
-                ),
-                *([] if is_employee() else [ft.Row(
-                    [
-                        ft.Column([ft.Text("Attachment", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("attachment_name", "-"), size=13)], spacing=2, expand=True),
-                        ft.Column([ft.Text("Updated Date", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text(doc.get("last_updated", "-"), size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                )]),
-                *([] if is_employee() else [ft.Row(
-                    [
-                        ft.Column([ft.Text("Public Visibility", size=12, color=ft.Colors.BLUE_GREY_600), ft.Text("Public" if doc.get("is_public") else "Private", size=13)], spacing=2, expand=True),
-                    ],
-                    spacing=16,
-                )]),
-                ft.Container(
-                    content=ft.Column([
-                        ft.Text("Receipt History", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
-                        receipt_history_panel,
-                    ], spacing=8),
-                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                    border_radius=12,
-                    padding=12,
-                    bgcolor=ft.Colors.BLUE_GREY_50,
-                ),
-                *([
-                    ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Text("Action History", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
-                                action_history_panel,
-                            ],
-                            spacing=8,
-                        ),
-                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                        border_radius=12,
-                        padding=12,
-                        bgcolor=ft.Colors.BLUE_GREY_50,
-                    )
-                ] if mobile_view and doc.get("office_receipt_status") == "Received" else []),
-            ],
-            spacing=12,
-            scroll=ft.ScrollMode.AUTO,
-        )
-        details_width = max(280, min(540, (page.width or 540) - 32)) if mobile_view else 540
-        documents_details_dialog.content = ft.Container(content=details_content, padding=8, width=details_width)
-        documents_details_dialog.open = True
-        load_receipt_history(doc.get("id"))
-        load_action_history(doc.get("id"))
-        page.update()
         return True
 
     # QR generation/print functionality removed from frontend.
@@ -4523,7 +4038,10 @@ def main(page: ft.Page, session=None):
         return ft.Column([content], expand=False)
 
     def qr_tracking_view():
-        return build_qr_tracking_view(page, backend_api, surface_card, section_header)
+        return build_qr_tracking_view(
+            page, backend_api, surface_card, section_header,
+            open_details=show_document_details if has_permission("view_document_details") else None,
+        )
 
     office_options = []
     office_management_data = []
