@@ -306,6 +306,8 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
         raise HTTPException(status_code=400, detail="Each uploaded document must have a unique temporary file name.")
 
     year_by_tmp_name = {}
+    title_by_tmp_name = {}
+    number_by_tmp_name = {}
     document_specs = payload.get("documents")
     if isinstance(document_specs, list):
         if len(document_specs) != len(safe_tmp_names):
@@ -317,6 +319,8 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             if safe_name not in safe_tmp_names or safe_name in year_by_tmp_name:
                 raise HTTPException(status_code=400, detail="Document year entries must match the uploaded files.")
             year_by_tmp_name[safe_name] = _parse_legislative_year(spec.get("series_year"))
+            title_by_tmp_name[safe_name] = (spec.get("title") or "").strip() or None
+            number_by_tmp_name[safe_name] = (str(spec.get("document_number") or "")).strip() or None
     elif isinstance(payload.get("series_years"), list):
         years = payload["series_years"]
         if len(years) != len(safe_tmp_names):
@@ -338,11 +342,15 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             detail=f"A valid Legislative Year is required for: {', '.join(missing_years)}",
         )
 
+    placement = _registration_placement(
+        db, current_user,
+        office_id=payload.get("office_id"), office_name=payload.get("current_office"),
+        category=payload.get("category"), document_type=payload.get("document_type"),
+    )
+    type_name = placement["document_type"].name if placement["document_type"] else None
+    allow_duplicate_number = payload.get("allow_duplicate_number") is True
     title = payload.get("title")
     description = payload.get("description")
-    category = payload.get("category")
-    document_type = payload.get("document_type")
-    current_office = payload.get("current_office")
     assigned_to = payload.get("assigned_to")
     author = payload.get("author")
     priority = payload.get("priority") or "Medium"
@@ -357,10 +365,10 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
         safe_name = os.path.basename(tmp or "")
         tmp_path = os.path.join(TEMP_UPLOAD_DIR, safe_name)
         if not os.path.exists(tmp_path):
-            failed.append({"index": idx, "filename": safe_name, "reason": "Temporary file not found"})
+            failed.append({"index": idx, "tmp_name": safe_name, "filename": safe_name, "reason": "Temporary file not found"})
             continue
+        original_filename = safe_name
         try:
-            original_filename = safe_name
             meta_path = os.path.join(TEMP_UPLOAD_DIR, f"{safe_name}.meta.json")
             try:
                 with open(meta_path, "r", encoding="utf-8") as mf:
@@ -379,41 +387,30 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             duplicate_documents = _documents_with_checksum(db, checksum)
             if duplicate_documents:
                 duplicates.append({"index": idx, "filename": original_filename, "checksum": checksum, "documents": [doc.tracking_number for doc in duplicate_documents]})
-                failed.append({"index": idx, "filename": original_filename, "reason": _duplicate_reason(duplicate_documents), "duplicate": True, "checksum": checksum})
+                failed.append({"index": idx, "tmp_name": safe_name, "filename": original_filename, "reason": _duplicate_reason(duplicate_documents), "duplicate": True, "checksum": checksum})
                 continue
 
             base_title = os.path.splitext(original_filename)[0]
-            doc_title = (title or base_title or f"Document {idx}").strip()
+            doc_title = (title_by_tmp_name.get(safe_name) or title or base_title or f"Document {idx}").strip()
             inferred_number = _extract_legislative_number(original_filename or doc_title)
-            document_number = (payload.get("document_number") or inferred_number or "").strip() or None
+            document_number = (number_by_tmp_name.get(safe_name) or payload.get("document_number") or inferred_number or "").strip() or None
             series_year = year_by_tmp_name[safe_name]
 
-            doc = models.Document(
-                tracking_number=f"PENDING-{uuid.uuid4().hex}",
-                document_number=document_number,
-                series_year=series_year,
-                title=doc_title,
-                description=(description or None),
-                category=(category or None),
-                document_type=(document_type or None),
-                current_office=(current_office or None),
-                assigned_to=(assigned_to or None),
-                author=(author or None),
-                status="Approved",
-                priority=(priority or "Medium") or "Medium",
-                is_public=False,
-                date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                qr_code_value=None,
-                created_by=getattr(current_user, "username", None),
+            if not allow_duplicate_number:
+                same_number = _documents_with_number(db, type_name, document_number, series_year)
+                if same_number:
+                    detail = _duplicate_number_detail(same_number)
+                    failed.append({
+                        "index": idx, "tmp_name": safe_name, "filename": original_filename, "reason": detail["message"],
+                        "duplicate_number": True, "documents": detail["documents"],
+                    })
+                    continue
+
+            doc = _new_registered_document(
+                db, current_user, placement,
+                title=doc_title, document_number=document_number, series_year=series_year, description=description,
+                assigned_to=assigned_to, author=author, priority=priority,
             )
-            _assign_system_tracking_number(db, doc)
-            db.commit()
-            db.refresh(doc)
-            qr_payload = _compute_qr_payload(doc)
-            doc.qr_code_value = qr_payload
-            db.commit()
-            db.refresh(doc)
-            _ensure_qr_png(doc, qr_payload)
 
             # move file from tmp to uploads
             safe_stored = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(safe_name)}"
@@ -421,29 +418,20 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             with open(dest_path, "wb") as fh:
                 fh.write(content)
 
-            att = models.Attachment(
+            db.add(models.Attachment(
                 document_id=doc.id,
                 original_filename=original_filename,
                 stored_path=dest_path,
                 mime_type=mimetypes.guess_type(original_filename)[0],
                 size=size,
                 checksum=checksum,
-            )
-            db.add(att)
+            ))
             doc.attachment_name = safe_stored
-            if document_type:
-                doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
-            if category:
-                doc.category_id = _get_or_create_by_name(db, models.Category, category)
-            if current_office:
-                doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
-                _ensure_document_office_association(db, doc.id, doc.current_office_id)
-
             db.commit()
-            db.refresh(att)
             db.refresh(doc)
+            _record_registration(db, current_user, doc)
 
-            created.append({"index": idx, "id": doc.id, "tracking_number": doc.tracking_number, "filename": original_filename})
+            created.append({"index": idx, "tmp_name": safe_name, "id": doc.id, "tracking_number": doc.tracking_number, "filename": original_filename})
 
             # remove tmp file
             try:
@@ -455,7 +443,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 db.rollback()
             except Exception:
                 pass
-            failed.append({"index": idx, "filename": safe_name or f"file_{idx}", "reason": str(exc)})
+            failed.append({"index": idx, "tmp_name": safe_name, "filename": original_filename or f"file_{idx}", "reason": str(exc)})
 
     # audit
     try:
@@ -529,6 +517,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                           description: str | None = Form(None),
                           category: str | None = Form(None),
                           document_type: str | None = Form(None),
+                          office_id: int | None = Form(None),
                           current_office: str | None = Form(None),
                           assigned_to: str | None = Form(None),
                           author: str | None = Form(None),
@@ -542,6 +531,9 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     if len(series_years) != len(files):
         raise HTTPException(status_code=400, detail="Legislative Year is required for every document.")
     validated_years = [_require_legislative_year(year) for year in series_years]
+    placement = _registration_placement(
+        db, current_user, office_id=office_id, office_name=current_office, category=category, document_type=document_type,
+    )
     _ensure_upload_dirs()
 
     created = []
@@ -575,28 +567,11 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             document_number = (inferred_number or "").strip() or None
             series_year = validated_years[idx - 1]
 
-            doc = models.Document(
-                tracking_number=f"PENDING-{uuid.uuid4().hex}",
-                document_number=document_number,
-                series_year=series_year,
-                title=doc_title,
-                description=(description or None),
-                category=(category or None),
-                document_type=(document_type or None),
-                current_office=(current_office or None),
-                assigned_to=(assigned_to or None),
-                author=(author or None),
-                status="Approved",
-                priority=(priority or "Medium") or "Medium",
-                is_public=False,
-                date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                qr_code_value=None,
-                created_by=getattr(current_user, "username", None),
+            doc = _new_registered_document(
+                db, current_user, placement,
+                title=doc_title, document_number=document_number, series_year=series_year, description=description,
+                assigned_to=assigned_to, author=author, priority=priority,
             )
-            tracking_number = _assign_system_tracking_number(db, doc)
-            doc.qr_code_value = tracking_number
-            db.commit()
-            db.refresh(doc)
 
             # save file to uploads dir
             safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(filename)}"
@@ -615,17 +590,9 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             )
             db.add(att)
             doc.attachment_name = safe_name
-            if document_type:
-                doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
-            if category:
-                doc.category_id = _get_or_create_by_name(db, models.Category, category)
-            if current_office:
-                doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
-                _ensure_document_office_association(db, doc.id, doc.current_office_id)
-
             db.commit()
-            db.refresh(att)
             db.refresh(doc)
+            _record_registration(db, current_user, doc)
 
             created.append({"index": idx, "id": doc.id, "tracking_number": doc.tracking_number, "filename": filename})
         except Exception as exc:
@@ -711,6 +678,175 @@ def _documents_with_checksum(db: Session, checksum: str):
 def _duplicate_reason(documents: list[models.Document]) -> str:
     references = ", ".join(doc.tracking_number for doc in documents)
     return f"Duplicate PDF content detected; identical file already exists in document(s): {references}"
+
+
+def _registration_office(db: Session, current_user: models.User, office_id=None, office_name: str | None = None) -> models.Office | None:
+    """The office a new document starts in.
+
+    Employees register only into their own office. A Super Admin may choose any active
+    office and otherwise uses their own. Offices are never created here.
+    """
+    requested = None
+    asked = office_id not in (None, "") or bool((office_name or "").strip())
+    if office_id not in (None, ""):
+        try:
+            requested = db.get(models.Office, int(office_id))
+        except (TypeError, ValueError):
+            requested = None
+    elif asked:
+        requested = db.query(models.Office).filter(func.lower(models.Office.name) == office_name.strip().lower()).first()
+
+    own_office_id = getattr(current_user, "office_id", None)
+    if normalize_user_role(getattr(current_user, "role", None)) != "Super Administrator":
+        if own_office_id is None:
+            raise HTTPException(status_code=403, detail="Your account is not assigned to an office. Ask the Super Admin to assign one before registering documents.")
+        if asked and (requested is None or requested.id != own_office_id):
+            raise HTTPException(status_code=403, detail="You can only register documents into your own office.")
+        return db.get(models.Office, own_office_id)
+
+    if asked:
+        if requested is None or not requested.is_active:
+            raise HTTPException(status_code=400, detail="Choose an active office for the document.")
+        return requested
+    return db.get(models.Office, own_office_id) if own_office_id is not None else None
+
+
+def _active_reference(db: Session, Model, name: str | None, label: str):
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = db.query(Model).filter(func.lower(Model.name) == name.lower(), Model.is_active.is_(True)).first()
+    if row is None:
+        raise HTTPException(status_code=400, detail=f"{label} '{name}' is not an active entry in Reference Data.")
+    return row
+
+
+def _registration_placement(db: Session, current_user: models.User, *, office_id=None, office_name=None, category=None, document_type=None) -> dict:
+    """Check where a new document goes and what it is, before anything is written."""
+    return {
+        "office": _registration_office(db, current_user, office_id, office_name),
+        "category": _active_reference(db, models.Category, category, "Category"),
+        "document_type": _active_reference(db, models.DocumentType, document_type, "Document type"),
+    }
+
+
+def _comparable_number(value: str | None) -> str:
+    text_value = (value or "").strip().lower()
+    return str(int(text_value)) if text_value.isdigit() else text_value
+
+
+def _documents_with_number(db: Session, document_type: str | None, document_number: str | None, series_year: int | None) -> list[models.Document]:
+    """Documents of the same type, legislative number and year."""
+    number = _comparable_number(document_number)
+    if not number or series_year is None:
+        return []
+    query = db.query(models.Document).filter(models.Document.series_year == series_year)
+    if (document_type or "").strip():
+        query = query.filter(func.lower(models.Document.document_type) == document_type.strip().lower())
+    else:
+        query = query.filter(or_(models.Document.document_type.is_(None), models.Document.document_type == ""))
+    return [doc for doc in query.order_by(models.Document.tracking_number.asc()) if _comparable_number(doc.document_number) == number]
+
+
+def _duplicate_number_detail(documents: list[models.Document]) -> dict:
+    references = ", ".join(doc.tracking_number for doc in documents)
+    return {
+        "message": f"The same type, number and year is already registered as {references}.",
+        "duplicate_number": True,
+        "documents": [doc.tracking_number for doc in documents],
+    }
+
+
+def _new_registered_document(db: Session, current_user: models.User, placement: dict, **fields) -> models.Document:
+    """Create a document with its tracking number, QR code and starting office."""
+    office = placement["office"]
+    category = placement["category"]
+    document_type = placement["document_type"]
+    doc = models.Document(
+        tracking_number=f"PENDING-{uuid.uuid4().hex}",
+        document_number=fields.get("document_number"),
+        series_year=fields.get("series_year"),
+        title=fields["title"],
+        description=(fields.get("description") or None),
+        category=category.name if category else None,
+        category_id=category.id if category else None,
+        document_type=document_type.name if document_type else None,
+        document_type_id=document_type.id if document_type else None,
+        current_office=office.name if office else None,
+        current_office_id=office.id if office else None,
+        originating_office=office.name if office else None,
+        originating_office_id=office.id if office else None,
+        assigned_to=(fields.get("assigned_to") or None),
+        author=(fields.get("author") or None),
+        status="Approved",
+        priority=(fields.get("priority") or "Medium"),
+        is_public=False,
+        date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        qr_code_value=None,
+        created_by=getattr(current_user, "username", None),
+    )
+    _assign_system_tracking_number(db, doc)
+    if office:
+        _ensure_document_office_association(db, doc.id, office.id)
+    db.commit()
+    db.refresh(doc)
+    doc.qr_code_value = _compute_qr_payload(doc)
+    db.commit()
+    db.refresh(doc)
+    _ensure_qr_png(doc, doc.qr_code_value)
+    return doc
+
+
+def _record_registration(db: Session, current_user: models.User, doc: models.Document) -> None:
+    where = f" in {doc.current_office}" if doc.current_office else ""
+    file_note = "" if doc.attachment_name else " without a file"
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", None),
+        action="DOCUMENT_REGISTERED",
+        target_type="Document",
+        target_id=doc.tracking_number,
+        details=f"Registered {doc.tracking_number} \"{doc.title}\"{where}{file_note}",
+    )
+
+
+@router.get("/registration/options")
+def registration_options(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """What the registration form may offer this user: offices, categories and document types."""
+    require_permission(current_user, "register_documents")
+    own_office_id = getattr(current_user, "office_id", None)
+    if normalize_user_role(getattr(current_user, "role", None)) == "Super Administrator":
+        offices = db.query(models.Office).filter(models.Office.is_active.is_(True)).order_by(models.Office.name.asc()).all()
+        locked = False
+    else:
+        own = db.get(models.Office, own_office_id) if own_office_id is not None else None
+        offices = [own] if own else []
+        locked = True
+
+    def active_names(Model):
+        return [row.name for row in db.query(Model).filter(Model.is_active.is_(True)).order_by(Model.name.asc())]
+
+    return {
+        "offices": [{"id": office.id, "name": office.name} for office in offices],
+        "default_office_id": own_office_id if any(office.id == own_office_id for office in offices) else None,
+        "office_locked": locked,
+        "categories": active_names(models.Category),
+        "document_types": active_names(models.DocumentType),
+    }
+
+
+@router.get("/registration/duplicates")
+def registration_duplicates(
+    document_type: str | None = Query(default=None),
+    document_number: str | None = Query(default=None),
+    series_year: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Documents a new registration would duplicate by type, number and year."""
+    require_permission(current_user, "register_documents")
+    matches = _documents_with_number(db, document_type, document_number, series_year)
+    return {"documents": [{"id": doc.id, "tracking_number": doc.tracking_number, "title": doc.title} for doc in matches]}
 
 
 @router.get("/attachments/duplicates")
@@ -1735,10 +1871,12 @@ def register_document(
     description: Optional[str] = Form(None),
     category: Optional[str] = Form(None),
     document_type: Optional[str] = Form(None),
+    office_id: Optional[int] = Form(None),
     current_office: Optional[str] = Form(None),
     assigned_to: Optional[str] = Form(None),
     author: Optional[str] = Form(None),
     priority: Optional[str] = Form("Medium"),
+    allow_duplicate_number: bool = Form(False),
     tracking_number: Optional[str] = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
@@ -1755,15 +1893,13 @@ def register_document(
     if (tracking_number or "").strip():
         raise HTTPException(status_code=400, detail="Tracking numbers are generated automatically.")
 
+    placement = _registration_placement(
+        db, current_user, office_id=office_id, office_name=current_office, category=category, document_type=document_type,
+    )
+
     inferred_number = _extract_legislative_number(file.filename if file and file.filename else title)
     document_number = (document_number or inferred_number or "").strip() or None
 
-    category = (category or None)
-    document_type = (document_type or None)
-    current_office = (current_office or None)
-    assigned_to = (assigned_to or None)
-    author = (author or None)
-    priority = (priority or "Medium") or "Medium"
     uploaded_content = None
     uploaded_checksum = None
     original_filename = os.path.basename(file.filename or "") if file is not None else None
@@ -1779,72 +1915,45 @@ def register_document(
         if duplicate_documents:
             raise HTTPException(status_code=409, detail=_duplicate_reason(duplicate_documents))
 
-    doc = models.Document(
-        tracking_number=f"PENDING-{uuid.uuid4().hex}",
-        document_number=document_number,
-        series_year=series_year,
-        title=title,
-        description=(description or None),
-        category=category,
-        document_type=document_type,
-        current_office=current_office,
-        assigned_to=assigned_to,
-        author=author,
-        status="Approved",
-        priority=priority,
-        is_public=False,
-        date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        qr_code_value=None,
-        created_by=getattr(current_user, "username", None),
-    )
+    if not allow_duplicate_number:
+        type_name = placement["document_type"].name if placement["document_type"] else None
+        same_number = _documents_with_number(db, type_name, document_number, series_year)
+        if same_number:
+            raise HTTPException(status_code=409, detail=_duplicate_number_detail(same_number))
+
     try:
-        _assign_system_tracking_number(db, doc)
+        doc = _new_registered_document(
+            db, current_user, placement,
+            title=title, document_number=document_number, series_year=series_year, description=description,
+            assigned_to=assigned_to, author=author, priority=priority,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    db.commit()
-    db.refresh(doc)
-    payload = _compute_qr_payload(doc)
-    doc.qr_code_value = payload
-    db.commit()
-    db.refresh(doc)
-    _ensure_qr_png(doc, payload)
 
-    # handle optional file upload and persist attachment metadata
     if file is not None:
         try:
             os.makedirs(UPLOAD_DIR, exist_ok=True)
             content = uploaded_content or b""
-            checksum = uploaded_checksum or hashlib.sha256(content).hexdigest()
             safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{original_filename}"
             dest_path = os.path.join(UPLOAD_DIR, safe_name)
             with open(dest_path, "wb") as fh:
                 fh.write(content)
-            # set attachment name on document and create attachment row
             doc.attachment_name = safe_name
-            att = models.Attachment(
+            db.add(models.Attachment(
                 document_id=doc.id,
                 original_filename=original_filename,
                 stored_path=dest_path,
                 mime_type=file.content_type or mimetypes.guess_type(original_filename)[0],
                 size=len(content),
-                checksum=checksum,
-            )
-            db.add(att)
+                checksum=uploaded_checksum,
+            ))
             db.commit()
-            db.refresh(att)
         except Exception as exc:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {exc}")
 
-    if document_type:
-        doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, document_type)
-    if category:
-        doc.category_id = _get_or_create_by_name(db, models.Category, category)
-    if current_office:
-        doc.current_office_id = _get_or_create_by_name(db, models.Office, current_office)
-        _ensure_document_office_association(db, doc.id, doc.current_office_id)
-
-    db.commit()
+    db.refresh(doc)
+    _record_registration(db, current_user, doc)
     db.refresh(doc)
     return _serialize_document(doc)
 

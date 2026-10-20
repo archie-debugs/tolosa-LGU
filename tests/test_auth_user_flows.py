@@ -43,10 +43,12 @@ def reset_db():
         db.query(models.SystemSetting).delete()
         db.query(models.User).delete()
         db.query(models.Office).delete()
+        db.query(models.DocumentType).delete()
         db.query(models.RegistrationRequest).delete()
         db.add_all([
             models.Office(name="SB Secretariat"),
             models.Office(name="Office of the Mayor"),
+            models.DocumentType(name="Ordinance"),
         ])
         db.add_all([
             models.User(
