@@ -25,6 +25,10 @@ def client(tmp_path, monkeypatch):
         for table in reversed(models.Base.metadata.sorted_tables):
             db.execute(table.delete())
         db.add_all([
+            models.Category(name="Finance"),
+            models.Category(name="Health"),
+            models.DocumentType(name="Ordinance"),
+            models.Office(name="Office A"),
             models.User(username="admin", hashed_password=get_password_hash("pw123"), role="Super Administrator",
                         permissions="['*']", status="Active", is_active=True),
             models.User(username="member", hashed_password=get_password_hash("pw123"), role="SB Member",
