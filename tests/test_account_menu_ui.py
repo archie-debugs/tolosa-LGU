@@ -78,7 +78,7 @@ def menu_item(menu, label):
 
 
 class Shell:
-    def __init__(self, width=1200, account=None, search=None):
+    def __init__(self, width=1200, account=None, search=None, notifications=None):
         self.page = DummyPage(width)
         self.logged_out = []
         self.account_opened = []
@@ -95,6 +95,7 @@ class Shell:
                 "on_change_password": lambda: self.password_dialogs.append(True),
             },
             search=search,
+            notifications=notifications,
         )
 
     def account_view(self):
@@ -483,3 +484,103 @@ def test_phone_width_search_box_fills_the_bar():
     assert box.expand is True
     run_search(shell, "budget")
     assert results_panel(shell).visible is True
+
+
+class Notifications:
+    def __init__(self, unread=2, error=None):
+        self.loads = 0
+        self.seen_calls = 0
+        self.opened = []
+        self.error = error
+        self.items = [
+            {"id": "incoming:1", "kind": "incoming", "document_id": 1, "tracking_number": "DOC-000001", "title": "Budget",
+             "message": "Sent to your office by Records Office. Waiting for receipt.", "at": "2026-10-20T08:00:00+00:00", "unread": True},
+            {"id": "overdue:2", "kind": "overdue", "document_id": 2, "tracking_number": "DOC-000002", "title": "Market fees",
+             "message": "Overdue by 1 day.", "at": "2026-10-19T16:00:00+00:00", "unread": unread > 1},
+        ]
+        self.unread = unread
+
+    def load(self):
+        self.loads += 1
+        if self.error:
+            raise Exception(self.error)
+        return {"unread": self.unread, "items": self.items}
+
+    def seen(self):
+        self.seen_calls += 1
+        self.unread = 0
+        for item in self.items:
+            item["unread"] = False
+
+    def config(self):
+        return {"load": self.load, "seen": self.seen, "open": self.opened.append}
+
+
+def bell(shell):
+    return next((b for b in find(shell.root, ft.IconButton) if b.icon in (ft.Icons.NOTIFICATIONS_OUTLINED, ft.Icons.NOTIFICATIONS_ACTIVE)), None)
+
+
+def badge_texts(shell):
+    holder = next((c for c in walk(shell.root) if getattr(c, "data", None) == "notification-badge"), None)
+    return texts(holder) if holder is not None and holder.visible is not False else []
+
+
+def notification_panel(shell):
+    return next(c for c in walk(shell.root) if getattr(c, "data", None) == "notifications-panel")
+
+
+def test_no_bell_without_notifications():
+    assert bell(Shell()) is None
+
+
+def test_bell_shows_the_unread_count_and_refreshes_on_every_screen_change():
+    feed = Notifications()
+    shell = Shell(notifications=feed.config())
+
+    assert badge_texts(shell) == ["2"]
+    loads = feed.loads
+    tile = next(c for c in walk(shell.root.controls[0]) if isinstance(c, ft.Container) and clickable(c) and texts(c) == ["Documents"])
+    click(tile)
+    assert feed.loads == loads + 1
+
+
+def test_opening_the_bell_lists_items_marks_them_read_and_opens_a_document():
+    feed = Notifications()
+    shell = Shell(notifications=feed.config())
+    assert notification_panel(shell).visible is False
+
+    bell(shell).on_click(None)
+
+    panel = notification_panel(shell)
+    assert panel.visible is True
+    shown = texts(panel)
+    assert "DOC-000001" in shown and "Sent to your office by Records Office. Waiting for receipt." in shown
+    assert "Overdue by 1 day." in shown
+    assert feed.seen_calls == 1
+    assert badge_texts(shell) == []
+
+    row = next(c for c in walk(panel) if isinstance(c, ft.Container) and clickable(c) and "DOC-000002" in texts(c))
+    click(row)
+    assert feed.opened == [feed.items[1]]
+    assert notification_panel(shell).visible is False
+
+
+def test_nothing_to_show_and_load_errors_are_explained():
+    feed = Notifications(unread=0)
+    feed.items = []
+    shell = Shell(notifications=feed.config())
+    assert badge_texts(shell) == []
+    bell(shell).on_click(None)
+    assert "Nothing needs your attention right now." in texts(notification_panel(shell))
+    assert feed.seen_calls == 0
+
+    broken = Shell(notifications=Notifications(error="Backend unreachable").config())
+    assert badge_texts(broken) == []
+    bell(broken).on_click(None)
+    assert any("Backend unreachable" in t for t in texts(notification_panel(broken)))
+
+
+def test_large_counts_are_capped():
+    feed = Notifications(unread=42)
+    shell = Shell(notifications=feed.config())
+    assert badge_texts(shell) == ["9+"]

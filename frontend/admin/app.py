@@ -4220,6 +4220,11 @@ def main(page: ft.Page, session=None):
                 "on_change_password": open_change_password,
             },
             search=document_search() if has_permission("view_document_details") or has_permission("view_office_document_details") else None,
+            notifications={
+                "load": lambda: backend_api("GET", "/notifications"),
+                "seen": lambda: backend_api("POST", "/notifications/seen"),
+                "open": lambda item: show_document_details({"id": item.get("document_id")}),
+            },
         )
 
     def document_search():
