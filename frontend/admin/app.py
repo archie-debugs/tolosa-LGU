@@ -138,6 +138,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
 from frontend.admin.committees import build_committees_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.document_details import open_document_details
+from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
 from frontend.admin.users_roles import (
@@ -1288,7 +1289,6 @@ def main(page: ft.Page, session=None):
 
     def reference_data_view():
         load_reference_data()
-        load_active_definition_options()
         return build_reference_data_view(reference_categories, reference_document_types, reference_search, reference_kind_filter, open_reference_create_dialog, open_reference_edit_dialog, toggle_reference_definition, load_reference_data, page, section_header)
 
     documents_data = []
@@ -1488,139 +1488,19 @@ def main(page: ft.Page, session=None):
         qr_label_download_dialog.open = True
         page.update()
 
-    edit_document_id = None
-    edit_document_title = ft.TextField(label="Title", width=680)
-    edit_document_number = ft.TextField(label="Legislative Document Number", width=240)
-    edit_series_year = ft.TextField(label="Series Year", width=180)
-    edit_document_description = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=3, width=680)
-    edit_document_category = ft.Dropdown(label="Category", width=330, options=[ft.dropdown.Option("Legislation"), ft.dropdown.Option("Policy"), ft.dropdown.Option("Report")])
-    edit_document_type = ft.Dropdown(label="Document Type", width=330, options=[ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution"), ft.dropdown.Option("Committee Report")])
-    edit_document_current_office = ft.Dropdown(label="Current Office", width=330, options=[ft.dropdown.Option("SB Secretariat"), ft.dropdown.Option("Office of the Mayor"), ft.dropdown.Option("Committee on Health")])
-    edit_document_assigned_to = ft.TextField(label="Assigned To", width=330)
-    edit_document_author = ft.TextField(label="Author", width=330)
-    edit_document_priority = ft.Dropdown(label="Priority", width=330, options=[ft.dropdown.Option("Low"), ft.dropdown.Option("Medium"), ft.dropdown.Option("High")])
-    edit_document_remarks = ft.TextField(label="Remarks", multiline=True, min_lines=2, max_lines=3, width=680)
-    edit_document_session = ft.TextField(label="Session", width=330)
-
-    def load_active_definition_options():
-        try:
-            headers = get_admin_headers()
-            category_response = requests.get(f"{BACKEND_URL}/reference-data/categories", params={"active_only": "true"}, headers=headers, verify=False, timeout=15)
-            type_response = requests.get(f"{BACKEND_URL}/reference-data/document-types", params={"active_only": "true"}, headers=headers, verify=False, timeout=15)
-            if category_response.status_code != 200 or type_response.status_code != 200:
-                return
-            category_names = [item.get("name") for item in category_response.json() if item.get("name")]
-            type_names = [item.get("name") for item in type_response.json() if item.get("name")]
-            for control, names in (
-                (edit_document_category, category_names),
-                (edit_document_type, type_names),
-            ):
-                current_value = control.value
-                control.options = [ft.dropdown.Option(name) for name in names]
-                if current_value and current_value in names:
-                    control.value = current_value
-                elif not current_value and names:
-                    control.value = names[0]
-        except Exception:
-            pass
-
-    edit_document_dialog = ft.AlertDialog(
-        title=ft.Text("Edit Document", size=20, weight=ft.FontWeight.BOLD),
-        content=ft.Column(
-            [
-                ft.Text("Update document information. Tracking number, attachment, QR, visibility, and archive state are preserved.", size=12, color=ft.Colors.BLUE_GREY_600),
-                edit_document_title,
-                ft.Row([edit_document_number, edit_series_year], spacing=12, wrap=True),
-                edit_document_description,
-                ft.Row([edit_document_category, edit_document_type], spacing=12, wrap=True),
-                ft.Row([edit_document_current_office, edit_document_assigned_to], spacing=12, wrap=True),
-                ft.Row([edit_document_author, edit_document_priority, edit_document_session], spacing=12, wrap=True),
-                edit_document_remarks,
-            ],
-            spacing=10,
-            scroll=ft.ScrollMode.AUTO,
-            width=700,
-        ),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_edit_document_dialog()),
-            ft.Button("Save Changes", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: submit_edit_document(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-        ],
-    )
+    # Edit document (frontend/admin/document_edit.py); offices change only through Pass.
+    edit_document_dialog = ft.AlertDialog()
     page.overlay.append(edit_document_dialog)
 
-    def _set_edit_dropdown_value(control, value):
-        normalized = (value or "").strip()
-        if normalized and not any(getattr(option, "key", None) == normalized or getattr(option, "text", None) == normalized for option in control.options):
-            control.options.append(ft.dropdown.Option(normalized))
-        control.value = normalized or None
-
-    def close_edit_document_dialog(_=None):
-        edit_document_dialog.open = False
-        page.update()
+    def document_saved():
+        load_documents_table()
+        show_document_notice("Document updated successfully.")
 
     def open_edit_document_dialog(document):
-        nonlocal edit_document_id
-        edit_document_id = document.get("id")
-        if not edit_document_id:
+        if not document.get("id"):
             show_document_notice("Unable to edit document: document ID is missing.")
             return
-        edit_document_title.value = str(document.get("title") or "").strip()
-        edit_document_number.value = str(document.get("document_number") or "").strip()
-        edit_series_year.value = str(document.get("series_year") or "").strip()
-        edit_document_description.value = str(document.get("description") or "").strip()
-        _set_edit_dropdown_value(edit_document_category, document.get("category"))
-        _set_edit_dropdown_value(edit_document_type, document.get("document_type"))
-        _set_edit_dropdown_value(edit_document_current_office, document.get("current_office"))
-        edit_document_assigned_to.value = "" if document.get("assigned_to") in (None, "-") else str(document.get("assigned_to"))
-        edit_document_author.value = "" if document.get("author") in (None, "-") else str(document.get("author"))
-        _set_edit_dropdown_value(edit_document_priority, document.get("priority") or "Medium")
-        edit_document_remarks.value = str(document.get("remarks") or "").strip()
-        edit_document_session.value = "" if document.get("session") in (None, "-") else str(document.get("session"))
-        edit_document_dialog.open = True
-        page.update()
-
-    def submit_edit_document(_=None):
-        if not edit_document_id:
-            show_document_notice("Unable to edit document: no document is selected.")
-            return
-        title = (edit_document_title.value or "").strip()
-        if not title:
-            show_document_notice("Title is required.")
-            return
-        payload = {
-            "title": title,
-            "document_number": (edit_document_number.value or "").strip() or None,
-            "series_year": (edit_series_year.value or "").strip() or None,
-            "description": (edit_document_description.value or "").strip() or None,
-            "category": (edit_document_category.value or "").strip() or None,
-            "document_type": (edit_document_type.value or "").strip() or None,
-            "current_office": (edit_document_current_office.value or "").strip() or None,
-            "assigned_to": (edit_document_assigned_to.value or "").strip() or None,
-            "author": (edit_document_author.value or "").strip() or None,
-            "priority": (edit_document_priority.value or "").strip() or None,
-            "remarks": (edit_document_remarks.value or "").strip() or None,
-            "session": (edit_document_session.value or "").strip() or None,
-        }
-        try:
-            response = requests.put(
-                f"{BACKEND_URL}/documents/{edit_document_id}",
-                json=payload,
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=15,
-            )
-            if response.status_code != 200:
-                try:
-                    detail = response.json().get("detail", response.text)
-                except Exception:
-                    detail = response.text
-                raise Exception(f"{response.status_code} {detail}")
-            edit_document_dialog.open = False
-            page.update()
-            load_documents_table()
-            show_document_notice("Document updated successfully.")
-        except Exception as exc:
-            show_document_notice(f"Document update failed: {exc}")
+        open_edit_dialog(page, edit_document_dialog, backend_api, document, on_saved=document_saved)
 
     def make_document_header(label, width):
         return ft.Container(
@@ -2409,8 +2289,6 @@ def main(page: ft.Page, session=None):
         nonlocal documents_refresh
         if not has_permission("view_documents"):
             return ft.Column([ft.Text("You do not have access to documents.")])
-        # The edit dialog takes its category and type options from here.
-        load_active_definition_options()
         view, documents_refresh = build_documents_view(
             page,
             backend_api,
