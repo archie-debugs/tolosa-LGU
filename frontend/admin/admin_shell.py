@@ -3,6 +3,17 @@ import traceback
 
 # Nav items in this section are pinned to the bottom of the sidebar.
 FOOTER_SECTION = "Account"
+# Nav items in this section are opened from the profile menu instead of the sidebar.
+MENU_SECTION = "Menu"
+# Below this width the profile button shows only the initials.
+COMPACT_WIDTH = 600
+
+
+def initials(name):
+    words = (name or "").split()
+    if len(words) >= 2:
+        return (words[0][0] + words[-1][0]).upper()
+    return (words[0][:2] if words else "?").upper()
 
 
 def render_shell(
@@ -12,7 +23,14 @@ def render_shell(
     nav_items,
     content_view,
     initial_selected_index: int = 0,
+    account=None,
 ):
+    """Draw the sidebar, the profile bar and `content_view`.
+
+    `account` describes the signed-in user for the profile menu:
+    {"name", "role", "office", "on_change_password"}; missing keys fall back to `current_user`.
+    """
+    account = account or {}
     selected_index = initial_selected_index
     shell_nav_items = list(nav_items)
     is_dark = page.theme_mode == ft.ThemeMode.DARK
@@ -70,31 +88,8 @@ def render_shell(
         if content is not None:
             apply_view_theme(content)
 
-    def night_mode_setting():
-        return ft.Switch(
-            label="Night mode",
-            value=is_dark,
-            on_change=toggle_night_mode,
-        )
-
-    def shared_settings_view():
-        return ft.Container(
-            padding=20,
-            bgcolor=surface_color,
-            content=ft.Column(
-                [
-                    ft.Text("Settings", size=24, weight=ft.FontWeight.BOLD, color=heading_color),
-                    ft.Text("Personalize your workspace appearance.", color=text_color),
-                    night_mode_setting(),
-                ],
-                spacing=16,
-            ),
-        )
-
     # Nav items are (icon, label, view) or (icon, label, view, section).
     shell_nav_items = [item if len(item) == 4 else (*item, None) for item in shell_nav_items]
-    if not any(label == "Settings" for _, label, *_ in shell_nav_items):
-        shell_nav_items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", shared_settings_view, FOOTER_SECTION))
 
     # =========================================================
     # SIDEBAR
@@ -142,11 +137,10 @@ def render_shell(
 
         selected_index = index
         build_nav()
+        build_profile_bar()
 
         try:
             next_view = shell_nav_items[index][2]()
-            if shell_nav_items[index][1] == "Settings" and shell_nav_items[index][2] is not shared_settings_view:
-                next_view = ft.Column([natural_height_view(next_view), night_mode_setting()], spacing=16)
             next_view = natural_height_view(next_view)
             apply_view_theme(next_view)
 
@@ -356,6 +350,9 @@ def render_shell(
                 bgcolor=(selected_color if is_selected else None),
             )
 
+            if section == MENU_SECTION:
+                continue
+
             if section == FOOTER_SECTION:
                 footer_container.controls.append(tile)
                 continue
@@ -365,24 +362,92 @@ def render_shell(
             current_section = section
             nav_container.controls.append(tile)
 
-        # -----------------------------------------------------
-        # LOGOUT
-        # -----------------------------------------------------
+    # =========================================================
+    # PROFILE BAR
+    # =========================================================
 
-        footer_container.controls.append(
-            nav_tile(
-                ft.Icons.LOGOUT,
-                "Log out",
-                ft.Colors.RED_700,
-                lambda e: logout_user(),
-            )
+    profile_bar = ft.Container(padding=ft.Padding(left=8, top=4, right=8, bottom=4))
+
+    def open_menu_view(label):
+        index = next((i for i, item in enumerate(shell_nav_items) if item[1] == label), None)
+        if index is not None:
+            switch_view(index)
+
+    def menu_entry(icon, label, on_click, color=None, trailing=None):
+        color = color or text_color
+        row = [ft.Icon(icon, size=18, color=color), ft.Text(label, size=13, color=color)]
+        if trailing is not None:
+            row += [ft.Container(width=12), trailing]
+        return ft.PopupMenuItem(
+            content=ft.Row(row, spacing=10, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            on_click=on_click,
         )
+
+    def build_profile_bar():
+        name = account.get("name") or current_user or "Signed in"
+        muted = ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_500
+        compact = (getattr(page, "width", None) or 1200) < COMPACT_WIDTH
+
+        avatar = ft.CircleAvatar(
+            content=ft.Text(initials(name), size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+            bgcolor=ft.Colors.BLUE_700,
+            radius=16,
+        )
+        button = [avatar]
+        if not compact:
+            button += [
+                ft.Text(name, size=13, weight=ft.FontWeight.W_600, color=heading_color, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=20, color=muted),
+            ]
+
+        who = [ft.Text(name, size=14, weight=ft.FontWeight.BOLD, color=heading_color)]
+        details = " · ".join(part for part in (account.get("role"), account.get("office")) if part)
+        if details:
+            who.append(ft.Text(details, size=12, color=muted))
+
+        items = [
+            ft.PopupMenuItem(content=ft.Column(who, spacing=2, tight=True)),
+            ft.PopupMenuItem(),
+        ]
+        if any(item[1] == "My Account" for item in shell_nav_items):
+            items.append(menu_entry(ft.Icons.PERSON_OUTLINE, "My account", lambda e: open_menu_view("My Account")))
+        if account.get("on_change_password"):
+            items.append(menu_entry(ft.Icons.LOCK_RESET, "Change password", lambda e: account["on_change_password"]()))
+        items += [
+            menu_entry(
+                ft.Icons.DARK_MODE_OUTLINED,
+                "Night mode",
+                toggle_night_mode,
+                trailing=ft.Icon(ft.Icons.TOGGLE_ON if is_dark else ft.Icons.TOGGLE_OFF, size=26, color=(ft.Colors.BLUE_300 if is_dark else muted)),
+            ),
+            ft.PopupMenuItem(),
+            menu_entry(ft.Icons.LOGOUT, "Log out", lambda e: logout_user(), color=(ft.Colors.RED_300 if is_dark else ft.Colors.RED_700)),
+        ]
+
+        profile_bar.content = ft.Row(
+            [
+                ft.PopupMenuButton(
+                    content=ft.Container(
+                        content=ft.Row(button, spacing=8, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        padding=ft.Padding(left=4, top=4, right=8, bottom=4),
+                        border_radius=20,
+                    ),
+                    items=items,
+                    menu_position=ft.PopupMenuPosition.UNDER,
+                    tooltip="Account",
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.END,
+        )
+        profile_bar.bgcolor = surface_color
+        profile_bar.border = ft.Border(bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_GREY_100))
 
     # =========================================================
     # INITIAL NAVIGATION
     # =========================================================
 
     build_nav()
+    build_profile_bar()
 
     # =========================================================
     # RESET PAGE
@@ -451,7 +516,7 @@ def render_shell(
                     bgcolor=surface_color,
                     border=None,
                     border_radius=0,
-                    content=content_holder,
+                    content=ft.Column([profile_bar, content_holder], expand=True, spacing=4),
                 ),
             ],
             expand=True,

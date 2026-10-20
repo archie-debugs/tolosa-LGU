@@ -19,8 +19,8 @@ from ..core import (
     require_permission,
     require_user_management_permission,
 )
-from ..authentication import get_current_user_for_user_management
-from ..auth_jwt import create_access_token, create_refresh_token, decode_refresh_token
+from ..authentication import get_current_user, get_current_user_for_user_management, oauth2_scheme
+from ..auth_jwt import create_access_token, create_refresh_token, decode_access_token, decode_refresh_token
 
 router = APIRouter()
 
@@ -36,6 +36,12 @@ class UserUpdate(BaseModel):
 
 
 class PasswordReset(BaseModel):
+    new_password: str
+    confirm_password: str
+
+
+class PasswordChange(BaseModel):
+    current_password: str
     new_password: str
     confirm_password: str
 
@@ -427,6 +433,58 @@ def reset_user_password(
         details=f"{current_admin.username} reset the password for account {user.username}",
     )
     return {"message": "User password reset successfully", "id": user.id}
+
+
+@router.get("/auth/me")
+def read_my_account(current_user: models.User = Depends(get_current_user)):
+    """The signed-in account, for the profile menu and My Account."""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "full_name": getattr(current_user, "full_name", None) or None,
+        "email": getattr(current_user, "email", None) or None,
+        "role": normalize_user_role(current_user.role),
+        "office": current_user.office.name if getattr(current_user, "office", None) else None,
+        "status": getattr(current_user, "status", None) or "Active",
+        "permissions": sorted(normalize_permissions(getattr(current_user, "permissions", None))),
+        "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
+        "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+    }
+
+
+@router.post("/auth/me/password")
+def change_my_password(
+    payload: PasswordChange,
+    token: str | None = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Change your own password; your other sessions are signed out, this one stays."""
+    if not verify_password(payload.current_password or "", current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Your current password is incorrect.")
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="The new passwords do not match.")
+    password = validate_reset_password(payload.new_password)
+    if verify_password(password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Choose a password different from your current one.")
+
+    user = db.query(models.User).filter(models.User.id == current_user.id).one()
+    user.hashed_password = get_password_hash(password)
+    this_session = decode_access_token(token).get("session_id")
+    db.query(models.UserSession).filter(
+        models.UserSession.user_id == user.id,
+        models.UserSession.revoked_at.is_(None),
+        models.UserSession.session_id != this_session,
+    ).update({"revoked_at": datetime.now(timezone.utc), "revoke_reason": "password changed"}, synchronize_session=False)
+    record_audit_log(
+        db,
+        actor=user.username,
+        action="PASSWORD_CHANGED",
+        target_type="User",
+        target_id=str(user.id),
+        details=f"{user.username} changed their password; other sessions were signed out",
+    )
+    return {"message": "Your password has been changed."}
 
 
 @router.post("/auth/users/{user_id}/unlock")
