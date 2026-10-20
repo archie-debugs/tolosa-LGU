@@ -1,12 +1,16 @@
+import base64
+import io
 import re
 import uuid
 from datetime import timedelta
+
+import qrcode
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from ..database import get_db
-from .. import login_lockout, models
+from .. import login_lockout, models, two_step
 from ..core import (
     get_password_hash,
     verify_password,
@@ -456,6 +460,8 @@ def _my_account(user: models.User) -> dict:
         "permissions": sorted(normalize_permissions(getattr(user, "permissions", None))),
         "last_login": user.last_login.isoformat() if user.last_login else None,
         "created_at": user.created_at.isoformat() if user.created_at else None,
+        "two_step_enabled": bool(getattr(user, "totp_secret", None)),
+        "two_step_recovery_codes_left": two_step.recovery_codes_left(getattr(user, "totp_recovery_codes", None)),
     }
 
 
@@ -554,10 +560,131 @@ def unlock_user(
     return {"message": "Login lockout cleared", "id": user.id}
 
 
+TWO_STEP_HEADER = {"X-Two-Step": "required"}
+TWO_STEP_ASK = "Enter the 6-digit code from your authenticator app."
+TWO_STEP_WRONG = "That code is not right. Check your authenticator app and try again."
+
+
+def _record_failed_login(db, username, details):
+    record_audit_log(db, actor=username, action="FAILED_LOGIN", target_type="Auth", target_id=username, details=details)
+    if login_lockout.recent_failure_count(db, username) == login_lockout.LOGIN_MAX_FAILURES:
+        record_audit_log(
+            db,
+            actor="System",
+            action="ACCOUNT_LOCKED",
+            target_type="Auth",
+            target_id=username,
+            details=f"Locked for {login_lockout.LOGIN_LOCKOUT_MINUTES} minutes after {login_lockout.LOGIN_MAX_FAILURES} failed logins",
+        )
+
+
+def _accept_code(db, user, code):
+    """Use up `code` (authenticator or recovery) for `user`; False if it is wrong or already used."""
+    step = two_step.matching_step(user.totp_secret, code, user.totp_last_step)
+    if step is not None:
+        user.totp_last_step = step
+        return True
+    if two_step.looks_like_recovery_code(code):
+        remaining = two_step.use_recovery_code(user.totp_recovery_codes, code)
+        if remaining is not None:
+            user.totp_recovery_codes = remaining
+            record_audit_log(
+                db, actor=user.username, action="TWO_STEP_RECOVERY_CODE_USED", target_type="Auth", target_id=user.username,
+                details=f"Recovery code used; {two_step.recovery_codes_left(remaining)} left", commit=False,
+            )
+            return True
+    return False
+
+
+def _check_login_code(db, user, code):
+    """The second step of login: a missing code asks for one, a wrong one counts as a failed login."""
+    if not (code or "").strip():
+        raise HTTPException(status_code=401, detail=TWO_STEP_ASK, headers=TWO_STEP_HEADER)
+    if not _accept_code(db, user, code):
+        db.rollback()
+        _record_failed_login(db, user.username, "Wrong two-step code")
+        raise HTTPException(status_code=401, detail=TWO_STEP_WRONG, headers=TWO_STEP_HEADER)
+
+
+class TwoStepCode(BaseModel):
+    code: str = ""
+
+
+class TwoStepOff(BaseModel):
+    password: str = ""
+    code: str = ""
+
+
+def _require_super_admin(user):
+    if normalize_user_role(user.role) != "Super Administrator":
+        raise HTTPException(status_code=403, detail="Two-step login is available to Super Admins.")
+
+
+@router.post("/auth/two-step/setup")
+def start_two_step_setup(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """A new secret to scan; it is not used for login until /auth/two-step/enable confirms a code."""
+    _require_super_admin(current_user)
+    user = db.query(models.User).filter(models.User.id == current_user.id).one()
+    if user.totp_secret:
+        raise HTTPException(status_code=400, detail="Two-step login is already on.")
+    secret = two_step.new_secret()
+    user.totp_pending_secret = secret
+    db.commit()
+    uri = two_step.setup_uri(secret, user.username)
+    buffer = io.BytesIO()
+    qrcode.make(uri).save(buffer, format="PNG")
+    return {"secret": secret, "uri": uri, "qr_png_base64": base64.b64encode(buffer.getvalue()).decode("ascii")}
+
+
+@router.post("/auth/two-step/enable")
+def enable_two_step(payload: TwoStepCode, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    _require_super_admin(current_user)
+    user = db.query(models.User).filter(models.User.id == current_user.id).one()
+    if user.totp_secret:
+        raise HTTPException(status_code=400, detail="Two-step login is already on.")
+    if not user.totp_pending_secret:
+        raise HTTPException(status_code=400, detail="Start the setup first.")
+    step = two_step.matching_step(user.totp_pending_secret, payload.code)
+    if step is None:
+        raise HTTPException(status_code=400, detail=TWO_STEP_WRONG)
+    codes, hashes = two_step.new_recovery_codes()
+    user.totp_secret, user.totp_pending_secret = user.totp_pending_secret, None
+    user.totp_last_step = step
+    user.totp_enabled_at = datetime.now(timezone.utc)
+    user.totp_recovery_codes = hashes
+    db.commit()
+    record_audit_log(db, actor=user.username, action="TWO_STEP_ENABLED", target_type="Auth", target_id=user.username,
+                     details="Two-step login turned on")
+    return {"recovery_codes": codes}
+
+
+def _clear_two_step(user):
+    user.totp_secret = user.totp_pending_secret = user.totp_enabled_at = None
+    user.totp_last_step = user.totp_recovery_codes = None
+
+
+@router.post("/auth/two-step/disable")
+def disable_two_step(payload: TwoStepOff, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    user = db.query(models.User).filter(models.User.id == current_user.id).one()
+    if not user.totp_secret:
+        raise HTTPException(status_code=400, detail="Two-step login is not on.")
+    if not verify_password(payload.password or "", user.hashed_password):
+        raise HTTPException(status_code=400, detail="Your password is not right.")
+    if not _accept_code(db, user, payload.code):
+        db.rollback()
+        raise HTTPException(status_code=400, detail=TWO_STEP_WRONG)
+    _clear_two_step(user)
+    db.commit()
+    record_audit_log(db, actor=user.username, action="TWO_STEP_DISABLED", target_type="Auth", target_id=user.username,
+                     details="Two-step login turned off")
+    return {"two_step_enabled": False}
+
+
 @router.post("/auth/login")
 def login_user(
     username: str = Form(...),
     password: str = Form(...),
+    code: str = Form(""),
     db: Session = Depends(get_db),
 ):
     if not username or not password:
@@ -570,16 +697,7 @@ def login_user(
 
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
-        record_audit_log(db, actor=username, action="FAILED_LOGIN", target_type="Auth", target_id=username, details="Failed login attempt")
-        if login_lockout.recent_failure_count(db, username) == login_lockout.LOGIN_MAX_FAILURES:
-            record_audit_log(
-                db,
-                actor="System",
-                action="ACCOUNT_LOCKED",
-                target_type="Auth",
-                target_id=username,
-                details=f"Locked for {login_lockout.LOGIN_LOCKOUT_MINUTES} minutes after {login_lockout.LOGIN_MAX_FAILURES} failed logins",
-            )
+        _record_failed_login(db, username, "Failed login attempt")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if getattr(user, "status", "Active") == "Pending":
@@ -588,6 +706,9 @@ def login_user(
         raise HTTPException(status_code=403, detail="Your registration request has been rejected. Please contact the system administrator.")
     if getattr(user, "status", "Active") == "Inactive" or not getattr(user, "is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated.")
+
+    if user.totp_secret:
+        _check_login_code(db, user, code)
 
     record_audit_log(
         db,

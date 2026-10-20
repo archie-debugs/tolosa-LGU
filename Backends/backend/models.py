@@ -174,6 +174,13 @@ class User(Base):
     last_login = Column(DateTime, nullable=True, index=True)
     # Notifications that happened after this are unread (routes/notifications.py).
     notifications_seen_at = Column(DateTime(timezone=True), nullable=True)
+    # Two-step login (two_step.py). totp_secret is set only while it is on; the pending
+    # secret waits for the first code during setup; recovery codes are stored as hashes.
+    totp_secret = Column(String, nullable=True)
+    totp_pending_secret = Column(String, nullable=True)
+    totp_enabled_at = Column(DateTime(timezone=True), nullable=True)
+    totp_last_step = Column(Integer, nullable=True)
+    totp_recovery_codes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
