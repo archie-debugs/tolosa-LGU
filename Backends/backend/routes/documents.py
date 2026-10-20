@@ -835,6 +835,17 @@ def registration_options(db: Session = Depends(get_db), current_user: models.Use
     }
 
 
+@router.get("/edit-options")
+def edit_options(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Categories and document types the edit form may offer."""
+    require_permission(current_user, "edit_documents")
+
+    def active_names(Model):
+        return [row.name for row in db.query(Model).filter(Model.is_active.is_(True)).order_by(Model.name.asc())]
+
+    return {"categories": active_names(models.Category), "document_types": active_names(models.DocumentType)}
+
+
 @router.get("/registration/duplicates")
 def registration_duplicates(
     document_type: str | None = Query(default=None),
@@ -1142,23 +1153,26 @@ def _get_history_event_timestamp(item: dict):
     return ""
 
 
-def _get_or_create_by_name(db: Session, Model, name: str):
-    if not name:
-        return None
-    name = name.strip()
-    existing = db.query(Model).filter(Model.name == name).first()
-    if existing:
-        return existing.id
-    try:
-        obj = Model(name=name)
-        db.add(obj)
-        db.commit()
-        db.refresh(obj)
-        return obj.id
-    except exc.IntegrityError:
-        db.rollback()
-        existing = db.query(Model).filter(Model.name == name).first()
-        return existing.id if existing else None
+# Fields the system sets; an edit may send them back unchanged but never change them.
+SYSTEM_MANAGED_FIELDS = ("created_by", "qr_code_value", "attachment_name", "date_registered")
+OFFICE_EDIT_REFUSALS = {
+    "current_office": "A document moves to another office only by passing it (Pass), so the trail records the move.",
+    "originating_office": "The originating office is set at registration and cannot be edited.",
+}
+
+
+def _same_name(a, b) -> bool:
+    return (a or "").strip().lower() == (b or "").strip().lower()
+
+
+def _edited_reference(db: Session, Model, current_name, current_id, name, label):
+    """(name, id) for an edited category or type: unchanged stays as is, even if retired since; None clears."""
+    if not (name or "").strip():
+        return None, None
+    if _same_name(name, current_name):
+        return current_name, current_id
+    row = _active_reference(db, Model, name, label)
+    return row.name, row.id
 
 
 def _ensure_document_office_association(db: Session, document_id: int, office_id: int | None) -> None:
@@ -1817,29 +1831,30 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
             raise HTTPException(status_code=400, detail=f"{label} is required.")
     if "series_year" in data:
         data["series_year"] = _require_legislative_year(data["series_year"])
+    for field in SYSTEM_MANAGED_FIELDS:
+        if field in data and data[field] != getattr(doc, field):
+            raise HTTPException(status_code=400, detail="This field is managed by the system and cannot be edited.")
+    for field, message in OFFICE_EDIT_REFUSALS.items():
+        if field in data and not (data[field] and _same_name(data[field], getattr(doc, field))):
+            raise HTTPException(status_code=400, detail=message)
+    references = {}
+    if "category" in data:
+        references["category"] = _edited_reference(db, models.Category, doc.category, doc.category_id, data["category"], "Category")
+    if "document_type" in data:
+        references["document_type"] = _edited_reference(db, models.DocumentType, doc.document_type, doc.document_type_id, data["document_type"], "Document type")
     previous_visibility = bool(doc.is_public)
     if "is_public" in data and data["is_public"] != previous_visibility:
         require_permission(current_user, "manage_public_visibility")
     # apply simple fields
     for field, value in data.items():
-        if field in ("document_type", "category", "originating_office", "current_office"):
-            # handled below to populate normalized FK columns
+        if field in ("document_type", "category", "originating_office", "current_office", *SYSTEM_MANAGED_FIELDS):
             continue
         setattr(doc, field, value)
-
-    # handle normalized lookups; None clears both the name and its link
-    if "document_type" in data:
-        doc.document_type = data.get("document_type")
-        doc.document_type_id = _get_or_create_by_name(db, models.DocumentType, data.get("document_type"))
-    if "category" in data:
-        doc.category = data.get("category")
-        doc.category_id = _get_or_create_by_name(db, models.Category, data.get("category"))
-    if "originating_office" in data:
-        doc.originating_office = data.get("originating_office")
-        doc.originating_office_id = _get_or_create_by_name(db, models.Office, data.get("originating_office"))
-    if "current_office" in data:
-        doc.current_office = data.get("current_office")
-        doc.current_office_id = _get_or_create_by_name(db, models.Office, data.get("current_office"))
+    # None clears both the name and its link.
+    if "category" in references:
+        doc.category, doc.category_id = references["category"]
+    if "document_type" in references:
+        doc.document_type, doc.document_type_id = references["document_type"]
 
     db.commit()
     db.refresh(doc)
