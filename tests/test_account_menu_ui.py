@@ -311,3 +311,68 @@ def test_edit_profile_checks_fields_and_shows_the_backend_reason():
     press(save)
     assert "Enter a valid email address." in texts(dialog.content)
     assert dialog.open is True and saved == []
+
+
+def resize(page, width):
+    page.width = width
+    handler = getattr(page, "on_resized", None) or getattr(page, "on_resize", None)
+    handler(None)
+
+
+def menu_button(shell):
+    return next((b for b in find(shell.root, ft.IconButton) if b.icon == ft.Icons.MENU), None)
+
+
+def drawer_open(shell):
+    stack = shell.root
+    return isinstance(stack, ft.Stack) and stack.controls[2].visible is True
+
+
+def test_desktop_keeps_the_sidebar_beside_the_screen():
+    shell = Shell(width=1280)
+
+    assert isinstance(shell.root, ft.Row)
+    assert menu_button(shell) is None
+    assert "Documents" in texts(shell.root.controls[0])
+
+
+def test_phone_width_folds_the_sidebar_into_a_drawer():
+    shell = Shell(width=390)
+
+    assert isinstance(shell.root, ft.Stack)
+    assert not drawer_open(shell)
+    button = menu_button(shell)
+    assert button is not None
+
+    button.on_click(None)
+    assert drawer_open(shell)
+    assert "Documents" in texts(shell.root.controls[2])
+
+    documents_tile = next(c for c in walk(shell.root.controls[2]) if isinstance(c, ft.Container) and clickable(c) and texts(c) == ["Documents"])
+    click(documents_tile)
+    assert not drawer_open(shell)
+    assert "Documents screen" in texts(shell.root.controls[0])
+
+
+def test_tapping_outside_the_drawer_closes_it():
+    shell = Shell(width=390)
+    menu_button(shell).on_click(None)
+
+    click(shell.root.controls[1])
+
+    assert not drawer_open(shell)
+
+
+def test_resizing_switches_between_sidebar_and_drawer_and_keeps_the_screen():
+    shell = Shell(width=1280)
+    menu_item(shell.menu, "My account").on_click(None)
+
+    resize(shell.page, 390)
+    assert isinstance(shell.root, ft.Stack)
+    assert "My Account screen" in texts(shell.root.controls[0])
+    assert "Ana Bautista" not in texts(shell.menu.content)
+
+    resize(shell.page, 1280)
+    assert isinstance(shell.root, ft.Row)
+    assert "My Account screen" in texts(shell.root.controls[1])
+    assert "Ana Bautista" in texts(shell.menu.content)
