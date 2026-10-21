@@ -118,7 +118,8 @@ PROFILE = {
 }
 
 ADMIN_SECTIONS = ["Administration", "Security & Sessions", "System Configuration", "System Information",
-                  "User & Permission Management", "Office Management", "Audit Logs", "Active Sessions"]
+                  "User & Permission Management", "Office Management", "Audit Logs", "Active Sessions",
+                  "Homepage Announcements"]
 
 
 class FakeApi:
@@ -225,3 +226,76 @@ def test_refused_system_calls_show_an_error_instead_of_values():
     assert "Unable to load system settings" in shown
     assert "Unable to load system information" in shown
     assert "a1b2c3" not in shown
+
+
+class AnnouncementsApi:
+    """Returns stored announcements and records what Save sends."""
+
+    def __init__(self, announcements):
+        self.announcements = announcements
+        self.saved = []
+
+    def __call__(self, method, path, **kwargs):
+        if method == "PUT" and path == "/system-settings":
+            self.saved.append(kwargs["json"]["settings"])
+            return {}
+        if path == "/system-settings":
+            return {"settings": {"homepage_announcements": self.announcements}}
+        return {}
+
+
+def announcement_fields(view):
+    return [c for c in walk(view) if isinstance(c, ft.TextField) and c.label in ("Category", "Title", "Date", "Details (optional)")]
+
+
+def icon_buttons(view, tooltip):
+    return [c for c in walk(view) if isinstance(c, ft.IconButton) and c.tooltip == tooltip]
+
+
+def test_super_admin_edits_reorders_and_saves_homepage_announcements():
+    api = AnnouncementsApi([
+        {"category": "Public notice", "title": "First", "date": "", "details": ""},
+        {"category": "Update", "title": "Second", "date": "Oct 27", "details": "More"},
+    ])
+    view, _ = admin_view(api=api)
+    assert [f.value for f in announcement_fields(view) if f.label == "Title"] == ["First", "Second"]
+
+    icon_buttons(view, "Move down")[0].on_click(None)
+    buttons(view, "Add announcement")[0].on_click(None)
+    titles = [f for f in announcement_fields(view) if f.label == "Title"]
+    titles[2].value = "  Third  "
+    icon_buttons(view, "Remove")[0].on_click(None)  # removes "Second", now first
+    buttons(view, "Save announcements")[0].on_click(None)
+
+    assert api.saved == [{"homepage_announcements": [
+        {"category": "Public notice", "title": "First", "date": "", "details": ""},
+        {"category": "", "title": "Third", "date": "", "details": ""},
+    ]}]
+    assert "Announcements saved. The homepage shows them the next time it opens." in words(view)
+
+
+def test_announcements_without_a_title_are_not_saved():
+    api = AnnouncementsApi([])
+    view, _ = admin_view(api=api)
+    assert "No announcements. The homepage will say there are none right now." in words(view)
+
+    buttons(view, "Add announcement")[0].on_click(None)
+    buttons(view, "Save announcements")[0].on_click(None)
+
+    assert api.saved == []
+    assert "Add a title to announcement 1." in words(view)
+
+
+def test_announcements_cannot_be_saved_when_they_failed_to_load():
+    view, _ = admin_view(api=FakeApi(fail={"/system-settings"}))
+    assert buttons(view, "Save announcements")[0].disabled
+    assert buttons(view, "Add announcement")[0].disabled
+
+
+def test_add_announcement_stops_at_the_limit():
+    view, _ = admin_view(api=AnnouncementsApi([{"title": f"Item {n}"} for n in range(9)]))
+    add = buttons(view, "Add announcement")[0]
+    assert not add.disabled
+    add.on_click(None)
+    assert add.disabled
+
