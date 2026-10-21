@@ -159,6 +159,7 @@ from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.change_password import open_change_password_dialog
 from frontend.admin.edit_profile import open_edit_profile_dialog as open_profile_dialog
 from frontend.admin.two_step import login_needs_code, two_step_row
+from frontend.admin import login_view
 
 
 def clear_stale_session_state(state):
@@ -4720,17 +4721,18 @@ def main(page: ft.Page, session=None):
             if isinstance(control, ft.AlertDialog):
                 control.open = False
         page.clean()
-        mobile_scroll = (page.width or 1024) <= 600
-        page.scroll = ft.ScrollMode.AUTO if mobile_scroll else None
-        page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-        page.vertical_alignment = ft.MainAxisAlignment.START if mobile_scroll else ft.MainAxisAlignment.CENTER
-        page.bgcolor = ft.Colors.BLUE_GREY_50
-        page.padding = 24
+        # Narrow screens drop the brand panel and scroll the card instead of stretching to fill the window.
+        page.scroll = ft.ScrollMode.AUTO if (page.width or 1024) <= 720 else None
+        page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
+        page.vertical_alignment = ft.MainAxisAlignment.START
+        page.bgcolor = login_view.PAGE_BG
+        page.padding = 0
 
-        username_field = ft.TextField(label="Username", prefix_icon=ft.Icons.PERSON_OUTLINE, autofocus=True)
-        password_field = ft.TextField(label="Password", password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK_OUTLINE)
+        username_field = login_view.login_field("Enter your username", ft.Icons.PERSON_OUTLINE, autofocus=True)
+        password_field = login_view.login_field("Enter your password", ft.Icons.LOCK_OUTLINE, password=True, can_reveal_password=True)
         # Shown when the backend asks for the second step; recovery codes go in the same field.
-        code_field = ft.TextField(label="6-digit code or recovery code", prefix_icon=ft.Icons.PIN_OUTLINED, visible=False)
+        code_field = login_view.login_field("6-digit code or recovery code", ft.Icons.PIN_OUTLINED, visible=False)
+        code_box = login_view.field_box(code_field, login_view.field_height(page))
         login_error = ft.Text("", size=12, color=ft.Colors.RED_700)
 
         def attempt_login(_):
@@ -4751,6 +4753,7 @@ def main(page: ft.Page, session=None):
                 res = http.post(f"{BACKEND_URL}/auth/login", data=data, verify=False, timeout=10)
                 if login_needs_code(res):
                     code_field.visible = True
+                    code_box.visible = True
                     code_field.value = ""
                     login_error.value = res.json().get("detail") or "Enter the 6-digit code from your authenticator app."
                     page.update()
@@ -4808,60 +4811,18 @@ def main(page: ft.Page, session=None):
             page.add(build_homepage_view(page))
             page.update()
 
-        login_btn = ft.Button("Log In", width=360, on_click=attempt_login, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE)
-        back_btn = ft.TextButton("Go Back", on_click=go_back)
+        password_field.on_submit = attempt_login
+        code_field.on_submit = attempt_login
 
         page.add(
-            ft.Container(
-                content=ft.ResponsiveRow(
-                    [
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Icon(ft.Icons.ACCOUNT_BALANCE_OUTLINED, size=56, color=ft.Colors.AMBER_300),
-                                    ft.Text("SANGGUNIAN BAYAN", size=27, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                                    ft.Text("MUNICIPALITY OF TOLOSA", size=12, color=ft.Colors.BLUE_GREY_100),
-                                    ft.Divider(height=1, color=ft.Colors.BLUE_GREY_400),
-                                    ft.Text("Legislative Document Tracking Management System", size=15, color=ft.Colors.BLUE_GREY_100),
-                                    ft.Text("Secure access for authorized personnel managing municipal legislative records.", size=13, color=ft.Colors.BLUE_GREY_200),
-                                ],
-                                spacing=16,
-                                horizontal_alignment=ft.CrossAxisAlignment.START,
-                            ),
-                            bgcolor=ft.Colors.BLUE_900,
-                            padding=ft.Padding(42, 42, 42, 42),
-                            col={"xs": 12, "md": 6},
-                        ),
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text("Welcome back", size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_900),
-                                    ft.Text("Sign in to continue to the management system.", size=13, color=ft.Colors.BLUE_GREY_600),
-                                    username_field,
-                                    password_field,
-                                    code_field,
-                                    login_error,
-                                    ft.Container(
-                                        content=login_btn,
-                                        alignment=ft.Alignment.CENTER,
-                                    ),
-                                    ft.Row([back_btn], alignment=ft.MainAxisAlignment.CENTER),
-                                ],
-                                spacing=16,
-                            ),
-                            bgcolor=ft.Colors.WHITE,
-                            padding=ft.Padding(42, 42, 42, 42),
-                            col={"xs": 12, "md": 6},
-                        ),
-                    ],
-                    spacing=0,
-                    run_spacing=0,
-                ),
-                width=920,
-                height=None if mobile_scroll else 540,
-                border_radius=18,
-                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                shadow=ft.BoxShadow(blur_radius=24, spread_radius=1, color="#102a3a26", offset=ft.Offset(0, 10)),
+            login_view.build_login_view(
+                page,
+                username_field=username_field,
+                password_field=password_field,
+                code_box=code_box,
+                error_text=login_error,
+                on_login=attempt_login,
+                on_back=go_back,
             )
         )
         page.update()
