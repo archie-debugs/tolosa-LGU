@@ -489,6 +489,8 @@ def render_shell(
         "incoming_overdue": (ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_700),
         "outgoing_overdue": (ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_700),
         "handoff_overdue": (ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_700),
+        "returned": (ft.Icons.UNDO, ft.Colors.DEEP_ORANGE_700),
+        "cancelled": (ft.Icons.CANCEL_OUTLINED, ft.Colors.BLUE_GREY_600),
         "registered": (ft.Icons.NOTE_ADD_OUTLINED, ft.Colors.BLUE_GREY_600),
         "due": (ft.Icons.EVENT_OUTLINED, ft.Colors.AMBER_800),
         "overdue": (ft.Icons.EVENT_BUSY_OUTLINED, ft.Colors.RED_700),

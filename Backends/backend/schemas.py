@@ -125,6 +125,10 @@ class DocumentHandoffCreate(BaseModel):
     receiving_office_id: int = Field(..., gt=0)
 
 
+class DocumentHandoffClose(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
 class DocumentHandoffResponse(BaseModel):
     id: int
     document_id: int

@@ -1625,9 +1625,9 @@ def office_queue(
     ]
 
     feed_size = 15
-    events = [_handoff_event(row) for row in db.query(models.DocumentHandoff).filter(
+    events = _handoff_events(db.query(models.DocumentHandoff).filter(
         or_(models.DocumentHandoff.sending_office_id == monitoring_office_id, models.DocumentHandoff.receiving_office_id == monitoring_office_id)
-    ).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size)]
+    ).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size))
     events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).filter(
         models.DocumentReceipt.office_id == monitoring_office_id
     ).order_by(models.DocumentReceipt.confirmed_at.desc()).limit(feed_size)]
@@ -2115,6 +2115,8 @@ def get_document_qr_image(document_id: int, db: Session = Depends(get_db), curre
 
 # A pending handoff older than this is flagged as overdue on the QR Tracking screen.
 QR_TRACKING_OVERDUE_HOURS = 24
+# A pending handoff that ended without receipt; custody never moved, so the sender still holds the document.
+CLOSED_HANDOFF_STATUSES = ("Cancelled", "Returned")
 QR_SCAN_ACTIONS = ("QR_SCAN_SUCCESS", "QR_SCAN_UNRECOGNIZED")
 
 
@@ -2155,6 +2157,32 @@ def _handoff_event(row: models.DocumentHandoff) -> dict:
         "detail": None,
         **_document_brief(row.document),
     }
+
+
+def _closed_handoff_event(row: models.DocumentHandoff) -> dict:
+    """The sender cancelling a handoff, or the receiver returning it, before receipt."""
+    returned = row.status == "Returned"
+    sender = row.sending_office.name if row.sending_office else None
+    receiver = row.receiving_office.name if row.receiving_office else None
+    return {
+        "type": "returned" if returned else "cancelled",
+        "at": _utc_iso(row.closed_at),
+        # The acting office first: the receiver returns it to the sender; the sender cancels it towards the receiver.
+        "office": receiver if returned else sender,
+        "to_office": sender if returned else receiver,
+        "actor": _employee_name(row.closed_by),
+        "detail": row.close_reason,
+        **_document_brief(row.document),
+    }
+
+
+def _handoff_events(rows) -> list[dict]:
+    events = []
+    for row in rows:
+        events.append(_handoff_event(row))
+        if row.status in CLOSED_HANDOFF_STATUSES and row.closed_at is not None:
+            events.append(_closed_handoff_event(row))
+    return events
 
 
 def _receipt_event(row: models.DocumentReceipt) -> dict:
@@ -2218,7 +2246,7 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
     in_transit = [_pending_handoff_item(row, now) for row in pending]
 
     feed_size = 25
-    events = [_handoff_event(row) for row in db.query(models.DocumentHandoff).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size)]
+    events = _handoff_events(db.query(models.DocumentHandoff).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size))
     events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).order_by(models.DocumentReceipt.confirmed_at.desc()).limit(feed_size)]
     events += [_action_event(row) for row in db.query(models.DocumentAction).order_by(models.DocumentAction.performed_at.desc()).limit(feed_size)]
     scan_logs = (
@@ -2454,6 +2482,9 @@ def _serialize_handoff(row: models.DocumentHandoff):
         "sending_employee_name": sending_employee.full_name or sending_employee.username if sending_employee else None,
         "sent_at": row.sent_at.isoformat() if row.sent_at else None,
         "status": row.status,
+        "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+        "closed_by_name": _employee_name(row.closed_by),
+        "close_reason": row.close_reason,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -2533,6 +2564,72 @@ def create_document_handoff(
         details=f"Document {document_id} handed off from office {current_user.office_id} to office {payload.receiving_office_id}",
     )
     return result
+
+
+def _close_pending_handoff(db: Session, handoff_id: int, current_user: models.User, status: str, reason: str | None) -> dict:
+    """End a pending handoff without receipt. The sending office cancels it; the receiving office returns it.
+    Custody only moves on receipt, so either way the sending office still holds the document."""
+    if getattr(current_user, "office_id", None) is None:
+        raise HTTPException(status_code=403, detail="Office assignment required")
+    reason = (reason or "").strip() or None
+    if status == "Returned" and reason is None:
+        raise HTTPException(status_code=400, detail="Say why the document is being returned.")
+
+    handoff = db.query(models.DocumentHandoff).filter(models.DocumentHandoff.id == handoff_id).with_for_update().first()
+    if handoff is None:
+        raise HTTPException(status_code=404, detail="Handoff not found")
+    acting_office_id = handoff.sending_office_id if status == "Cancelled" else handoff.receiving_office_id
+    if acting_office_id != current_user.office_id:
+        if status == "Cancelled":
+            raise HTTPException(status_code=403, detail="Only the office that sent this document can cancel the handoff")
+        raise HTTPException(status_code=403, detail="Only the office this document was sent to can return it")
+    if handoff.status != "Pending Receipt":
+        raise HTTPException(status_code=409, detail=f"This handoff is already {handoff.status.lower()}")
+
+    now = datetime.now(timezone.utc)
+    handoff.status = status
+    handoff.closed_at = now
+    handoff.closed_by_user_id = current_user.id
+    handoff.close_reason = reason
+    handoff.updated_at = now
+    db.flush()
+    db.refresh(handoff)
+
+    result = _serialize_handoff(handoff)
+    verb = "cancelled by office" if status == "Cancelled" else "returned by office"
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="DOCUMENT_HANDOFF_CANCELLED" if status == "Cancelled" else "DOCUMENT_HANDOFF_RETURNED",
+        target_type="document_handoff",
+        target_id=str(handoff.id),
+        details=f"Handoff of document {handoff.document_id} {verb} {current_user.office_id}" + (f": {reason}" if reason else ""),
+    )
+    return result
+
+
+@router.post("/handoffs/{handoff_id:int}/cancel")
+def cancel_document_handoff(
+    handoff_id: int,
+    payload: schemas.DocumentHandoffClose,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """The sending office takes back a handoff that has not been received, e.g. one sent to the wrong office."""
+    require_permission(current_user, "pass_office_documents")
+    return _close_pending_handoff(db, handoff_id, current_user, "Cancelled", payload.reason)
+
+
+@router.post("/handoffs/{handoff_id:int}/return")
+def return_document_handoff(
+    handoff_id: int,
+    payload: schemas.DocumentHandoffClose,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """The receiving office declines a handoff instead of receiving it, with a reason."""
+    require_permission(current_user, "confirm_document_receipt")
+    return _close_pending_handoff(db, handoff_id, current_user, "Returned", payload.reason)
 
 
 @router.get("/office/handoffs")
@@ -3007,7 +3104,7 @@ def _document_trail(db: Session, doc: models.Document, actions_of_office: int | 
     actions = db.query(models.DocumentAction).filter(models.DocumentAction.document_id == doc.id)
     if actions_of_office is not None:
         actions = actions.filter(models.DocumentAction.office_id == actions_of_office)
-    events = [_handoff_event(row) for row in handoffs]
+    events = _handoff_events(handoffs)
     events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).filter(models.DocumentReceipt.document_id == doc.id)]
     events += [_action_event(row) for row in actions]
     events.append({

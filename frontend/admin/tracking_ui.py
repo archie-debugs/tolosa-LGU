@@ -8,6 +8,8 @@ import flet as ft
 EVENT_STYLES = {
     "sent": ("Sent", ft.Icons.SEND_OUTLINED, ft.Colors.BLUE_700),
     "received": ("Received", ft.Icons.MOVE_TO_INBOX_OUTLINED, ft.Colors.GREEN_700),
+    "returned": ("Returned", ft.Icons.UNDO, ft.Colors.DEEP_ORANGE_700),
+    "cancelled": ("Cancelled", ft.Icons.CANCEL_OUTLINED, ft.Colors.BLUE_GREY_600),
     "action": ("Action", ft.Icons.TASK_ALT, ft.Colors.INDIGO_600),
     "scan": ("Scanned", ft.Icons.QR_CODE_SCANNER, ft.Colors.TEAL_700),
     "unrecognized": ("Unrecognized scan", ft.Icons.ERROR_OUTLINE, ft.Colors.RED_700),
@@ -51,6 +53,10 @@ def event_summary(event):
     kind = event.get("type")
     if kind == "sent":
         return f"{office} → {event.get('to_office') or '-'}"
+    if kind in ("returned", "cancelled"):
+        # Returned: the receiver sent it back to the sender. Cancelled: the sender called it back from the receiver.
+        line = f"{office} returned it to {event.get('to_office') or '-'}" if kind == "returned" else f"{office} cancelled the handoff to {event.get('to_office') or '-'}"
+        return line + (f" · {event['detail']}" if event.get("detail") else "")
     if kind in ("received", "registered"):
         return office
     if kind == "action":
