@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..core import DEFAULT_SYSTEM_SETTINGS, SYSTEM_SETTING_TYPES, record_audit_log, require_user_management_permission
+from ..core import DEFAULT_SYSTEM_SETTINGS, SYSTEM_SETTING_TYPES, get_current_admin_user, record_audit_log
 from ..database import get_db
 
 router = APIRouter()
@@ -81,7 +81,7 @@ def _load_settings(db: Session) -> dict[str, Any]:
 @router.get("/system-settings")
 def get_system_settings(
     db: Session = Depends(get_db),
-    current_admin: models.User = Depends(require_user_management_permission("modify_system_settings")),
+    current_admin: models.User = Depends(get_current_admin_user),
 ):
     settings = _load_settings(db)
     return {"settings": settings}
@@ -91,7 +91,7 @@ def get_system_settings(
 def update_system_settings(
     payload: SystemSettingsUpdate,
     db: Session = Depends(get_db),
-    current_admin: models.User = Depends(require_user_management_permission("modify_system_settings")),
+    current_admin: models.User = Depends(get_current_admin_user),
 ):
     if not isinstance(payload.settings, dict):
         raise HTTPException(status_code=400, detail="Settings payload must be an object")

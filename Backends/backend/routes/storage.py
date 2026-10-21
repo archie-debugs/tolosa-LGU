@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, require_permission, require_user_management_permission
+from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, get_current_admin_user
 from ..database import get_db
 from ..routes.analytics import _storage_information
 
@@ -35,10 +35,8 @@ def _iter_files(directory: str, excluded_dirs: set[str] | None = None) -> list[s
 @router.get("/storage/diagnostics")
 def get_storage_diagnostics(
     db: Session = Depends(get_db),
-    current_admin: models.User = Depends(require_user_management_permission("modify_system_settings")),
+    current_admin: models.User = Depends(get_current_admin_user),
 ):
-    require_permission(current_admin, "modify_system_settings")
-
     attachment_rows = db.query(models.Attachment).all()
     valid_paths = set()
     missing_files = []
@@ -102,9 +100,8 @@ def get_storage_diagnostics(
 def cleanup_temp_uploads(
     payload: TempCleanupRequest,
     db: Session = Depends(get_db),
-    current_admin: models.User = Depends(require_user_management_permission("modify_system_settings")),
+    current_admin: models.User = Depends(get_current_admin_user),
 ):
-    require_permission(current_admin, "modify_system_settings")
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="Confirmation is required to delete temporary files")
 
