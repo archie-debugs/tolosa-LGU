@@ -11,7 +11,7 @@ from sqlalchemy import Integer, String, cast, exc, exists, func, or_, text
 from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
-from ..core import LGU_TIMEZONE, UPLOAD_DIR, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
+from ..core import LGU_TIMEZONE, UPLOAD_DIR, lgu_today, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
 from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
 import uuid
@@ -803,7 +803,7 @@ def _new_registered_document(db: Session, current_user: models.User, placement: 
         priority=(fields.get("priority") or "Medium"),
         due_date=placement.get("due_date"),
         is_public=False,
-        date_registered=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        date_registered=lgu_today().isoformat(),
         qr_code_value=None,
         created_by=getattr(current_user, "username", None),
     )
@@ -2229,12 +2229,10 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
     """Operational summary for the QR Tracking screen: today's movement, documents in transit, recent activity."""
     require_permission(current_user, "view_qr_tracking")
     day_start = _lgu_day_start_utc()
-    # audit_logs.created_at is stored without a time zone, in UTC
-    audit_day_start = day_start.replace(tzinfo=None)
     now = datetime.now(timezone.utc)
 
     def scans_today(action):
-        return db.query(models.AuditLog).filter(models.AuditLog.action == action, models.AuditLog.created_at >= audit_day_start).count()
+        return db.query(models.AuditLog).filter(models.AuditLog.action == action, models.AuditLog.created_at >= day_start).count()
 
     pending = (
         db.query(models.DocumentHandoff)

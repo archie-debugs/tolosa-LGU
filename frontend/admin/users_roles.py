@@ -1,5 +1,7 @@
 import flet as ft
 
+from frontend.admin.tracking_ui import local_time
+
 
 EMPLOYEE_PERMISSION_GROUPS = {
     "Dashboard": [
@@ -125,7 +127,8 @@ def _permission_summary(user):
 def _format_timestamp(value):
     if not value:
         return "—"
-    return str(value).replace("T", " ").split(".", 1)[0]
+    local = local_time(value)
+    return local.strftime("%Y-%m-%d %H:%M:%S") if local else str(value)
 
 
 def _build_permission_checkboxes(selected_permissions=None):

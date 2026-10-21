@@ -1,11 +1,18 @@
 import re
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import LGU_TIMEZONE
 from ..database import get_db
+
+
+def _as_lgu(value):
+    """A stored time in LGU local time; naive values are UTC (SQLite)."""
+    return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(LGU_TIMEZONE)
 
 
 router = APIRouter(prefix="/public/documents", tags=["public"])
@@ -87,7 +94,7 @@ def list_public_documents(
             "title": document.title,
             "type": document.document_type or "Document",
             "document_type": document.document_type,
-            "date": document.date_registered or (document.created_at.strftime("%B %d, %Y") if document.created_at else ""),
+            "date": document.date_registered or (_as_lgu(document.created_at).strftime("%B %d, %Y") if document.created_at else ""),
             "category": document.category,
             "description": document.description,
         }

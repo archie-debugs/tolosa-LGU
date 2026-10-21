@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
 from ..authentication import get_current_user
-from ..core import require_permission
+from ..core import LGU_TIMEZONE, require_permission
+
+def _entered_datetime(value: str) -> datetime:
+    """A date or time typed into a filter, read as LGU local time unless it carries a zone."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=LGU_TIMEZONE)
+
 
 router = APIRouter()
 
@@ -118,13 +124,13 @@ def list_audit_logs(
     elif date_range == "custom_range":
         if from_date:
             try:
-                from_dt = datetime.fromisoformat(from_date)
+                from_dt = _entered_datetime(from_date)
                 query = query.filter(models.AuditLog.created_at >= from_dt)
             except ValueError:
                 pass
         if to_date:
             try:
-                to_dt = datetime.fromisoformat(to_date)
+                to_dt = _entered_datetime(to_date)
                 query = query.filter(models.AuditLog.created_at <= to_dt)
             except ValueError:
                 pass
@@ -222,9 +228,9 @@ def export_audit_logs(
     if target_id:
         query = query.filter(models.AuditLog.target_id == target_id)
     if from_date:
-        query = query.filter(models.AuditLog.created_at >= datetime.fromisoformat(from_date))
+        query = query.filter(models.AuditLog.created_at >= _entered_datetime(from_date))
     if to_date:
-        query = query.filter(models.AuditLog.created_at <= datetime.fromisoformat(to_date))
+        query = query.filter(models.AuditLog.created_at <= _entered_datetime(to_date))
 
     output = io.StringIO()
     writer = csv.writer(output)

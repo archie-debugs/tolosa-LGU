@@ -1,5 +1,5 @@
 import flet as ft
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
@@ -138,6 +138,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
 from frontend.admin.committees import build_committees_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.document_details import open_document_details
+from frontend.admin.tracking_ui import local_time
 from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
@@ -598,11 +599,8 @@ def main(page: ft.Page, session=None):
     def format_created_date(value):
         if not value:
             return "—"
-        try:
-            dt = datetime.fromisoformat(value)
-            return dt.strftime("%m/%d/%Y")
-        except Exception:
-            return value
+        dt = local_time(value)
+        return dt.strftime("%m/%d/%Y") if dt else value
 
     committee_editor_column = ft.Column(spacing=10)
     committee_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
@@ -792,11 +790,8 @@ def main(page: ft.Page, session=None):
     def format_audit_datetime(value):
         if not value:
             return "—"
-        try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return str(value)
+        dt = local_time(value)
+        return dt.strftime("%Y-%m-%d %H:%M") if dt else str(value)
 
     def get_audit_status_style(status):
         normalized = (status or "Success").strip().lower()
@@ -1080,7 +1075,7 @@ def main(page: ft.Page, session=None):
                 for item in sample_rows
             ]
             failed_count = sum(1 for item in sample_rows if str(item.get("status", "Success")).lower() == "failed")
-            today_count = sum(1 for item in sample_rows if item.get("created_at") and datetime.fromisoformat(str(item["created_at"]).replace("Z", "+00:00")).date() == datetime.now(timezone.utc).date())
+            today_count = sum(1 for item in sample_rows if local_time(item.get("created_at")) and local_time(item["created_at"]).date() == datetime.now().date())
             render_summary_cards({
                 "total_activities": len(sample_rows),
                 "today": today_count,
@@ -2025,9 +2020,8 @@ def main(page: ft.Page, session=None):
         if isinstance(value, datetime):
             dt = value
         else:
-            try:
-                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-            except ValueError:
+            dt = local_time(value)
+            if dt is None:
                 return str(value)
         return dt.strftime("%m/%d/%y")
 
@@ -2623,18 +2617,15 @@ def main(page: ft.Page, session=None):
         def format_date(value):
             if not value:
                 return "Not provided"
-            try:
-                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                return dt.strftime("%B %d, %Y")
-            except Exception:
-                return str(value)
+            dt = local_time(value)
+            return dt.strftime("%B %d, %Y") if dt else str(value)
 
         def format_datetime(value):
             if not value:
                 return "Not provided"
             try:
-                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                return dt.strftime("%b %d, %Y %I:%M %p")
+                dt = local_time(value)
+                return dt.strftime("%b %d, %Y %I:%M %p") if dt else str(value)
             except Exception:
                 return str(value)
 
@@ -4385,7 +4376,7 @@ def main(page: ft.Page, session=None):
             activity = str(item.get("activity") or "Activity")
             actor = str(item.get("actor") or "System")
             target = str(item.get("tracking_number") or "-")
-            timestamp = str(item.get("created_at") or "-").replace("T", " ").replace("Z", "")
+            timestamp = format_audit_datetime(item.get("created_at")) if item.get("created_at") else "-"
             if "." in timestamp:
                 timestamp = timestamp.split(".", 1)[0]
             target_text = f"Target: {target}" if target != "-" else "System event"
@@ -4443,7 +4434,7 @@ def main(page: ft.Page, session=None):
             actor = str(event.get("actor") or "System")
             target = str(event.get("target_id") or "-")
             details = str(event.get("details") or "")
-            timestamp = str(event.get("created_at") or "-").replace("T", " ").replace("Z", "")
+            timestamp = format_audit_datetime(event.get("created_at")) if event.get("created_at") else "-"
             if "." in timestamp:
                 timestamp = timestamp.split(".", 1)[0]
             security_rows.append(
@@ -4866,9 +4857,8 @@ def main(page: ft.Page, session=None):
                 for item in sessions:
                     rows.append(ft.DataRow(cells=[
                         ft.DataCell(ft.Text(item.get("username") or "-", size=12)),
-                        ft.DataCell(ft.Text(str(item.get("created_at") or "-").replace("T", " ").split(".", 1)[0], size=12)),
-                        ft.DataCell(ft.Text(str(item.get("last_activity") or "-").replace("T", " ").split(".", 1)[0], size=12)),
-                        ft.DataCell(ft.Text(str(item.get("expires_at") or "-").replace("T", " ").split(".", 1)[0], size=12)),
+                        *[ft.DataCell(ft.Text(local_time(item.get(key)).strftime("%Y-%m-%d %H:%M:%S") if local_time(item.get(key)) else "-", size=12))
+                          for key in ("created_at", "last_activity", "expires_at")],
                         ft.DataCell(ft.OutlinedButton("Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id))),
                     ]))
                 table_holder.content = ft.DataTable(

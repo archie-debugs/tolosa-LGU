@@ -114,7 +114,7 @@ def _office_items(db, user, now, today):
             sender = handoff.sending_office.name if handoff.sending_office else "The sending office"
             items.append(_item("cancelled", handoff.document, _aware(handoff.closed_at),
                                f"{sender} cancelled the handoff to your office. No need to receive it.{reason}", handoff.id))
-    since = (now - timedelta(days=RECENT_REGISTRATION_DAYS)).replace(tzinfo=None)
+    since = now - timedelta(days=RECENT_REGISTRATION_DAYS)
     for doc in db.query(models.Document).filter(
         models.Document.originating_office_id == office_id,
         models.Document.archived.is_(False),

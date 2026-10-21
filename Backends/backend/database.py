@@ -19,6 +19,10 @@ if not DATABASE_URL:
 engine_kwargs = {}
 if DATABASE_URL.startswith("sqlite://"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
+elif DATABASE_URL.startswith("postgresql"):
+    # Sessions run in UTC whatever the server's TimeZone is, so naive values and
+    # date functions mean UTC. Local (LGU) days are computed explicitly in Python.
+    engine_kwargs["connect_args"] = {"options": "-c timezone=utc"}
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
