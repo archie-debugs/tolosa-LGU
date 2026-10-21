@@ -27,6 +27,12 @@ def parse_time(value):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def local_time(value):
+    """An API timestamp in this computer's time zone (naive values are UTC), or None."""
+    parsed = parse_time(value)
+    return parsed.astimezone() if parsed else None
+
+
 def format_time(value):
     parsed = parse_time(value)
     return parsed.astimezone().strftime("%b %d, %I:%M %p") if parsed else "-"

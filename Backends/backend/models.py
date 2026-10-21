@@ -99,10 +99,10 @@ class Document(Base):
     due_date = Column(Date, nullable=True, index=True)
 
     archived = Column(Boolean, nullable=False, default=False, index=True)
-    archived_at = Column(DateTime, nullable=True, index=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True, index=True)
     archived_by = Column(String, nullable=True, index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
 
 class DocumentOffice(Base):
@@ -176,7 +176,7 @@ class User(Base):
     permissions = Column(Text, nullable=True, default="[]")
     status = Column(String, nullable=False, default="Active", index=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
-    last_login = Column(DateTime, nullable=True, index=True)
+    last_login = Column(DateTime(timezone=True), nullable=True, index=True)
     # Notifications that happened after this are unread (routes/notifications.py).
     notifications_seen_at = Column(DateTime(timezone=True), nullable=True)
     # Two-step login (two_step.py). totp_secret is set only while it is on; the pending
@@ -186,8 +186,8 @@ class User(Base):
     totp_enabled_at = Column(DateTime(timezone=True), nullable=True)
     totp_last_step = Column(Integer, nullable=True)
     totp_recovery_codes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
 
 class UserSession(Base):
@@ -196,10 +196,10 @@ class UserSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String, unique=True, nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
-    last_activity = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
-    expires_at = Column(DateTime, nullable=False, index=True)
-    revoked_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    last_activity = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
     revoke_reason = Column(String, nullable=True)
     user_agent = Column(String, nullable=True)
     ip_address = Column(String, nullable=True)
@@ -216,7 +216,7 @@ class Attachment(Base):
     mime_type = Column(String, nullable=True)
     size = Column(Integer, nullable=True)
     checksum = Column(String, nullable=True, index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class DocumentTrackingNumberAlias(Base):
@@ -319,7 +319,7 @@ class DocumentHistory(Base):
     from_office = Column(String, nullable=True)
     to_office = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class RegistrationRequest(Base):
@@ -353,16 +353,16 @@ class RegistrationRequest(Base):
     rejection_reason = Column(Text, nullable=True)
 
     reviewed_by = Column(String, nullable=True, index=True)
-    reviewed_at = Column(DateTime, nullable=True, index=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True, index=True)
     approved_by = Column(String, nullable=True, index=True)
-    approved_at = Column(DateTime, nullable=True, index=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True, index=True)
     rejected_by = Column(String, nullable=True, index=True)
-    rejected_at = Column(DateTime, nullable=True, index=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     notes = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
 
 class AuditLog(Base):
@@ -374,7 +374,7 @@ class AuditLog(Base):
     target_type = Column(String, nullable=True, index=True)
     target_id = Column(String, nullable=True, index=True)
     details = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class SystemSetting(Base):
@@ -386,7 +386,7 @@ class SystemSetting(Base):
     category = Column(String, nullable=False, default="system", index=True)
     description = Column(Text, nullable=True)
     updated_by = Column(String, nullable=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
 
 class StatusLookup(Base):

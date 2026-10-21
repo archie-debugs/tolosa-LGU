@@ -24,7 +24,9 @@ models.Base.metadata.create_all(bind=engine)
 def seed_users():
     db = SessionLocal()
     try:
-        db.query(models.User).delete()
+        # Every table, children first: rows other tests left can point at these users (PostgreSQL enforces that).
+        for table in reversed(models.Base.metadata.sorted_tables):
+            db.execute(table.delete())
         admin = models.User(
             username="adminuser",
             hashed_password=get_password_hash("adminpass"),

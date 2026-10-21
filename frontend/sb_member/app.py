@@ -4,7 +4,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import flet as ft
 import requests
@@ -64,7 +64,9 @@ def main(page: ft.Page, session=None):
         if not value:
             return "Not available"
         try:
-            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%b %d, %Y")
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            # Naive API times are UTC; show the date where the reader is.
+            return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).astimezone().strftime("%b %d, %Y")
         except ValueError:
             return str(value)[:10]
 
