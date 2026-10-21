@@ -124,7 +124,7 @@ class DocumentHandoff(Base):
     __tablename__ = "document_handoffs"
     __table_args__ = (
         CheckConstraint("sending_office_id <> receiving_office_id", name="ck_document_handoffs_sender_receiver_diff"),
-        CheckConstraint("status IN ('Pending Receipt', 'Received')", name="ck_document_handoffs_status"),
+        CheckConstraint("status IN ('Pending Receipt', 'Received', 'Cancelled', 'Returned')", name="ck_document_handoffs_status"),
         Index("ix_document_handoffs_document_id", "document_id"),
         Index("ix_document_handoffs_sending_office_id", "sending_office_id"),
         Index("ix_document_handoffs_receiving_office_id", "receiving_office_id"),
@@ -147,6 +147,10 @@ class DocumentHandoff(Base):
     sending_employee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
     sent_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     status = Column(String(50), nullable=False, default="Pending Receipt")
+    # Set when a pending handoff ends without receipt: the sender cancels it or the receiver returns it.
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    closed_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    close_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -154,6 +158,7 @@ class DocumentHandoff(Base):
     sending_office = relationship("Office", foreign_keys=[sending_office_id])
     receiving_office = relationship("Office", foreign_keys=[receiving_office_id])
     sending_employee = relationship("User", foreign_keys=[sending_employee_id])
+    closed_by = relationship("User", foreign_keys=[closed_by_user_id])
 
 
 class User(Base):

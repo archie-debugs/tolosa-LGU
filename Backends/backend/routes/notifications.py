@@ -19,6 +19,8 @@ router = APIRouter()
 
 DUE_SOON_DAYS = 3
 RECENT_REGISTRATION_DAYS = 7
+# How long a cancelled or returned handoff stays in the other office's notifications.
+RECENT_CLOSED_HANDOFF_DAYS = 7
 MAX_ITEMS = 30
 
 
@@ -97,6 +99,21 @@ def _office_items(db, user, now, today):
             at = _aware(handoff.sent_at) + timedelta(hours=QR_TRACKING_OVERDUE_HOURS)
             items.append(_item("outgoing_overdue", handoff.document, at,
                                f"Not yet received by {receiver} after {hours} hours.", handoff.id))
+    closed_since = now - timedelta(days=RECENT_CLOSED_HANDOFF_DAYS)
+    for handoff in db.query(models.DocumentHandoff).filter(
+        models.DocumentHandoff.closed_at >= closed_since,
+        ((models.DocumentHandoff.status == "Returned") & (models.DocumentHandoff.sending_office_id == office_id))
+        | ((models.DocumentHandoff.status == "Cancelled") & (models.DocumentHandoff.receiving_office_id == office_id)),
+    ):
+        reason = f" Reason: {handoff.close_reason}" if handoff.close_reason else ""
+        if handoff.status == "Returned":
+            receiver = handoff.receiving_office.name if handoff.receiving_office else "the other office"
+            items.append(_item("returned", handoff.document, _aware(handoff.closed_at),
+                               f"Returned by {receiver} without receiving it. Your office still holds it.{reason}", handoff.id))
+        else:
+            sender = handoff.sending_office.name if handoff.sending_office else "The sending office"
+            items.append(_item("cancelled", handoff.document, _aware(handoff.closed_at),
+                               f"{sender} cancelled the handoff to your office. No need to receive it.{reason}", handoff.id))
     since = (now - timedelta(days=RECENT_REGISTRATION_DAYS)).replace(tzinfo=None)
     for doc in db.query(models.Document).filter(
         models.Document.originating_office_id == office_id,

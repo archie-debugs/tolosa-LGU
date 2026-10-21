@@ -30,6 +30,7 @@ def build_office_queue_view(
     Returns `(view, refresh)` so dialogs that change the queue can reload it.
     """
     widgets = TrackingWidgets(page)
+    # "confirming" is the open inline step: ("receive", handoff_id), ("return", ...) or ("cancel", ...).
     state = {"page": 1, "confirming": None, "own_office": office_id is None}
 
     header_holder = ft.Container()
@@ -64,20 +65,93 @@ def build_office_queue_view(
             return None
         return ft.IconButton(ft.Icons.VISIBILITY_OUTLINED, tooltip="View details", on_click=lambda _, d=summary_of(document): open_details(d))
 
+    return_reason = ft.TextField(
+        label="Why are you returning it?",
+        hint_text="e.g. Sent to the wrong office",
+        expand=True,
+        max_length=500,
+        content_padding=ft.Padding(12, 4, 12, 4),
+        on_submit=lambda _: return_confirmed(),
+    )
+
     def receive_controls(item):
         if not (can_receive and state["own_office"]):
             return []
-        if state["confirming"] == item.get("handoff_id"):
+        handoff_id = item.get("handoff_id")
+        if state["confirming"] == ("receive", handoff_id):
             return [
                 ft.FilledButton("Confirm receipt", icon=ft.Icons.CHECK, on_click=lambda _, i=item: receive(i)),
                 ft.TextButton("Cancel", on_click=lambda _: set_confirming(None)),
             ]
-        return [ft.OutlinedButton("Receive", icon=ft.Icons.MOVE_TO_INBOX_OUTLINED, on_click=lambda _, i=item: set_confirming(i.get("handoff_id")))]
+        if state["confirming"] == ("return", handoff_id):
+            return []
+        return [
+            ft.OutlinedButton("Receive", icon=ft.Icons.MOVE_TO_INBOX_OUTLINED, on_click=lambda _, h=handoff_id: set_confirming(("receive", h))),
+            ft.TextButton("Return", icon=ft.Icons.UNDO, tooltip="Send it back without receiving it", on_click=lambda _, h=handoff_id: set_confirming(("return", h))),
+        ]
 
-    def set_confirming(handoff_id):
-        state["confirming"] = handoff_id
+    def return_step():
+        """The reason field shown under an incoming row while it is being returned."""
+        return ft.Container(
+            ft.Row(
+                [
+                    return_reason,
+                    ft.FilledButton("Return to sender", icon=ft.Icons.UNDO, on_click=lambda _: return_confirmed()),
+                    ft.TextButton("Back", on_click=lambda _: set_confirming(None)),
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            padding=ft.Padding(4, 0, 4, 10),
+        )
+
+    def cancel_controls(item):
+        if not (can_pass and state["own_office"]):
+            return []
+        handoff_id = item.get("handoff_id")
+        if state["confirming"] == ("cancel", handoff_id):
+            return [
+                ft.FilledButton("Cancel handoff", icon=ft.Icons.CANCEL_OUTLINED, on_click=lambda _, i=item: cancel(i)),
+                ft.TextButton("Keep", on_click=lambda _: set_confirming(None)),
+            ]
+        return [ft.TextButton("Cancel", icon=ft.Icons.CANCEL_OUTLINED, tooltip="Call it back before it is received", on_click=lambda _, h=handoff_id: set_confirming(("cancel", h)))]
+
+    def set_confirming(step):
+        state["confirming"] = step
+        return_reason.value = ""
+        return_reason.error_text = None
         render_incoming(state.get("incoming") or [])
+        render_outgoing(state.get("outgoing") or [])
         page.update()
+
+    def return_confirmed():
+        step = state["confirming"] or (None, None)
+        item = next((i for i in state.get("incoming") or [] if step[0] == "return" and i.get("handoff_id") == step[1]), None)
+        if item is None:
+            return
+        reason = (return_reason.value or "").strip()
+        if not reason:
+            return_reason.error_text = "Say why, so the sending office knows what to fix."
+            page.update()
+            return
+        tracking_number = item.get("tracking_number") or ""
+        state["confirming"] = None
+        try:
+            api("POST", f"/documents/handoffs/{item['handoff_id']}/return", json={"reason": reason})
+            show_notice(f"Returned {tracking_number} to {item.get('from_office') or 'the sending office'}.")
+        except Exception as exc:
+            show_notice(f"Unable to return {tracking_number}: {exc}", error=True)
+        load(keep_notice=True)
+
+    def cancel(item):
+        tracking_number = item.get("tracking_number") or ""
+        state["confirming"] = None
+        try:
+            api("POST", f"/documents/handoffs/{item['handoff_id']}/cancel", json={})
+            show_notice(f"Cancelled the handoff of {tracking_number}. Your office still holds it.")
+        except Exception as exc:
+            show_notice(f"Unable to cancel the handoff of {tracking_number}: {exc}", error=True)
+        load(keep_notice=True)
 
     def receive(item):
         tracking_number = item.get("tracking_number") or ""
@@ -108,6 +182,8 @@ def build_office_queue_view(
             ]
             button = view_button(item)
             rows.append(widgets.list_row(controls + ([button] if button else [])))
+            if state["confirming"] == ("return", item.get("handoff_id")):
+                rows.append(return_step())
         incoming_list.controls = rows or [widgets.empty("Nothing waiting. Documents passed to this office appear here until you receive them.")]
 
     def render_holding(holding):
@@ -158,6 +234,7 @@ def build_office_queue_view(
                     expand=True,
                 ),
                 widgets.waiting_chip(item),
+                *cancel_controls(item),
             ]
             button = view_button(item)
             rows.append(widgets.list_row(controls + ([button] if button else [])))
@@ -186,7 +263,8 @@ def build_office_queue_view(
         state["incoming"] = payload.get("incoming") or []
         render_incoming(state["incoming"])
         render_holding(payload.get("holding") or {})
-        render_outgoing(payload.get("outgoing") or [])
+        state["outgoing"] = payload.get("outgoing") or []
+        render_outgoing(state["outgoing"])
         events = payload.get("recent_activity") or []
         activity_list.controls = [widgets.event_row(event, show_document=True) for event in events] or [widgets.empty("No activity for this office yet.")]
 
@@ -225,7 +303,7 @@ def build_office_queue_view(
             ft.Row(header_controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             notice_text,
             kpi_row,
-            surface_card(ft.Column([incoming_title, widgets.hint("Oldest first. Receive a document once it is physically in your office."), incoming_list], spacing=6), padding=18),
+            surface_card(ft.Column([incoming_title, widgets.hint("Oldest first. Receive a document once it is physically in your office, or return it if it was not meant for you."), incoming_list], spacing=6), padding=18),
             surface_card(
                 ft.Column(
                     [
@@ -241,7 +319,7 @@ def build_office_queue_view(
             ),
             ft.ResponsiveRow(
                 [
-                    ft.Container(surface_card(ft.Column([outgoing_title, widgets.hint("Oldest first, so the longest waits are on top."), outgoing_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
+                    ft.Container(surface_card(ft.Column([outgoing_title, widgets.hint("Oldest first, so the longest waits are on top. Cancel a handoff that went to the wrong office."), outgoing_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
                     ft.Container(surface_card(ft.Column([widgets.title("Recent activity"), activity_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
                 ],
                 spacing=16,
