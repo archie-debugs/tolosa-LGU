@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..core import require_permission, require_user_management_permission
+from ..core import get_current_admin_user
 from ..database import engine, get_db
 from ..routes.analytics import _storage_information
 
@@ -25,10 +25,8 @@ def root():
 @router.get("/system-health")
 def system_health(
     db: Session = Depends(get_db),
-    current_admin: models.User = Depends(require_user_management_permission("modify_system_settings")),
+    current_admin: models.User = Depends(get_current_admin_user),
 ):
-    require_permission(current_admin, "modify_system_settings")
-
     maintenance_mode = False
     try:
         maintenance_setting = db.query(models.SystemSetting).filter(models.SystemSetting.key == "maintenance_mode").first()
@@ -39,12 +37,20 @@ def system_health(
 
     db_status = "operational"
     db_detail = "Database connection healthy"
+    migration_version = None
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except Exception as exc:
         db_status = "unavailable"
         db_detail = str(exc)
+    else:
+        # The Alembic revision the database is on; None when it was never stamped.
+        try:
+            with engine.connect() as connection:
+                migration_version = connection.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar()
+        except Exception:
+            migration_version = None
 
     storage = _storage_information()
     storage_status = str(storage.get("status") or "warning").lower()
@@ -99,6 +105,7 @@ def system_health(
         "status": overall_status,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "maintenance_mode": maintenance_mode,
+        "migration_version": migration_version,
         "components": components,
         "alerts": [
             {"component": "maintenance", "message": "Maintenance mode is enabled"}
