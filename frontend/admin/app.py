@@ -138,7 +138,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
     if BACKEND_URL.startswith("https://"):
         BACKEND_URL = BACKEND_URL.replace("https://", "http://", 1)
 
-from frontend.admin.committees import build_committees_view
+from frontend.admin.council import build_members_committees_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.document_details import open_document_details
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
@@ -630,37 +630,6 @@ def main(page: ft.Page, session=None):
         dt = local_time(value)
         return dt.strftime("%m/%d/%Y") if dt else value
 
-    committee_editor_column = ft.Column(spacing=10)
-    committee_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
-    pending_delete_committee = None
-    committee_edit_index = None
-    committee_name_input = ft.TextField(label="Committee Name", width=420)
-
-    COMMITTEES = [
-        {"name": "Committee on Finance"},
-        {"name": "Committee on Health"},
-        {"name": "Committee on Education"},
-    ]
-
-    committee_edit_dialog = ft.AlertDialog(
-        title=ft.Text("Edit Committee"),
-        content=committee_name_input,
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_committee_dialog()),
-            ft.Button("Save", on_click=lambda _: on_committee_save()),
-        ],
-    )
-    delete_committee_dialog = ft.AlertDialog(
-        title=ft.Text("Confirm Action"),
-        content=ft.Text(""),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_delete_committee_dialog()),
-            ft.Button("Delete", on_click=lambda _: delete_committee_action(), bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
-        ],
-    )
-    page.overlay.append(delete_committee_dialog)
-    page.overlay.append(committee_edit_dialog)
-
     audit_logs_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Date & Time", weight=ft.FontWeight.BOLD, size=12)),
@@ -697,10 +666,6 @@ def main(page: ft.Page, session=None):
         {"created_at": "2026-08-22T16:12:00+00:00", "actor": "marla", "action": "REPORT_EXPORT", "target_type": "Analytics", "details": "Summary export generated for leadership review.", "status": "Success"},
         {"created_at": "2026-08-20T10:08:00+00:00", "actor": "admin", "action": "DOCUMENT_ARCHIVE", "target_type": "Documents", "details": "Document archived and moved to closed records.", "status": "Success"},
     ]
-
-    def save_committees_to_file(committees):
-        # UI preview only: no persistent save is required for the current design.
-        pass
 
     delete_dialog = ft.AlertDialog(title=ft.Text("Confirm Action"), content=ft.Text(""), actions=[])
     page.overlay.append(delete_dialog)
@@ -745,58 +710,6 @@ def main(page: ft.Page, session=None):
             spacing=14,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-
-    def open_committee_dialog(index: int | None):
-        nonlocal committee_edit_index
-        committee_edit_index = index
-        if index is None:
-            committee_name_input.value = ""
-            committee_edit_dialog.title.value = "Add Committee"
-        else:
-            committee_name_input.value = COMMITTEES[index]["name"]
-            committee_edit_dialog.title.value = "Edit Committee"
-        committee_edit_dialog.open = True
-        page.update()
-
-    def close_committee_dialog():
-        committee_edit_dialog.open = False
-        page.update()
-
-    def on_committee_save():
-        nonlocal committee_edit_index
-        name = (committee_name_input.value or "").strip()
-        if not name:
-            return
-        if committee_edit_index is None:
-            COMMITTEES.append({"name": name})
-        else:
-            COMMITTEES[committee_edit_index]["name"] = name
-        save_committees_to_file(COMMITTEES)
-        committee_edit_dialog.open = False
-        page.update()
-
-    def confirm_delete_committee(index: int):
-        nonlocal pending_delete_committee
-        pending_delete_committee = index
-        delete_committee_dialog.open = True
-        page.update()
-
-    def delete_committee_action():
-        nonlocal pending_delete_committee
-        try:
-            if pending_delete_committee is not None and 0 <= pending_delete_committee < len(COMMITTEES):
-                COMMITTEES.pop(pending_delete_committee)
-                save_committees_to_file(COMMITTEES)
-        finally:
-            pending_delete_committee = None
-            delete_committee_dialog.open = False
-            page.update()
-
-    def close_delete_committee_dialog():
-        nonlocal pending_delete_committee
-        pending_delete_committee = None
-        delete_committee_dialog.open = False
-        page.update()
 
     audit_summary_cards = ft.Row([], spacing=12, wrap=True)
     audit_filter_bar = ft.Row([], spacing=10, wrap=True)
@@ -1191,14 +1104,9 @@ def main(page: ft.Page, session=None):
             print("audit_logs_view error:\n", tb)
             return ft.Column([ft.Text("Error building Audit Logs view"), ft.Text(str(e)), ft.Text(tb)])
 
-    def committees_view():
-        try:
-            return build_committees_view(page, COMMITTEES, surface_card, open_committee_dialog, confirm_delete_committee)
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            print("committees_view error:\n", tb)
-            return ft.Column([ft.Text("Error building Committees view"), ft.Text(str(e)), ft.Text(tb)])
+    def members_committees_view():
+        return build_members_committees_view(page, surface_card, backend_api,
+                                             can_manage=has_permission("manage_members_and_committees"))
 
     reference_categories = []
     reference_document_types = []
@@ -2858,9 +2766,7 @@ def main(page: ft.Page, session=None):
             ft.dropdown.Option("Delete Users"),
             ft.dropdown.Option("Assign Roles"),
             ft.dropdown.Option("Manage Permissions"),
-            ft.dropdown.Option("Add Committee"),
-            ft.dropdown.Option("Edit Committee"),
-            ft.dropdown.Option("Delete Committee"),
+            ft.dropdown.Option("Manage Members And Committees"),
             ft.dropdown.Option("View Audit Logs"),
             ft.dropdown.Option("Export Audit Logs"),
             ft.dropdown.Option("Modify System Settings"),
@@ -3447,7 +3353,7 @@ def main(page: ft.Page, session=None):
             "QR Code": "Control QR code generation, printing, and tracking access.",
             "Today's Documents": "Let this employee set the documents SB Members see for the day.",
             "Users & Roles": "Control employee access to user and role administration.",
-            "Committees": "Control committee management permissions.",
+            "Members & Committees": "Let this employee keep the SB member roster, terms and committees up to date.",
             "Audit Logs": "Control access to system activity records.",
             "Analytics": "Control access to analytics and reports.",
             "Office Workflow": "Control this employee's access to future office document functions.",
@@ -4759,7 +4665,7 @@ def main(page: ft.Page, session=None):
 
         # Legislative
         if not is_employee() or has_permission("view_documents"):
-            items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view(), "Legislative"))
+            items.append((ft.Icons.GROUPS_OUTLINED, "Members & Committees", lambda: members_committees_view(), "Legislative"))
 
         # Administration
         if is_super_admin:

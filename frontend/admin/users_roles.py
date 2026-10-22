@@ -41,10 +41,8 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "Assign Roles",
         "Manage Permissions",
     ],
-    "Committees": [
-        "Add Committee",
-        "Edit Committee",
-        "Delete Committee",
+    "Members & Committees": [
+        "Manage Members And Committees",
     ],
     "Audit Logs": [
         "View Audit Logs",

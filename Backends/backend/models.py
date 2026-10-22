@@ -30,6 +30,57 @@ class Office(Base):
     users = relationship("User", back_populates="office", foreign_keys="User.office_id")
 
 
+class CouncilTerm(Base):
+    """One elected Sangguniang Bayan, e.g. the 13th Sangguniang Bayan, 2025-2028."""
+
+    __tablename__ = "council_terms"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), unique=True, nullable=False)
+    starts_on = Column(Date, nullable=False)
+    ends_on = Column(Date, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class CouncilMember(Base):
+    """A member of the SB for one term. Never deleted: past sessions keep pointing at them (docs/adr/0002)."""
+
+    __tablename__ = "council_members"
+    __table_args__ = (
+        CheckConstraint(
+            "position IN ('Vice Mayor', 'Regular Member', 'Liga ng mga Barangay President', "
+            "'SK Federation President', 'IPMR')",
+            name="ck_council_members_position",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    term_id = Column(Integer, ForeignKey("council_terms.id"), nullable=False, index=True)
+    full_name = Column(String(160), nullable=False)
+    position = Column(String(60), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Set when the member leaves before the term ends; members are never deleted.
+    left_on = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    term = relationship("CouncilTerm", foreign_keys=[term_id])
+    user = relationship("User", foreign_keys=[user_id])
+
+
+class Committee(Base):
+    """A standing committee of the SB. Deactivated rather than deleted, since measures are referred to it."""
+
+    __tablename__ = "committees"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(160), unique=True, nullable=False)
+    chair_member_id = Column(Integer, ForeignKey("council_members.id"), nullable=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    chair = relationship("CouncilMember", foreign_keys=[chair_member_id])
+
+
 class Category(Base):
     __tablename__ = "categories"
 
