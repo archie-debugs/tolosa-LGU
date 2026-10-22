@@ -55,8 +55,35 @@ def main(page: ft.Page):
     page.go(page.route or "/")
 
 
+def serve_compressed(host, port, assets_dir):
+    """Serve the web app with gzip, so the first visit over Tailscale downloads about 2 MB instead of 8 MB.
+
+    Returns False when this Flet can't export its web app, so the caller falls back to ft.app.
+    """
+    try:
+        import uvicorn
+        from starlette.middleware.gzip import GZipMiddleware
+
+        web_app = ft.app(target=main, assets_dir=assets_dir, export_asgi_app=True)
+    except (ImportError, TypeError):
+        return False
+    web_app.add_middleware(GZipMiddleware, minimum_size=1024)  # web sockets pass through untouched
+    url = f"http://{host or '127.0.0.1'}:{port}"
+
+    def started():
+        print(f"Frontend running at {url}")
+        if os.getenv("FRONTEND_OPEN_BROWSER", "1") != "0":  # ft.app's web view opened a tab too
+            import webbrowser
+            webbrowser.open(url)
+
+    web_app.add_event_handler("startup", started)
+    uvicorn.run(web_app, host=host, port=port, log_level="warning")
+    return True
+
+
 if __name__ == "__main__":
     frontend_port = int(os.getenv("FRONTEND_PORT", "8550"))
     frontend_host = os.getenv("FRONTEND_HOST", "")
     assets_dir = PROJECT_ROOT / "frontend" / "frontend_public" / "assets"
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER, host=frontend_host, port=frontend_port, assets_dir=str(assets_dir))
+    if not serve_compressed(frontend_host, frontend_port, str(assets_dir)):
+        ft.app(target=main, view=ft.AppView.WEB_BROWSER, host=frontend_host, port=frontend_port, assets_dir=str(assets_dir))
