@@ -8,9 +8,12 @@ Each run writes <dest>/YYYY-MM-DD_HHMM_nightly/ with:
 The folder is written as .partial and renamed only when everything succeeded. Afterwards,
 *_nightly folders older than --keep-days are removed (the newest is always kept); other
 folders, such as manual backups, are never touched. Every run appends a line to backup.log.
+With --mirror, the finished folder is also copied there (checked against the manifest's SHA-256)
+and the same retention applies to the mirror.
 
-Usage:  python scripts/backup.py [--dest DIR] [--keep-days 14]
-Settings come from .env: DATABASE_URL, DOCUMENT_STORAGE_DIR, and optionally BACKUP_DIR and PG_DUMP.
+Usage:  python scripts/backup.py [--dest DIR] [--mirror DIR] [--keep-days 14]
+Settings come from .env: DATABASE_URL, DOCUMENT_STORAGE_DIR, and optionally BACKUP_DIR,
+BACKUP_MIRROR_DIR and PG_DUMP.
 """
 
 import argparse
@@ -26,7 +29,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DEST = PROJECT_ROOT.parent / "sb_tolosa_backups"
 NIGHTLY = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{4})_nightly(?:_\d+)?$")
 
 
@@ -145,20 +147,48 @@ def run_backup(database_url, storage_dir, dest, *, now=None, keep_days=14, run=s
     return folder
 
 
+def mirror_backup(folder, mirror, *, now=None, keep_days=14):
+    """Copy a finished backup folder into `mirror` (another disk or machine); raise BackupFailed on failure."""
+    now = now or datetime.now()
+    folder, mirror = Path(folder), Path(mirror)
+    target = mirror / folder.name
+    partial = target.with_name(target.name + ".partial")
+    try:
+        mirror.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(partial, ignore_errors=True)
+        shutil.copytree(folder, partial)
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        if _sha256(partial / manifest["dump_file"]) != manifest["dump_sha256"]:
+            raise BackupFailed("the copied dump does not match the manifest's SHA-256")
+        partial.rename(target)
+        removed = _remove_old(mirror, now, keep_days, keep=target)
+    except Exception as exc:
+        shutil.rmtree(partial, ignore_errors=True)
+        _log(folder.parent, f"MIRROR FAILED {folder.name}: {exc}")
+        raise exc if isinstance(exc, BackupFailed) else BackupFailed(str(exc)) from exc
+    _log(folder.parent, f"MIRROR OK {folder.name}: copied to {mirror}"
+                        + (f"; removed {', '.join(sorted(removed))}" if removed else ""))
+    return target
+
+
 def main(argv=None):
     sys.path.insert(0, str(PROJECT_ROOT))
     from dotenv import load_dotenv
 
     load_dotenv(PROJECT_ROOT / ".env")
+    from Backends.backend.backups import BACKUP_DIR, BACKUP_MIRROR_DIR
+    from Backends.backend.core import UPLOAD_DIR
+
     parser = argparse.ArgumentParser(description="Back up the database and document storage.")
-    parser.add_argument("--dest", default=os.getenv("BACKUP_DIR", "").strip() or str(DEFAULT_DEST))
+    parser.add_argument("--dest", default=str(BACKUP_DIR))
+    parser.add_argument("--mirror", default=str(BACKUP_MIRROR_DIR or ""),
+                        help="also copy the backup here (another disk or machine); BACKUP_MIRROR_DIR in .env")
     parser.add_argument("--keep-days", type=int, default=14)
     args = parser.parse_args(argv)
 
-    from Backends.backend.core import UPLOAD_DIR
-
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url:
+        _log(Path(args.dest), "FAILED (not started): DATABASE_URL is not set in .env")
         print("DATABASE_URL is not set in .env", file=sys.stderr)
         return 1
     try:
@@ -167,6 +197,13 @@ def main(argv=None):
         print(f"Backup failed: {exc}", file=sys.stderr)
         return 1
     print(f"Backup written to {folder}")
+    if args.mirror:
+        try:
+            copy = mirror_backup(folder, args.mirror, keep_days=args.keep_days)
+        except BackupFailed as exc:
+            print(f"Copying the backup to {args.mirror} failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Copied to {copy}")
     return 0
 
 
