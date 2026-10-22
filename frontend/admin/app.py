@@ -138,7 +138,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
 from frontend.admin.committees import build_committees_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.document_details import open_document_details
-from frontend.admin.tracking_ui import local_time
+from frontend.admin.tracking_ui import TrackingWidgets, local_time
 from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
@@ -153,6 +153,8 @@ from frontend.admin.registration import PickerFiles, open_multiple_register_dial
 from frontend.admin.reference_data import build_reference_data_view
 from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
+from frontend.admin.announcements import build_announcements_view
+from frontend.admin.settings import build_employee_settings_view, build_super_admin_settings_view
 from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.change_password import open_change_password_dialog
@@ -224,6 +226,25 @@ def main(page: ft.Page, session=None):
     runtime_token = None
     refresh_token = None
     selected_monitoring_office = None
+
+    def end_session_if_refused(response, *args, **kwargs):
+        # The backend refuses a revoked, signed-out or deactivated session on its next call.
+        # Try one refresh (an access token that simply expired gets a new one); when that is
+        # refused too, refresh_runtime_token_if_needed sends the user to the login screen.
+        if not runtime_token or response.request.headers.get("Authorization") != f"Bearer {runtime_token}":
+            return
+        refused = response.status_code == 401
+        if response.status_code == 403:
+            try:
+                refused = response.json().get("detail") == "Authenticated user required"
+            except Exception:
+                refused = False
+        if refused:
+            refresh_runtime_token_if_needed(force=True)
+
+    # Every backend call in this app goes through `http`, so any refused call ends the session.
+    http = requests.Session()
+    http.hooks["response"].append(end_session_if_refused)
 
     def has_permission(permission):
         normalized_role = (current_user_role or "").strip().lower()
@@ -415,13 +436,13 @@ def main(page: ft.Page, session=None):
 
             request_url = f"{BACKEND_URL}/documents/qr/{quote(str(pending_qr_token), safe='')}/office"
             headers = {"Authorization": f"Bearer {runtime_token}"}
-            response = requests.get(request_url, headers=headers, verify=False, timeout=15)
+            response = http.get(request_url, headers=headers, verify=False, timeout=15)
 
             if response.status_code == 401:
                 refresh_runtime_token_if_needed(force=True)
                 if runtime_token:
                     headers = {"Authorization": f"Bearer {runtime_token}"}
-                    response = requests.get(request_url, headers=headers, verify=False, timeout=15)
+                    response = http.get(request_url, headers=headers, verify=False, timeout=15)
                 if not runtime_token:
                     _save_qr_authorization_state(pending_qr_token, "login_required")
                     show_login()
@@ -492,7 +513,7 @@ def main(page: ft.Page, session=None):
             pass
 
         try:
-            resp = requests.post(
+            resp = http.post(
                 f"{BACKEND_URL}/auth/refresh",
                 data={"refresh_token": refresh_token},
                 verify=False,
@@ -573,7 +594,7 @@ def main(page: ft.Page, session=None):
     def do_login():
         nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
         try:
-            resp = requests.post(
+            resp = http.post(
                 f"{BACKEND_URL}/auth/login",
                 data={"username": login_username.value or "", "password": login_password.value or ""},
                 timeout=10,
@@ -1017,7 +1038,7 @@ def main(page: ft.Page, session=None):
             if audit_filter_state.get("status") and audit_filter_state["status"] not in ("All Status", "all"):
                 params["status"] = audit_filter_state["status"]
 
-            response = requests.get(f"{BACKEND_URL}/audit/logs", headers=get_admin_headers(), verify=False, params=params, timeout=20)
+            response = http.get(f"{BACKEND_URL}/audit/logs", headers=get_admin_headers(), verify=False, params=params, timeout=20)
             if response.status_code != 200:
                 raise ValueError(response.text)
 
@@ -1219,8 +1240,8 @@ def main(page: ft.Page, session=None):
         nonlocal reference_categories, reference_document_types
         try:
             headers = get_admin_headers()
-            categories_response = requests.get(f"{BACKEND_URL}/reference-data/categories", headers=headers, verify=False, timeout=15)
-            types_response = requests.get(f"{BACKEND_URL}/reference-data/document-types", headers=headers, verify=False, timeout=15)
+            categories_response = http.get(f"{BACKEND_URL}/reference-data/categories", headers=headers, verify=False, timeout=15)
+            types_response = http.get(f"{BACKEND_URL}/reference-data/document-types", headers=headers, verify=False, timeout=15)
             if categories_response.status_code != 200 or types_response.status_code != 200:
                 raise Exception(categories_response.text if categories_response.status_code != 200 else types_response.text)
             reference_categories = categories_response.json() or []
@@ -1261,9 +1282,9 @@ def main(page: ft.Page, session=None):
         endpoint_kind = "document-types" if reference_kind_dialog == "Document Types" else "categories"
         try:
             if reference_edit_item:
-                response = requests.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{reference_edit_item.get('id')}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
+                response = http.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{reference_edit_item.get('id')}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
             else:
-                response = requests.post(f"{BACKEND_URL}/reference-data/{endpoint_kind}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
+                response = http.post(f"{BACKEND_URL}/reference-data/{endpoint_kind}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
             if response.status_code not in {200, 201}:
                 raise Exception(response.text)
             close_reference_dialog()
@@ -1276,7 +1297,7 @@ def main(page: ft.Page, session=None):
     def toggle_reference_definition(kind, item):
         endpoint_kind = "document-types" if kind == "Document Type" else "categories"
         try:
-            response = requests.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{item.get('id')}", json={"name": item.get("name"), "is_active": not bool(item.get("is_active", True))}, headers=get_admin_headers(), verify=False, timeout=15)
+            response = http.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{item.get('id')}", json={"name": item.get("name"), "is_active": not bool(item.get("is_active", True))}, headers=get_admin_headers(), verify=False, timeout=15)
             if response.status_code != 200:
                 raise Exception(response.text)
             load_reference_data()
@@ -1590,7 +1611,7 @@ def main(page: ft.Page, session=None):
                         headers["Authorization"] = f"Bearer {runtime_token}"
                 if not runtime_token:
                     raise RuntimeError("Your session has expired. Please sign in again.")
-                response = requests.get(
+                response = http.get(
                     f"{BACKEND_URL}/offices/available-for-handoff",
                     headers=headers,
                     verify=False,
@@ -1601,7 +1622,7 @@ def main(page: ft.Page, session=None):
                     if not runtime_token:
                         raise RuntimeError("Your session has expired. Please sign in again.")
                     headers = {"Authorization": f"Bearer {runtime_token}"}
-                    response = requests.get(
+                    response = http.get(
                         f"{BACKEND_URL}/offices/available-for-handoff",
                         headers=headers,
                         verify=False,
@@ -1669,7 +1690,7 @@ def main(page: ft.Page, session=None):
                         headers["Authorization"] = f"Bearer {runtime_token}"
                 if not runtime_token:
                     raise RuntimeError("Your session has expired. Please sign in again.")
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/documents/{document_id}/handoffs",
                     json={"receiving_office_id": int(selected_office_id)},
                     headers=headers,
@@ -1681,7 +1702,7 @@ def main(page: ft.Page, session=None):
                     if not runtime_token:
                         raise RuntimeError("Your session has expired. Please sign in again.")
                     headers = {"Authorization": f"Bearer {runtime_token}"}
-                    response = requests.post(
+                    response = http.post(
                         f"{BACKEND_URL}/documents/{document_id}/handoffs",
                         json={"receiving_office_id": int(selected_office_id)},
                         headers=headers,
@@ -1947,7 +1968,7 @@ def main(page: ft.Page, session=None):
     def details_api(method, path, **kwargs):
         """backend_api for the details dialog; an employee whose session lapsed is signed in again first."""
         def send():
-            return requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=15, **kwargs)
+            return http.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=15, **kwargs)
 
         response = send()
         if response.status_code == 401 and is_employee():
@@ -1969,7 +1990,7 @@ def main(page: ft.Page, session=None):
         if is_employee() and not has_permission("view_qr_tracking"):
             return None
         try:
-            response = requests.get(f"{BACKEND_URL}/documents/{document_id}/qr-image", headers=get_admin_headers(), verify=False, timeout=10)
+            response = http.get(f"{BACKEND_URL}/documents/{document_id}/qr-image", headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("ascii")
         except Exception:
@@ -2073,7 +2094,7 @@ def main(page: ft.Page, session=None):
             show_document_notice("No PDF attachment available for this document.")
             return
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{doc.get('id')}/attachments/{pdf_attachment.get('id')}/preview-token",
                 headers=get_admin_headers(), verify=False, timeout=10,
             )
@@ -2100,7 +2121,7 @@ def main(page: ft.Page, session=None):
             show_document_notice("No PDF attachment available for printing.")
             return
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{doc.get('id')}/attachments/{pdf_attachment.get('id')}/preview-token",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2128,7 +2149,7 @@ def main(page: ft.Page, session=None):
         # The app runs in the viewer's browser: hand that browser a download link, since a
         # file saved here would land on the machine running the app, not the viewer's.
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{document_id}/attachments/{attachment_id}/download-token",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2250,7 +2271,7 @@ def main(page: ft.Page, session=None):
                 with open(path, "rb") as handle:
                     file_bytes = handle.read()
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{replace_attachment_document.get('id')}/attachments/{replace_attachment_record.get('id')}/replace",
                 files={"file": (name, file_bytes, mimetypes.guess_type(name)[0] or "application/octet-stream")},
                 headers=get_admin_headers(),
@@ -2275,7 +2296,7 @@ def main(page: ft.Page, session=None):
             show_document_notice("Unable to change visibility: document ID is missing.")
             return
         try:
-            response = requests.put(
+            response = http.put(
                 f"{BACKEND_URL}/documents/{document_id}",
                 json={"is_public": bool(is_public)},
                 headers=get_admin_headers(),
@@ -2336,247 +2357,49 @@ def main(page: ft.Page, session=None):
         )
         return view
 
+    def announcements_view():
+        return build_announcements_view(page, surface_card, section_header, backend_api)
+
     def settings_view():
-        is_dark = page.theme_mode == ft.ThemeMode.DARK
-        default_settings = {
-            "appearance": {"theme": "Dark" if is_dark else "Light", "accent": "LGU Tolosa Blue"},
-            "notifications": {"document_updates": True, "qr_tracking_updates": True, "document_requests": True, "account_notifications": True, "system_announcements": False},
-            "document_preferences": {"default_view": "Table", "records_per_page": "25", "remember_filters": True, "confirm_destructive": True},
-            "qr_tracking": {"confirm_receipt": True, "show_tracking_history": True, "scanner_sound": False, "scanner_feedback": True},
-            "security": {"remember_device": True, "login_notifications": True},
-        }
-
-        try:
-            saved_settings_raw = page.client_storage.get("sb_settings")
-            if saved_settings_raw:
-                saved_settings = json.loads(saved_settings_raw)
-                for key, value in saved_settings.items():
-                    if isinstance(value, dict):
-                        default_settings.setdefault(key, {})
-                        for nested_key, nested_value in value.items():
-                            default_settings[key][nested_key] = nested_value
-        except Exception:
-            pass
-
-        settings_state = default_settings
-
-        def save_settings():
-            try:
-                page.client_storage.set("sb_settings", json.dumps(settings_state))
-                page.snack_bar = ft.SnackBar(ft.Text("Settings saved successfully."), open=True)
-                page.update()
-            except Exception:
-                page.snack_bar = ft.SnackBar(ft.Text("Unable to save local settings in this browser session."), open=True)
-                page.update()
-
-        def make_row(label, control, note=None):
-            row_controls = [
-                ft.Text(label, size=12, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200, width=220),
-                control,
-            ]
-            if note:
-                row_controls.append(ft.Text(note, size=11, color=ft.Colors.BLUE_GREY_500 if not is_dark else ft.Colors.BLUE_GREY_400))
-            return ft.Row(row_controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True)
-
-        def save_button_row():
-            return ft.Row([
-                ft.ElevatedButton("Save Changes", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: save_settings()),
-            ], alignment=ft.MainAxisAlignment.END)
-
-        theme_dropdown = ft.Dropdown(
-            value=settings_state["appearance"]["theme"],
-            width=180,
-            options=[
-                ft.dropdown.Option("Light", "Light"),
-                ft.dropdown.Option("Dark", "Dark"),
-                ft.dropdown.Option("System Default", "System Default"),
-            ],
-        )
-
-        def on_theme_change(_):
-            selected_theme = theme_dropdown.value or "Light"
-            settings_state["appearance"] = {**settings_state.get("appearance", {}), "theme": selected_theme}
-            if hasattr(page, "client_storage"):
-                page.client_storage.set("sb_night_mode", selected_theme == "Dark")
-            page.theme_mode = ft.ThemeMode.DARK if selected_theme == "Dark" else ft.ThemeMode.LIGHT
-            page.update()
-
-        theme_dropdown.on_change = on_theme_change
-
-        default_view_dropdown = ft.Dropdown(
-            value=settings_state["document_preferences"]["default_view"],
-            width=170,
-            options=[ft.dropdown.Option("Table", "Table"), ft.dropdown.Option("Compact Table", "Compact Table")],
-        )
-        default_view_dropdown.on_change = lambda e: settings_state.__setitem__("document_preferences", {**settings_state.get("document_preferences", {}), "default_view": default_view_dropdown.value or "Table"})
-
-        records_per_page_dropdown = ft.Dropdown(
-            value=str(settings_state["document_preferences"]["records_per_page"]),
-            width=120,
-            options=[ft.dropdown.Option("10", "10"), ft.dropdown.Option("25", "25"), ft.dropdown.Option("50", "50")],
-        )
-        records_per_page_dropdown.on_change = lambda e: settings_state.__setitem__("document_preferences", {**settings_state.get("document_preferences", {}), "records_per_page": records_per_page_dropdown.value or "25"})
-
-        appearance_card = surface_card(
-            ft.Column([
-                section_header("Appearance", "Customize the application's visual appearance.", ft.Icons.PALETTE_OUTLINED, ft.Colors.BLUE_700),
-                ft.Divider(height=1),
-                make_row("Theme", theme_dropdown),
-            ], spacing=12),
-            padding=18,
-            expand=False,
-        )
-
-        def switch_row(label, key, section_name):
-            value = settings_state.get(section_name, {}).get(key, False)
-
-            def on_switch_change(e):
-                section_state = settings_state.get(section_name, {})
-                settings_state[section_name] = {**section_state, key: bool(e.control.value)}
-
-            switch = ft.Switch(value=value, active_color=ft.Colors.BLUE_700, on_change=on_switch_change)
-            return make_row(label, switch)
-
-        notifications_card = surface_card(
-            ft.Column([
-                section_header("Notifications", "Control application notifications.", ft.Icons.NOTIFICATIONS_OUTLINED, ft.Colors.BLUE_700),
-                ft.Divider(height=1),
-                switch_row("Document Updates", "document_updates", "notifications"),
-                switch_row("QR Tracking Updates", "qr_tracking_updates", "notifications"),
-                switch_row("Document Requests", "document_requests", "notifications"),
-                switch_row("Account Notifications", "account_notifications", "notifications"),
-                switch_row("System Announcements", "system_announcements", "notifications"),
-            ], spacing=10),
-            padding=18,
-            expand=False,
-        )
-
-        document_preferences_card = surface_card(
-            ft.Column([
-                section_header("Document Preferences", "Customize how documents are displayed.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700),
-                ft.Divider(height=1),
-                make_row("Default Document View", default_view_dropdown),
-                make_row("Records Per Page", records_per_page_dropdown),
-                switch_row("Remember Last Used Filters", "remember_filters", "document_preferences"),
-                switch_row("Confirmation Before Destructive Actions", "confirm_destructive", "document_preferences"),
-            ], spacing=10),
-            padding=18,
-            expand=False,
-        )
-
-        qr_tracking_card = surface_card(
-            ft.Column([
-                section_header("QR & Tracking", "Customize QR scanning and tracking behavior.", ft.Icons.QR_CODE_2, ft.Colors.BLUE_700),
-                ft.Divider(height=1),
-                switch_row("Confirm Receipt After Scanning", "confirm_receipt", "qr_tracking"),
-                switch_row("Show Tracking History After Scan", "show_tracking_history", "qr_tracking"),
-                switch_row("Scanner Sound", "scanner_sound", "qr_tracking"),
-                switch_row("Scanner Feedback", "scanner_feedback", "qr_tracking"),
-            ], spacing=10),
-            padding=18,
-            expand=False,
-        )
-
-        security_card = surface_card(
-            ft.Column([
-                section_header("Security", "Manage account security preferences.", ft.Icons.SECURITY, ft.Colors.BLUE_700),
-                ft.Divider(height=1),
-                switch_row("Remember This Device", "remember_device", "security"),
-                switch_row("Login Notifications", "login_notifications", "security"),
-                ft.Row([
-                    ft.Text("Password", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200, width=220),
-                    ft.OutlinedButton("Change Password", icon=ft.Icons.LOCK_RESET, on_click=open_change_password),
-                ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True),
-            ], spacing=10),
-            padding=18,
-            expand=False,
-        )
-
-        system_config_visible = has_permission("modify_system_settings") or current_user_role == "Super Administrator"
-        system_configuration_card = None
-        if system_config_visible:
-            default_system_settings = {
-                "organization_name": "LGU Tolosa",
-                "system_name": "LGU Tolosa Legislative Document Tracking System",
-                "public_portal_enabled": True,
-                "maintenance_mode": False,
-                "session_timeout_minutes": 60,
-                "upload_max_size_mb": 25,
-            }
-            try:
-                resp = requests.get(f"{BACKEND_URL}/system-settings", headers=get_admin_headers(), verify=False, timeout=15)
-                if resp.status_code == 200:
-                    remote_settings = resp.json().get("settings") or {}
-                    default_system_settings.update({key: value for key, value in remote_settings.items() if key in default_system_settings})
-            except Exception:
-                pass
-
-            org_name_field = ft.TextField(label="Organization Name", value=str(default_system_settings.get("organization_name", "LGU Tolosa")), width=360)
-            system_name_field = ft.TextField(label="System Name", value=str(default_system_settings.get("system_name", "LGU Tolosa Legislative Document Tracking System")), width=360)
-            maintenance_switch = ft.Switch(label="Maintenance Mode", value=bool(default_system_settings.get("maintenance_mode", False)))
-            public_portal_switch = ft.Switch(label="Public Portal Enabled", value=bool(default_system_settings.get("public_portal_enabled", True)))
-            session_timeout_field = ft.TextField(label="Session Timeout (minutes)", value=str(default_system_settings.get("session_timeout_minutes", 60)), width=180)
-            upload_size_field = ft.TextField(label="Max Upload Size (MB)", value=str(default_system_settings.get("upload_max_size_mb", 25)), width=180)
-
-            def save_system_settings(_):
-                try:
-                    payload = {
-                        "settings": {
-                            "organization_name": (org_name_field.value or "LGU Tolosa").strip() or "LGU Tolosa",
-                            "system_name": (system_name_field.value or "LGU Tolosa Legislative Document Tracking System").strip() or "LGU Tolosa Legislative Document Tracking System",
-                            "maintenance_mode": bool(maintenance_switch.value),
-                            "public_portal_enabled": bool(public_portal_switch.value),
-                            "session_timeout_minutes": int(str(session_timeout_field.value or "60").strip() or "60"),
-                            "upload_max_size_mb": int(str(upload_size_field.value or "25").strip() or "25"),
-                        }
-                    }
-                    response = requests.put(f"{BACKEND_URL}/system-settings", headers=get_admin_headers(), json=payload, verify=False, timeout=15)
-                    if response.status_code == 200:
-                        page.snack_bar = ft.SnackBar(ft.Text("System settings saved successfully."), open=True)
-                    else:
-                        detail = response.json().get("detail", "Unable to save system settings.") if response.headers.get("content-type", "").startswith("application/json") else "Unable to save system settings."
-                        page.snack_bar = ft.SnackBar(ft.Text(str(detail)[:180]), open=True)
-                except Exception as exc:
-                    page.snack_bar = ft.SnackBar(ft.Text(f"Unable to save system settings: {exc}"), open=True)
-                page.update()
-
-            system_configuration_card = surface_card(
-                ft.Column([
-                    section_header("System Configuration", "Authorized administration settings for the application.", ft.Icons.SETTINGS_APPLICATIONS_OUTLINED, ft.Colors.BLUE_700),
-                    ft.Divider(height=1),
-                    ft.Text("Organization Information", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Row([org_name_field, system_name_field], wrap=True, spacing=12),
-                    ft.Text("Operational Controls", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Row([
-                        maintenance_switch,
-                        public_portal_switch,
-                    ], wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    ft.Text("Storage and Session Settings", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700 if not is_dark else ft.Colors.BLUE_GREY_200),
-                    ft.Row([session_timeout_field, upload_size_field], wrap=True, spacing=12),
-                    ft.Row([
-                        ft.ElevatedButton("Save System Settings", icon=ft.Icons.SAVE_OUTLINED, on_click=save_system_settings),
-                    ], alignment=ft.MainAxisAlignment.END),
-                ], spacing=10),
-                padding=18,
-                expand=False,
+        # Super Administrators and Employees each get their own Settings page; any other role gets none.
+        # The backend still checks every call, so a tampered role only shows a page whose calls are refused.
+        profile = load_current_profile(force=True)
+        role = (current_user_role or "").strip().lower()
+        if role == "super administrator":
+            return build_super_admin_settings_view(
+                page, surface_card, section_header,
+                api=backend_api,
+                profile=profile,
+                change_password=open_change_password,
+                edit_profile=lambda: open_profile_dialog(page, edit_profile_dialog, backend_api, profile, on_saved=settings_profile_saved),
+                two_step=two_step_row(page, two_step_dialog, backend_api, profile, on_changed=settings_two_step_changed,
+                                      label_color=TrackingWidgets(page).muted_color()),
+                open_page=open_nav_page,
+                pages={item[1] for item in nav_items},
             )
+        if is_employee():
+            return build_employee_settings_view(
+                page, surface_card, section_header,
+                profile=profile,
+                change_password=open_change_password,
+                edit_profile=lambda: open_profile_dialog(page, edit_profile_dialog, backend_api, profile, on_saved=settings_profile_saved),
+            )
+        return ft.Column([ft.Text("Settings are not available for this account.")])
 
-        cards = [appearance_card, notifications_card, document_preferences_card, qr_tracking_card, security_card]
-        if system_configuration_card is not None:
-            cards.append(system_configuration_card)
-        cards.append(save_button_row())
+    def open_nav_page(label):
+        index = next((i for i, item in enumerate(nav_items) if item[1] == label), None)
+        if index is not None:
+            show_shell(nav_items[index][2](), initial_selected_index=index)
 
-        return ft.Column([
-            surface_card(
-                ft.Column([
-                    section_header("Settings", "Manage your application preferences and system configuration.", ft.Icons.SETTINGS_OUTLINED, ft.Colors.BLUE_700),
-                    ft.Divider(height=1),
-                ], spacing=12),
-                padding=18,
-                expand=False,
-            ),
-            *cards,
-        ], spacing=16, expand=False)
+    def settings_profile_saved(account):
+        current_profile.clear()
+        current_profile.update(account)
+        show_document_notice("Profile updated.")
+        open_nav_page("Settings")
+
+    def settings_two_step_changed():
+        show_document_notice("Two-step login updated.")
+        open_nav_page("Settings")
 
     def account_view():
         refresh_runtime_token_if_needed(force=True)
@@ -2913,7 +2736,7 @@ def main(page: ft.Page, session=None):
     def load_office_options():
         nonlocal office_options
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/auth/offices",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2929,7 +2752,7 @@ def main(page: ft.Page, session=None):
     def load_office_management_data():
         nonlocal office_management_data
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/offices",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2952,7 +2775,7 @@ def main(page: ft.Page, session=None):
         nonlocal user_management_data
         previous_data = list(user_management_data)
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/auth/users",
                 headers=get_admin_headers(),
                 verify=False,
@@ -3191,13 +3014,13 @@ def main(page: ft.Page, session=None):
                 "is_active": office_status.value == "Active",
             }
             try:
-                response = requests.put(
+                response = http.put(
                     f"{BACKEND_URL}/offices/{office.get('id')}",
                     json=payload,
                     headers=get_admin_headers(),
                     verify=False,
                     timeout=20,
-                ) if editing else requests.post(
+                ) if editing else http.post(
                     f"{BACKEND_URL}/offices",
                     json=payload,
                     headers=get_admin_headers(),
@@ -3242,7 +3065,7 @@ def main(page: ft.Page, session=None):
 
     def open_view_office_users_dialog(office):
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/offices/{office.get('id')}/users",
                 headers=get_admin_headers(),
                 verify=False,
@@ -3498,7 +3321,7 @@ def main(page: ft.Page, session=None):
                 payload["permissions"] = permissions
 
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/register",
                     json=payload,
                     headers=get_admin_headers(),
@@ -3660,7 +3483,6 @@ def main(page: ft.Page, session=None):
             "Committees": "Control committee management permissions.",
             "Audit Logs": "Control access to system activity records.",
             "Analytics": "Control access to analytics and reports.",
-            "Settings": "Control access to system configuration.",
             "Office Workflow": "Control this employee's access to future office document functions.",
         }
         permission_key = lambda label: label.strip().lower().replace(" ", "_")
@@ -3896,7 +3718,7 @@ def main(page: ft.Page, session=None):
                     payload["permissions"] = str(permissions)
 
                 try:
-                    response = requests.post(
+                    response = http.post(
                         f"{BACKEND_URL}/auth/register",
                         json=payload,
                         headers=get_admin_headers(),
@@ -4005,7 +3827,7 @@ def main(page: ft.Page, session=None):
             )
             payload["office_id"] = selected_office.get("id") if selected_office else None
             try:
-                response = requests.put(
+                response = http.put(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}",
                     json=payload,
                     headers=get_admin_headers(),
@@ -4075,7 +3897,7 @@ def main(page: ft.Page, session=None):
                 page.update()
                 return
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}/reset-password",
                     json={
                         "new_password": new_password.value,
@@ -4121,7 +3943,7 @@ def main(page: ft.Page, session=None):
     def delete_user(user):
         def confirm_delete():
             try:
-                response = requests.delete(
+                response = http.delete(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}",
                     headers=get_admin_headers(),
                     verify=False,
@@ -4157,7 +3979,7 @@ def main(page: ft.Page, session=None):
     def unlock_user(user):
         def confirm_unlock():
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}/unlock",
                     headers=get_admin_headers(),
                     verify=False,
@@ -4211,6 +4033,8 @@ def main(page: ft.Page, session=None):
         return current_profile
 
     def show_shell(view, initial_selected_index=0):
+        if not runtime_token and not AUTH_TOKEN:
+            return  # the session ended while this screen was being built; stay on the login screen
         profile = load_current_profile()
         render_shell(
             page, current_user, logout_user, nav_items, view,
@@ -4221,7 +4045,6 @@ def main(page: ft.Page, session=None):
                 "office": profile.get("office"),
                 "on_change_password": open_change_password,
             },
-            search=document_search() if has_permission("view_document_details") or has_permission("view_office_document_details") else None,
             notifications={
                 "load": lambda: backend_api("GET", "/notifications"),
                 "seen": lambda: backend_api("POST", "/notifications/seen"),
@@ -4229,15 +4052,8 @@ def main(page: ft.Page, session=None):
             },
         )
 
-    def document_search():
-        # The top-bar search: find documents this user may open, and open one in Document details.
-        def find(text):
-            return backend_api("GET", "/documents/quick-search", params={"q": text}).get("items") or []
-
-        return {"find": find, "open": show_document_details}
-
     def backend_api(method, path, timeout=15, **kwargs):
-        response = requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=timeout, **kwargs)
+        response = http.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=timeout, **kwargs)
         if response.status_code >= 400:
             try:
                 detail = response.json().get("detail", response.text)
@@ -4259,7 +4075,7 @@ def main(page: ft.Page, session=None):
         nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
         if runtime_token:
             try:
-                requests.post(
+                http.post(
                     f"{BACKEND_URL}/auth/logout",
                     headers={"Authorization": f"Bearer {runtime_token}"},
                     verify=False,
@@ -4314,7 +4130,7 @@ def main(page: ft.Page, session=None):
     def dashboard_view():
         analytics_payload = {}
         try:
-            analytics_response = requests.get(
+            analytics_response = http.get(
                 f"{BACKEND_URL}/analytics",
                 headers=get_admin_headers(),
                 verify=False,
@@ -4538,7 +4354,7 @@ def main(page: ft.Page, session=None):
 
         health_payload = {}
         try:
-            health_response = requests.get(
+            health_response = http.get(
                 f"{BACKEND_URL}/health",
                 headers=get_admin_headers(),
                 verify=False,
@@ -4844,7 +4660,7 @@ def main(page: ft.Page, session=None):
 
         def load_sessions(_=None):
             try:
-                response = requests.get(
+                response = http.get(
                     f"{BACKEND_URL}/auth/sessions",
                     headers=get_admin_headers(),
                     verify=False,
@@ -4859,7 +4675,11 @@ def main(page: ft.Page, session=None):
                         ft.DataCell(ft.Text(item.get("username") or "-", size=12)),
                         *[ft.DataCell(ft.Text(local_time(item.get(key)).strftime("%Y-%m-%d %H:%M:%S") if local_time(item.get(key)) else "-", size=12))
                           for key in ("created_at", "last_activity", "expires_at")],
-                        ft.DataCell(ft.OutlinedButton("Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id))),
+                        ft.DataCell(
+                            ft.Text("Protected", size=12, color=ft.Colors.BLUE_GREY_500, tooltip="Super Administrator sessions cannot be revoked.")
+                            if item.get("role") == "Super Administrator"
+                            else ft.OutlinedButton("Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id))
+                        ),
                     ]))
                 table_holder.content = ft.DataTable(
                     columns=[ft.DataColumn(ft.Text(label, weight=ft.FontWeight.BOLD)) for label in ("User", "Created", "Last Activity", "Expires", "Action")],
@@ -4873,7 +4693,7 @@ def main(page: ft.Page, session=None):
 
         def revoke_session(session_id):
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/sessions/{session_id}/revoke",
                     headers=get_admin_headers(),
                     verify=False,
@@ -4899,6 +4719,10 @@ def main(page: ft.Page, session=None):
         return view
 
     def show_login():
+        # A dialog left open by a session that just ended would cover the login form.
+        for control in page.overlay:
+            if isinstance(control, ft.AlertDialog):
+                control.open = False
         page.clean()
         mobile_scroll = (page.width or 1024) <= 600
         page.scroll = ft.ScrollMode.AUTO if mobile_scroll else None
@@ -4928,7 +4752,7 @@ def main(page: ft.Page, session=None):
                 data = {"username": username, "password": password}
                 if code_field.visible:
                     data["code"] = "".join((code_field.value or "").split())
-                res = requests.post(f"{BACKEND_URL}/auth/login", data=data, verify=False, timeout=10)
+                res = http.post(f"{BACKEND_URL}/auth/login", data=data, verify=False, timeout=10)
                 if login_needs_code(res):
                     code_field.visible = True
                     code_field.value = ""
@@ -5136,12 +4960,14 @@ def main(page: ft.Page, session=None):
             items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view(), "Administration"))
             items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view(), "Administration"))
             items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view, "Administration"))
+            items.append((ft.Icons.CAMPAIGN_OUTLINED, "Announcements", announcements_view, "Administration"))
         if is_super_admin or has_permission("view_audit_logs"):
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view(), "Administration"))
 
         # Account: My Account opens from the profile menu; Settings is pinned to the bottom of the sidebar.
         items.append((ft.Icons.PERSON_OUTLINE, "My Account", lambda: account_view(), MENU_SECTION))
-        items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view(), "Account"))
+        if is_super_admin or is_employee():
+            items.append((ft.Icons.SETTINGS_OUTLINED, "Settings", lambda: settings_view(), "Account"))
         return items
 
     nav_items = build_nav_items()

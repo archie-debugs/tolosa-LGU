@@ -1,5 +1,16 @@
+import os
+
 import flet as ft
+import requests
 from frontend.admin.app import main as admin_main
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
+
+# Shown when the backend cannot be reached; matches the backend's defaults.
+DEFAULT_ANNOUNCEMENTS = [
+    {"category": "PUBLIC NOTICE", "title": "Public sessions and notices", "date": "", "details": ""},
+    {"category": "LEGISLATIVE UPDATE", "title": "Official records and updates", "date": "", "details": ""},
+]
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
@@ -13,6 +24,19 @@ if hasattr(ft, "Alignment") and hasattr(ft, "alignment"):
     }.items():
         if alignment_value is not None and not hasattr(ft.Alignment, alignment_name):
             setattr(ft.Alignment, alignment_name, alignment_value)
+
+
+def load_homepage_announcements():
+    """The announcements a Super Administrator set in Settings, or the defaults if the backend is unreachable."""
+    try:
+        response = requests.get(f"{BACKEND_URL}/public/announcements", timeout=5)
+        response.raise_for_status()
+        announcements = response.json().get("announcements")
+        if isinstance(announcements, list):
+            return [item for item in announcements if isinstance(item, dict)]
+    except (requests.RequestException, ValueError, AttributeError):
+        pass
+    return DEFAULT_ANNOUNCEMENTS
 
 
 def build_homepage_view(page=None):
@@ -200,6 +224,7 @@ def build_homepage_view(page=None):
                             color="#ffffff",
                             bgcolor=navy,
                             style=ft.ButtonStyle(padding=ft.Padding(18, 13, 18, 13)),
+                            on_click=open_public_documents,
                         ),
                     ],
                     spacing=8,
@@ -260,7 +285,7 @@ def build_homepage_view(page=None):
         ),
         bgcolor="#23343a" if is_dark else "#ffffff",
         padding=ft.Padding(30, 22, 30, 22),
-        border=ft.border.only(top=ft.border.all(1, "#dce7e5"), bottom=ft.border.all(1, "#dce7e5")),
+        border=ft.Border(top=ft.BorderSide(1, "#dce7e5"), bottom=ft.BorderSide(1, "#dce7e5")),
     )
 
     system_intro = ft.Container(
@@ -299,7 +324,7 @@ def build_homepage_view(page=None):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         bgcolor="#1d2d33" if is_dark else "#f7faf9",
-        border=ft.border.only(top=ft.border.all(1, "#dce7e5"), bottom=ft.border.all(1, "#dce7e5")),
+        border=ft.Border(top=ft.BorderSide(1, "#dce7e5"), bottom=ft.BorderSide(1, "#dce7e5")),
         padding=ft.Padding(44, 42, 44, 42),
         key="about-section",
     )
@@ -319,7 +344,7 @@ def build_homepage_view(page=None):
                     col={"xs": 12, "md": 8},
                 ),
                 ft.Container(
-                    content=ft.ElevatedButton("VIEW PUBLIC DOCUMENTS ->", color=navy, bgcolor=gold, style=ft.ButtonStyle(padding=ft.Padding(18, 13, 18, 13))),
+                    content=ft.ElevatedButton("VIEW PUBLIC DOCUMENTS ->", color=navy, bgcolor=gold, style=ft.ButtonStyle(padding=ft.Padding(18, 13, 18, 13)), on_click=open_public_documents),
                     alignment=ft.Alignment.CENTER_RIGHT,
                     col={"xs": 12, "md": 4},
                 ),
@@ -332,6 +357,31 @@ def build_homepage_view(page=None):
         padding=ft.Padding(42, 34, 42, 34),
         key="records-section",
     )
+
+    def announcement_row(item, first, last):
+        heading = [
+            ft.Text((item.get("category") or "").upper(), size=11, color=gold, weight=ft.FontWeight.BOLD),
+            ft.Text(item.get("title") or "", size=14, color=ink, weight=ft.FontWeight.BOLD),
+        ]
+        if item.get("details"):
+            heading.append(ft.Text(item["details"], size=12, color=muted))
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Column(heading, spacing=5, expand=True),
+                    ft.Text(item.get("date") or "", size=10, color=muted),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            padding=ft.Padding(0, 0 if first else 14, 0, 0 if last else 14),
+            border=None if last else ft.Border(bottom=ft.BorderSide(1, "#dce7e5")),
+        )
+
+    announcement_items = load_homepage_announcements()
+    announcement_rows = [
+        announcement_row(item, index == 0, index == len(announcement_items) - 1)
+        for index, item in enumerate(announcement_items)
+    ] or [ft.Text("There are no announcements right now.", size=14, color=muted)]
 
     announcements = ft.Container(
         content=ft.ResponsiveRow(
@@ -348,46 +398,7 @@ def build_homepage_view(page=None):
                     col={"xs": 12, "md": 4},
                 ),
                 ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        ft.Column(
-                                            [
-                                                ft.Text("PUBLIC NOTICE", size=11, color=gold, weight=ft.FontWeight.BOLD),
-                                                ft.Text("Public sessions and notices", size=14, color=ink, weight=ft.FontWeight.BOLD),
-                                            ],
-                                            spacing=5,
-                                            expand=True,
-                                        ),
-                                        ft.Text("NOTICE", size=10, color=muted),
-                                    ],
-                                    vertical_alignment=ft.CrossAxisAlignment.START,
-                                ),
-                                padding=ft.Padding(0, 0, 0, 14),
-                                border=ft.border.only(bottom=ft.border.all(1, "#dce7e5")),
-                            ),
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        ft.Column(
-                                            [
-                                                ft.Text("LEGISLATIVE UPDATE", size=11, color=gold, weight=ft.FontWeight.BOLD),
-                                                ft.Text("Official records and updates", size=14, color=ink, weight=ft.FontWeight.BOLD),
-                                            ],
-                                            spacing=5,
-                                            expand=True,
-                                        ),
-                                        ft.Text("UPDATE", size=10, color=muted),
-                                    ],
-                                    vertical_alignment=ft.CrossAxisAlignment.START,
-                                ),
-                                padding=ft.Padding(0, 14, 0, 0),
-                            ),
-                        ],
-                        spacing=0,
-                    ),
+                    content=ft.Column(announcement_rows, spacing=0),
                     col={"xs": 12, "md": 8},
                 ),
             ],
@@ -397,7 +408,7 @@ def build_homepage_view(page=None):
         ),
         bgcolor="#23343a" if is_dark else "#ffffff",
         padding=ft.Padding(44, 46, 44, 46),
-        border=ft.border.only(top=ft.border.all(1, "#dce7e5")),
+        border=ft.Border(top=ft.BorderSide(1, "#dce7e5")),
         key="announcements-section",
     )
 
@@ -453,7 +464,7 @@ def build_homepage_view(page=None):
                 ft.Container(
                     content=ft.Text("© Municipality of Tolosa. All rights reserved.", size=11, color="#c5d9d7"),
                     padding=ft.Padding(0, 16, 0, 0),
-                    border=ft.border.only(top=ft.border.all(1, "#315463")),
+                    border=ft.Border(top=ft.BorderSide(1, "#315463")),
                     col={"xs": 12, "md": 12},
                 ),
             ],

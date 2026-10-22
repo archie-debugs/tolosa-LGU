@@ -23,7 +23,9 @@ def _default_document_storage_dir() -> str:
 # repository (DOCUMENT_STORAGE_DIR, or a per-user application data folder). Only in-progress
 # browser uploads belong in the system temp area, which the OS may clean at any time.
 UPLOAD_DIR = os.path.abspath(os.getenv("DOCUMENT_STORAGE_DIR", "").strip() or _default_document_storage_dir())
-TEMP_UPLOAD_DIR = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "tmp"))
+TEMP_UPLOAD_DIR = os.path.abspath(
+    os.getenv("TEMP_UPLOAD_DIR", "").strip() or os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "tmp")
+)
 # Attachments stored before DOCUMENT_STORAGE_DIR existed; scripts/migrate_attachment_storage.py moves them.
 LEGACY_UPLOAD_DIR = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "uploads"))
 
@@ -220,6 +222,12 @@ VALID_PERMISSIONS = {
     if permission != "*"
 } | USER_MANAGEMENT_PERMISSIONS | UI_PERMISSIONS | OFFICE_WORKFLOW_PERMISSIONS
 
+# Shown on the public homepage until a Super Administrator edits them in Settings.
+DEFAULT_HOMEPAGE_ANNOUNCEMENTS = [
+    {"category": "PUBLIC NOTICE", "title": "Public sessions and notices", "date": "", "details": ""},
+    {"category": "LEGISLATIVE UPDATE", "title": "Official records and updates", "date": "", "details": ""},
+]
+
 DEFAULT_SYSTEM_SETTINGS = {
     "organization_name": "LGU Tolosa",
     "system_name": "LGU Tolosa Legislative Document Tracking System",
@@ -228,6 +236,7 @@ DEFAULT_SYSTEM_SETTINGS = {
     "session_timeout_minutes": 60,
     "upload_max_size_mb": 25,
     "allowed_file_types": ["pdf", "doc", "docx", "jpg", "jpeg", "png"],
+    "homepage_announcements": DEFAULT_HOMEPAGE_ANNOUNCEMENTS,
 }
 
 SYSTEM_SETTING_TYPES = {
@@ -238,6 +247,7 @@ SYSTEM_SETTING_TYPES = {
     "session_timeout_minutes": int,
     "upload_max_size_mb": int,
     "allowed_file_types": list,
+    "homepage_announcements": list,
 }
 
 ROLE_DEFINITIONS = {

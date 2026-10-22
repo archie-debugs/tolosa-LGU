@@ -78,7 +78,7 @@ def menu_item(menu, label):
 
 
 class Shell:
-    def __init__(self, width=1200, account=None, search=None, notifications=None):
+    def __init__(self, width=1200, account=None, notifications=None):
         self.page = DummyPage(width)
         self.logged_out = []
         self.account_opened = []
@@ -94,7 +94,6 @@ class Shell:
                 "name": "Ana Bautista", "role": "Employee", "office": "Treasury Office",
                 "on_change_password": lambda: self.password_dialogs.append(True),
             },
-            search=search,
             notifications=notifications,
         )
 
@@ -380,110 +379,10 @@ def test_resizing_switches_between_sidebar_and_drawer_and_keeps_the_screen():
     assert "Ana Bautista" in texts(shell.menu.content)
 
 
-def fire(control, event):
-    handler = getattr(control, event)
-    if callable(handler):
-        handler(None)
-    else:  # Flet 0.21 wraps some handlers in an EventHandler
-        for fn in list(handler._EventHandler__handlers):
-            fn(None)
-
-
-class Search:
-    def __init__(self, items=None, error=None):
-        self.queries = []
-        self.opened = []
-        self.items = items if items is not None else [
-            {"id": 1, "tracking_number": "DOC-000001", "title": "Budget Ordinance", "document_type": "Ordinance",
-             "current_office": "Records Office", "archived": False},
-            {"id": 9, "tracking_number": "DOC-000009", "title": "Old Budget", "document_type": None,
-             "current_office": None, "archived": True},
-        ]
-        self.error = error
-
-    def find(self, text):
-        self.queries.append(text)
-        if self.error:
-            raise Exception(self.error)
-        return self.items
-
-    def config(self):
-        return {"find": self.find, "open": self.opened.append}
-
-
-def search_box(shell):
-    return next(c for c in find(shell.root, ft.TextField) if c.hint_text == "Search documents, tracking number, or title...")
-
-
-def results_panel(shell):
-    return next(c for c in walk(shell.root) if getattr(c, "data", None) == "search-results")
-
-
-def run_search(shell, text):
-    box = search_box(shell)
-    box.value = text
-    fire(box, "on_submit")
-
-
-def test_no_search_box_without_a_search_function():
-    shell = Shell()
-    assert not [c for c in find(shell.root, ft.TextField) if c.hint_text == "Search documents, tracking number, or title..."]
-
-
-def test_search_lists_matches_under_the_bar_and_opens_one():
-    search = Search()
-    shell = Shell(search=search.config())
-    assert results_panel(shell).visible is False
-
-    run_search(shell, "  budget ")
-
-    assert search.queries == ["budget"]
-    panel = results_panel(shell)
-    assert panel.visible is True
-    shown = texts(panel)
-    assert "DOC-000001" in shown and "Budget Ordinance" in shown
-    assert "Ordinance · Records Office" in shown
-    assert "Archived" in shown
-
-    row = next(c for c in walk(panel) if isinstance(c, ft.Container) and clickable(c) and "DOC-000001" in texts(c))
-    click(row)
-    assert search.opened == [search.items[0]]
-    assert results_panel(shell).visible is False
-
-
-def test_search_explains_no_matches_errors_and_short_queries():
-    search = Search(items=[])
-    shell = Shell(search=search.config())
-
-    run_search(shell, "zzz")
-    assert any("No documents match" in t and "zzz" in t for t in texts(results_panel(shell)))
-
-    run_search(shell, "a")
-    assert search.queries == ["zzz"]
-    assert any("at least 2 characters" in t for t in texts(results_panel(shell)))
-
-    shell_error = Shell(search=Search(error="Permission denied").config())
-    run_search(shell_error, "budget")
-    assert "Permission denied" in texts(results_panel(shell_error))
-
-
-def test_search_results_can_be_closed():
-    shell = Shell(search=Search().config())
-    run_search(shell, "budget")
-
-    close = next(b for b in find(results_panel(shell), ft.IconButton) if b.icon == ft.Icons.CLOSE)
-    close.on_click(None)
-
-    assert results_panel(shell).visible is False
-
-
-def test_phone_width_search_box_fills_the_bar():
-    shell = Shell(width=390, search=Search().config())
-
-    box = search_box(shell)
-    assert box.expand is True
-    run_search(shell, "budget")
-    assert results_panel(shell).visible is True
+def test_the_top_bar_has_no_search_box():
+    for width in (1200, 390):
+        shell = Shell(width=width)
+        assert not find(shell.root, ft.TextField)
 
 
 class Notifications:

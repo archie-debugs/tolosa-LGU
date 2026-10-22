@@ -868,67 +868,6 @@ def edit_options(db: Session = Depends(get_db), current_user: models.User = Depe
     return {"categories": active_names(models.Category), "document_types": active_names(models.DocumentType)}
 
 
-QUICK_SEARCH_MIN_LENGTH = 2
-
-
-@router.get("/quick-search")
-def quick_search(
-    q: str = Query(default=""),
-    limit: int = Query(default=8, ge=1, le=25),
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    """Documents matching a tracking number, document number or title, for the top-bar search.
-
-    Same visibility as the details screen: full access sees every document, office staff see
-    their office's. An exact tracking number comes first, then the newest.
-    """
-    full_access = user_has_permission(current_user, "view_document_details")
-    if not full_access and not user_has_permission(current_user, "view_office_document_details"):
-        raise HTTPException(status_code=403, detail="Permission denied")
-    text_value = (q or "").strip()
-    if len(text_value) < QUICK_SEARCH_MIN_LENGTH:
-        return {"items": []}
-
-    query = db.query(models.Document)
-    if not full_access:
-        office_id = getattr(current_user, "office_id", None)
-        if office_id is None:
-            return {"items": []}
-        query = query.filter(_associated_with_office(db, office_id))
-    like = f"%{text_value.lower()}%"
-    conditions = [
-        models.Document.tracking_number.ilike(like),
-        models.Document.document_number.ilike(like),
-        models.Document.title.ilike(like),
-    ]
-    number = _normalize_tracking_query(text_value)
-    exact_tracking = None
-    if number is not None:
-        exact_tracking = f"DOC-{int(number):06d}"
-        conditions.append(models.Document.tracking_number == exact_tracking)
-    rows = (
-        query.filter(or_(*conditions))
-        .order_by(models.Document.created_at.desc(), models.Document.id.desc())
-        .limit(limit + 1)
-        .all()
-    )
-    rows.sort(key=lambda doc: doc.tracking_number != exact_tracking)
-    return {"items": [
-        {
-            "id": doc.id,
-            "tracking_number": doc.tracking_number,
-            "title": doc.title,
-            "document_type": doc.document_type,
-            "document_number": doc.document_number,
-            "series_year": doc.series_year,
-            "current_office": doc.current_office,
-            "archived": bool(doc.archived),
-        }
-        for doc in rows[:limit]
-    ]}
-
-
 @router.get("/registration/duplicates")
 def registration_duplicates(
     document_type: str | None = Query(default=None),

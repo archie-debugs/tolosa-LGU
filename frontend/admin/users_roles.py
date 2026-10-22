@@ -54,9 +54,6 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "View Analytics",
         "Export Analytics",
     ],
-    "Settings": [
-        "Modify System Settings",
-    ],
 }
 
 OFFICE_EMPLOYEE_PERMISSION_GROUP = {
