@@ -180,6 +180,26 @@ def _pill_button(widgets, text, icon, on_click):
     )
 
 
+# Flet 0.21 calls button states MaterialState; newer releases call them ControlState.
+_STATE = getattr(ft, "ControlState", None) or ft.MaterialState
+
+
+def _primary_button(text, icon, on_click):
+    """The blue Register button: one rounded shape, greyed out while it is disabled."""
+    return ft.FilledButton(
+        text,
+        icon=icon,
+        on_click=on_click,
+        height=44,
+        style=ft.ButtonStyle(
+            shape=ft.RoundedRectangleBorder(radius=10),
+            bgcolor={_STATE.DISABLED: ft.Colors.BLUE_GREY_200, _STATE.DEFAULT: ft.Colors.BLUE_700},
+            color={_STATE.DISABLED: ft.Colors.WHITE, _STATE.DEFAULT: ft.Colors.WHITE},
+            padding=ft.Padding(22, 0, 22, 0),
+        ),
+    )
+
+
 def _upload_box(widgets, heading, hint, *buttons):
     return ft.Container(
         content=ft.Row(
@@ -410,7 +430,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     message = _Notice()
     progress = ft.ProgressBar(value=None, visible=False)
     duplicate_box = ft.Column(spacing=6, visible=False)
-    register_button = ft.Button("Register", icon=ft.Icons.SAVE_OUTLINED, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: submit())
+    register_button = _primary_button("Register", ft.Icons.SAVE, lambda _: submit())
     cancel_button = ft.TextButton("Cancel", on_click=lambda _: close())
 
     def close():
@@ -726,7 +746,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
     message = _Notice()
     year_for_all = _year_dropdown(this_year, width=220, widgets=widgets)
     year_for_all.prefix_icon = ft.Icons.CALENDAR_MONTH_OUTLINED
-    register_button = ft.Button("Register", icon=ft.Icons.SAVE_OUTLINED, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: submit())
+    register_button = _primary_button("Register", ft.Icons.SAVE, lambda _: submit())
     labels_button = ft.OutlinedButton("QR labels", icon=ft.Icons.QR_CODE_2, visible=False, on_click=lambda _: labels())
     close_button = ft.OutlinedButton("Cancel", on_click=lambda _: close())
 
