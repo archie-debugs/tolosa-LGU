@@ -165,7 +165,6 @@ from frontend.admin.change_password import open_change_password_dialog
 from frontend.admin.edit_profile import open_edit_profile_dialog as open_profile_dialog
 from frontend.admin.two_step import login_needs_code, two_step_row
 from frontend.admin import login_view
-from frontend.theme import ACCENT, ON_BLUE_MUTED, blue_band_gradient
 
 
 def clear_stale_session_state(state):
@@ -4279,46 +4278,26 @@ def main(page: ft.Page, session=None):
         except Exception:
             display_name = current_user
 
-        def banner_chip(icon, text):
-            return ft.Container(
-                content=ft.Row([ft.Icon(icon, size=16, color=ft.Colors.WHITE), ft.Text(text, size=12, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)], spacing=6, tight=True),
-                bgcolor=ft.Colors.with_opacity(0.16, ft.Colors.WHITE),
-                border_radius=20,
-                padding=ft.Padding(12, 7, 12, 7),
-            )
-
-        # The sidebar's blue, so the dashboard opens like the login page's brand panel.
-        welcome_banner = ft.Container(
+        # Every admin screen's banner; today's date and time sit in its top-right corner.
+        today_line = ft.Container(
             content=ft.Row(
                 [
-                    ft.Column(
-                        [
-                            ft.Text(f"Welcome back, {display_name}", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                            ft.Container(width=56, height=4, bgcolor=ACCENT, border_radius=2),
-                            ft.Text(f"{current_user_role or 'User'} · Here's what's happening across the system today.", size=13, color=ON_BLUE_MUTED),
-                        ],
-                        spacing=8,
-                        tight=True,
-                    ),
-                    ft.Row(
-                        [
-                            banner_chip(ft.Icons.CALENDAR_TODAY_OUTLINED, date.today().strftime("%B %d, %Y")),
-                            banner_chip(ft.Icons.ACCESS_TIME_OUTLINED, datetime.now().strftime("%I:%M %p").lstrip("0")),
-                        ],
-                        spacing=8,
-                        tight=True,
-                        wrap=True,
-                    ),
+                    ft.Icon(ft.Icons.CALENDAR_TODAY_OUTLINED, size=16, color=ft.Colors.WHITE),
+                    ft.Text(date.today().strftime("%B %d, %Y"), size=12, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                    ft.Icon(ft.Icons.ACCESS_TIME_OUTLINED, size=16, color=ft.Colors.WHITE),
+                    ft.Text(datetime.now().strftime("%I:%M %p").lstrip("0"), size=12, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                 ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                spacing=6,
+                tight=True,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                wrap=True,
-                run_spacing=14,
             ),
-            gradient=blue_band_gradient(),
-            border_radius=18,
-            padding=ft.Padding(26, 22, 26, 22),
-            shadow=ft.BoxShadow(blur_radius=18, offset=ft.Offset(0, 8), color=ft.Colors.with_opacity(0.18, "#0c4279")),
+            padding=ft.Padding(12, 8, 12, 8),
+        )
+        welcome_banner = TrackingWidgets(page).banner(
+            "Dashboard",
+            f"Welcome back, {display_name} · {current_user_role or 'User'}",
+            ft.Icons.DASHBOARD_OUTLINED,
+            corner=today_line,
         )
 
         two_up = {"xs": 12, "lg": 6}
