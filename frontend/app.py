@@ -12,12 +12,13 @@ if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
 
 from frontend.Frontend_Homepage.page import build_homepage_view
 from frontend.frontend_public.public_portal import build_public_portal
+from frontend.theme import CANVAS
 
 
 def main(page: ft.Page):
     page.title = "Sangguniang Bayan of Tolosa"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.bgcolor = ft.Colors.WHITE
+    page.bgcolor = CANVAS
     page.padding = 0
     page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
     page.vertical_alignment = ft.MainAxisAlignment.START

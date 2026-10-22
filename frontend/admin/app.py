@@ -164,6 +164,7 @@ from frontend.admin.change_password import open_change_password_dialog
 from frontend.admin.edit_profile import open_edit_profile_dialog as open_profile_dialog
 from frontend.admin.two_step import login_needs_code, two_step_row
 from frontend.admin import login_view
+from frontend.theme import ACCENT, ON_BLUE_MUTED, blue_band_gradient
 
 
 def clear_stale_session_state(state):
@@ -4192,123 +4193,112 @@ def main(page: ft.Page, session=None):
             {"title": "Inactive Users", "value": str(users_inactive), "detail": "Disabled accounts", "icon": ft.Icons.PERSON_OFF_OUTLINED, "accent": ft.Colors.RED_700},
         ]
 
+        def tinted_icon(icon, accent, size=20):
+            return ft.Container(
+                content=ft.Icon(icon, color=accent, size=size),
+                padding=9,
+                bgcolor=ft.Colors.with_opacity(0.12, accent),
+                border_radius=12,
+            )
+
+        def section_title(icon, title, subtitle):
+            return ft.Row(
+                [
+                    tinted_icon(icon, ft.Colors.BLUE_700, size=18),
+                    ft.Column(
+                        [
+                            ft.Text(title, size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                            ft.Text(subtitle, size=12, color=ft.Colors.BLUE_GREY_600),
+                        ],
+                        spacing=1,
+                        expand=True,
+                    ),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+
+        def panel(icon, accent, title, rows, col):
+            # A white card with a small header, for the lists under the metrics.
+            card = surface_card(
+                ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                tinted_icon(icon, accent, size=18),
+                                ft.Text(title, size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                            ],
+                            spacing=10,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
+                        *rows,
+                    ],
+                    spacing=10,
+                ),
+                padding=20,
+            )
+            card.col = col
+            return card
+
+        def list_row(icon, accent, title, subtitle, trailing):
+            return ft.Row(
+                [
+                    tinted_icon(icon, accent, size=16),
+                    ft.Column(
+                        [
+                            ft.Text(title, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            ft.Text(subtitle, size=11, color=ft.Colors.BLUE_GREY_600, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                        ],
+                        spacing=1,
+                        expand=True,
+                    ),
+                    ft.Text(trailing, size=10, color=ft.Colors.BLUE_GREY_500),
+                ],
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+
+        def empty_line(message):
+            return ft.Text(message, size=12, color=ft.Colors.BLUE_GREY_600)
+
+        def value_row(label, value, value_color=ft.Colors.BLUE_GREY_900):
+            return ft.Row(
+                [
+                    ft.Text(label, size=12, color=ft.Colors.BLUE_GREY_600, expand=True),
+                    ft.Text(str(value), size=12, weight=ft.FontWeight.BOLD, color=value_color),
+                ],
+                spacing=8,
+            )
+
+        def short_time(value):
+            timestamp = format_audit_datetime(value) if value else "-"
+            return timestamp.split(".", 1)[0]
+
         recent_activity = analytics_payload.get("recent_activity") or []
         activity_rows = []
         for item in recent_activity[:5]:
-            activity = str(item.get("activity") or "Activity")
-            actor = str(item.get("actor") or "System")
             target = str(item.get("tracking_number") or "-")
-            timestamp = format_audit_datetime(item.get("created_at")) if item.get("created_at") else "-"
-            if "." in timestamp:
-                timestamp = timestamp.split(".", 1)[0]
-            target_text = f"Target: {target}" if target != "-" else "System event"
-            activity_rows.append(
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(ft.Icons.HISTORY_OUTLINED, size=18, color=ft.Colors.BLUE_700),
-                            ft.Column(
-                                [
-                                    ft.Text(activity, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                    ft.Text(f"{actor} - {target_text}", size=11, color=ft.Colors.BLUE_GREY_600),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                            ft.Text(timestamp, size=10, color=ft.Colors.BLUE_GREY_500),
-                        ],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=8,
-                    bgcolor=ft.Colors.WHITE,
-                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                    border_radius=8,
-                )
-            )
-        if not activity_rows:
-            activity_rows.append(ft.Text("No recent system activity", size=12, color=ft.Colors.BLUE_GREY_600))
-
-        recent_activity_section = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.HISTORY_OUTLINED, color=ft.Colors.BLUE_700, size=21),
-                            ft.Text("Recent System Activity", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                        ],
-                        spacing=8,
-                    ),
-                    *activity_rows,
-                ],
-                spacing=8,
-            ),
-            padding=12,
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            border_radius=10,
-        )
+            activity_rows.append(list_row(
+                ft.Icons.HISTORY_OUTLINED,
+                ft.Colors.BLUE_700,
+                str(item.get("activity") or "Activity"),
+                f"{item.get('actor') or 'System'} · {f'Target: {target}' if target != '-' else 'System event'}",
+                short_time(item.get("created_at")),
+            ))
 
         recent_security_events = analytics_payload.get("recent_security_events") or []
         security_rows = []
         for event in recent_security_events[:5]:
             status = str(event.get("status") or "Success")
-            action = str(event.get("action") or "Security event")
-            actor = str(event.get("actor") or "System")
-            target = str(event.get("target_id") or "-")
             details = str(event.get("details") or "")
-            timestamp = format_audit_datetime(event.get("created_at")) if event.get("created_at") else "-"
-            if "." in timestamp:
-                timestamp = timestamp.split(".", 1)[0]
-            security_rows.append(
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(
-                                ft.Icons.SECURITY_OUTLINED,
-                                size=18,
-                                color=ft.Colors.RED_700 if status == "Failed" else ft.Colors.BLUE_700,
-                            ),
-                            ft.Column(
-                                [
-                                    ft.Text(action, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                    ft.Text(f"{actor} - {target}", size=11, color=ft.Colors.BLUE_GREY_600),
-                                    ft.Text(details, size=10, color=ft.Colors.BLUE_GREY_500, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS) if details else ft.Text(status, size=10, color=ft.Colors.BLUE_GREY_500),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                            ft.Text(timestamp, size=10, color=ft.Colors.BLUE_GREY_500),
-                        ],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=8,
-                    bgcolor=ft.Colors.WHITE,
-                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                    border_radius=8,
-                )
-            )
-        if not security_rows:
-            security_rows.append(ft.Text("No recent security events", size=12, color=ft.Colors.BLUE_GREY_600))
-
-        recent_security_section = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.SECURITY_OUTLINED, color=ft.Colors.RED_700, size=21),
-                            ft.Text("Recent Security Events", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                        ],
-                        spacing=8,
-                    ),
-                    *security_rows,
-                ],
-                spacing=8,
-            ),
-            padding=12,
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            border_radius=10,
-        )
+            security_rows.append(list_row(
+                ft.Icons.SECURITY_OUTLINED,
+                ft.Colors.RED_700 if status == "Failed" else ft.Colors.BLUE_700,
+                str(event.get("action") or "Security event"),
+                f"{event.get('actor') or 'System'} · {details or status}",
+                short_time(event.get("created_at")),
+            ))
 
         def format_storage_size(value):
             try:
@@ -4323,40 +4313,12 @@ def main(page: ft.Page, session=None):
             return f"{amount:.1f} {units[unit_index]}"
 
         storage_data = analytics_payload.get("storage") or {}
-        storage_status = str(storage_data.get("status") or "unavailable").capitalize()
-        storage_section = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.STORAGE_OUTLINED, color=ft.Colors.BLUE_700, size=21),
-                            ft.Text("Storage Usage", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                        ],
-                        spacing=8,
-                    ),
-                    ft.Text(f"Status: {storage_status}", size=11, color=ft.Colors.BLUE_GREY_700),
-                    ft.Text(
-                        f"Document storage: {format_storage_size(storage_data.get('document_storage_bytes'))} ({storage_data.get('stored_document_files', 0)} files)",
-                        size=11,
-                        color=ft.Colors.BLUE_GREY_700,
-                    ),
-                    ft.Text(
-                        f"Temporary uploads: {format_storage_size(storage_data.get('temporary_upload_storage_bytes'))} ({storage_data.get('temporary_upload_files', 0)} files)",
-                        size=11,
-                        color=ft.Colors.BLUE_GREY_700,
-                    ),
-                    ft.Text(
-                        f"Available disk: {format_storage_size(storage_data.get('available_disk_bytes'))}",
-                        size=11,
-                        color=ft.Colors.BLUE_GREY_700,
-                    ),
-                ],
-                spacing=7,
-            ),
-            padding=12,
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            border_radius=10,
-        )
+        storage_rows = [
+            value_row("Status", str(storage_data.get("status") or "unavailable").capitalize()),
+            value_row("Document storage", f"{format_storage_size(storage_data.get('document_storage_bytes'))} · {storage_data.get('stored_document_files', 0)} files"),
+            value_row("Temporary uploads", f"{format_storage_size(storage_data.get('temporary_upload_storage_bytes'))} · {storage_data.get('temporary_upload_files', 0)} files"),
+            value_row("Available disk", format_storage_size(storage_data.get("available_disk_bytes"))),
+        ]
 
         health_payload = {}
         try:
@@ -4371,281 +4333,162 @@ def main(page: ft.Page, session=None):
         except Exception:
             health_payload = {}
 
-        health_components = [
-            ("Backend", health_payload.get("backend") or {}),
-            ("Database", health_payload.get("database") or {}),
-            ("Document Storage", health_payload.get("document_storage") or {}),
-            ("Temporary Upload Storage", health_payload.get("temporary_upload_storage") or {}),
-        ]
         health_rows = []
-        for label, component in health_components:
-            status = str(component.get("status") or "unavailable").capitalize()
+        for label, key in (
+            ("Backend", "backend"),
+            ("Database", "database"),
+            ("Document Storage", "document_storage"),
+            ("Temporary Upload Storage", "temporary_upload_storage"),
+        ):
+            status = str((health_payload.get(key) or {}).get("status") or "unavailable").capitalize()
             status_color = ft.Colors.GREEN_700 if status == "Operational" else ft.Colors.ORANGE_700 if status == "Warning" else ft.Colors.RED_700
             health_rows.append(
                 ft.Row(
                     [
                         ft.Icon(ft.Icons.CIRCLE, size=10, color=status_color),
-                        ft.Text(label, size=11, color=ft.Colors.BLUE_GREY_700, expand=True),
-                        ft.Text(status, size=11, weight=ft.FontWeight.BOLD, color=status_color),
+                        ft.Text(label, size=12, color=ft.Colors.BLUE_GREY_600, expand=True),
+                        ft.Container(
+                            content=ft.Text(status, size=11, weight=ft.FontWeight.BOLD, color=status_color),
+                            bgcolor=ft.Colors.with_opacity(0.1, status_color),
+                            border_radius=10,
+                            padding=ft.Padding(9, 3, 9, 3),
+                        ),
                     ],
-                    spacing=7,
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
 
-        system_health_section = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.MONITOR_HEART_OUTLINED, color=ft.Colors.GREEN_700, size=21),
-                            ft.Text("System Health", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                        ],
-                        spacing=8,
-                    ),
-                    *health_rows,
-                ],
-                spacing=8,
-            ),
-            padding=12,
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            border_radius=10,
-        )
-
-        def analytics_summary(title, values):
-            rows = [ft.Text(title, size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900)]
-            if values:
-                for label, count in list(values.items())[:6]:
-                    rows.append(ft.Text(f"{label}: {count}", size=11, color=ft.Colors.BLUE_GREY_700))
-            else:
-                rows.append(ft.Text("No data available", size=11, color=ft.Colors.BLUE_GREY_600))
+        def breakdown(title, values):
+            rows = [value_row(label, count) for label, count in list(values.items())[:6]] or [empty_line("No data available")]
             return ft.Container(
-                content=ft.Column(rows, spacing=5),
-                padding=10,
-                bgcolor=ft.Colors.WHITE,
-                border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                border_radius=8,
-                width=250,
+                content=ft.Column([ft.Text(title, size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900), *rows], spacing=6),
+                padding=14,
+                bgcolor=ft.Colors.BLUE_GREY_50,
+                border_radius=14,
+                col={"xs": 12, "sm": 6, "xl": 3},
             )
 
         monthly_values = {
             str(item.get("label") or item.get("month") or "-"): item.get("count", 0)
             for item in (analytics_payload.get("monthly_activity") or [])
         }
-        document_analytics_section = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.ANALYTICS_OUTLINED, color=ft.Colors.BLUE_700, size=21),
-                            ft.Text("Document Analytics", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                        ],
-                        spacing=8,
-                    ),
-                    ft.Row(
-                        [
-                            analytics_summary("By Status", analytics_payload.get("status_breakdown") or {}),
-                            analytics_summary("By Document Type", analytics_payload.get("document_types") or {}),
-                            analytics_summary("By Category", analytics_payload.get("document_categories") or {}),
-                            analytics_summary("Monthly Activity", monthly_values),
-                        ],
-                        spacing=10,
-                        wrap=True,
-                    ),
-                ],
-                spacing=8,
-            ),
-            padding=12,
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            border_radius=10,
-        )
 
         def metric_card(item):
-            return ft.Container(
-                content=ft.Column(
+            card = surface_card(
+                ft.Column(
                     [
                         ft.Row(
                             [
-                                ft.Container(
-                                    content=ft.Icon(item["icon"], color=item["accent"], size=21),
-                                    padding=9,
-                                    bgcolor=ft.Colors.BLUE_GREY_50,
-                                    border_radius=10,
-                                ),
-                                ft.Text(item["title"], size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_800),
+                                tinted_icon(item["icon"], item["accent"]),
+                                ft.Text(item["title"], size=12, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_700, expand=True),
                             ],
-                            spacing=9,
+                            spacing=10,
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
-                        ft.Text(item["value"], size=26, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                        ft.Text(item["value"], size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
                         ft.Text(item["detail"], size=11, color=ft.Colors.BLUE_GREY_600),
                     ],
                     spacing=8,
                 ),
-                padding=14,
-                bgcolor=ft.Colors.WHITE,
-                border=ft.border.only(bottom=ft.border.all(3, item["accent"])),
-                border_radius=12,
-                width=220,
+                padding=18,
             )
+            # Five to a row on wide screens, two on tablets, one on phones.
+            card.col = {"xs": 10, "sm": 5, "lg": 2}
+            return card
 
-        def quick_action(label, detail, icon, color, on_click):
+        def metric_grid(items):
+            return ft.ResponsiveRow([metric_card(item) for item in items], columns=10, spacing=12, run_spacing=12)
+
+        try:
+            display_name = load_current_profile().get("full_name") or current_user
+        except Exception:
+            display_name = current_user
+
+        def banner_chip(icon, text):
             return ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(icon, color=ft.Colors.WHITE, size=25),
-                        ft.Column(
-                            [
-                                ft.Text(label, size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                                ft.Text(detail, size=11, color=ft.Colors.BLUE_GREY_100),
-                            ],
-                            spacing=3,
-                        ),
-                        ft.Icon(ft.Icons.ARROW_FORWARD, color=ft.Colors.WHITE, size=20),
-                    ],
-                    spacing=12,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                padding=ft.Padding(14, 13, 14, 13),
-                bgcolor=color,
-                border_radius=10,
-                on_click=on_click,
-                width=300,
+                content=ft.Row([ft.Icon(icon, size=16, color=ft.Colors.WHITE), ft.Text(text, size=12, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)], spacing=6, tight=True),
+                bgcolor=ft.Colors.with_opacity(0.16, ft.Colors.WHITE),
+                border_radius=20,
+                padding=ft.Padding(12, 7, 12, 7),
             )
 
-        buttons = [
-            quick_action("Documents", "Manage all documents", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_800, lambda _: open_documents_module()),
-            quick_action("Archived Documents", "View archived records", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_700, lambda _: open_archived_documents_module()),
-        ]
-        if "view_analytics" in {(p or "").strip().lower().replace(" ", "_") for p in (current_user_permissions or [])} or current_user_role == "Super Administrator":
-            buttons.append(quick_action("Analytics", "View system analytics", ft.Icons.ANALYTICS_OUTLINED, ft.Colors.BLUE_900, lambda _: show_shell(analytics_view(), initial_selected_index=next((idx for idx, (_, label, *_) in enumerate(nav_items) if label == "Analytics"), 0))))
-
-        normalized_permissions = sorted({str(p).strip().lower().replace(" ", "_") for p in (current_user_permissions or [])})
-        if current_user_role == "Super Administrator" and not normalized_permissions:
-            normalized_permissions = ["*"]
-        elif not normalized_permissions:
-            normalized_permissions = ["(none)"]
-
-        dashboard_content = ft.Container(
-            content=ft.Column(
+        # The sidebar's blue, so the dashboard opens like the login page's brand panel.
+        welcome_banner = ft.Container(
+            content=ft.Row(
                 [
-                    ft.Row(
+                    ft.Column(
                         [
-                            ft.Container(
-                                content=ft.Icon(ft.Icons.DASHBOARD, color=ft.Colors.BLUE_700, size=24),
-                                padding=10,
-                                bgcolor=ft.Colors.BLUE_GREY_50,
-                                border_radius=10,
-                            ),
-                            ft.Column(
-                                [
-                                    ft.Text("Dashboard", size=25, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                    ft.Text("Super Administrator overview and quick access.", size=12, color=ft.Colors.BLUE_GREY_600),
-                                ],
-                                spacing=2,
-                            ),
-                        ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.Row(
-                                    [
-                                        ft.Container(
-                                            content=ft.Icon(ft.Icons.EMOJI_EVENTS_OUTLINED, color=ft.Colors.AMBER_700, size=25),
-                                            padding=10,
-                                            bgcolor=ft.Colors.WHITE,
-                                            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                                            border_radius=30,
-                                        ),
-                                        ft.Column(
-                                            [
-                                                ft.Text(f"Welcome back, {current_user_role or 'User'}!", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                                ft.Text("Here's what's happening with your system today.", size=11, color=ft.Colors.BLUE_GREY_600),
-                                                ft.Text(f"Logged in as {current_user} | Permissions: {', '.join(normalized_permissions)}", size=10, color=ft.Colors.BLUE_GREY_500),
-                                            ],
-                                            spacing=2,
-                                        ),
-                                    ],
-                                    spacing=10,
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.Row([ft.Icon(ft.Icons.CALENDAR_TODAY_OUTLINED, size=16, color=ft.Colors.BLUE_GREY_600), ft.Text(date.today().strftime("%B %d, %Y"), size=11, color=ft.Colors.BLUE_GREY_700)], spacing=6),
-                                        ft.Row([ft.Icon(ft.Icons.ACCESS_TIME_OUTLINED, size=16, color=ft.Colors.BLUE_GREY_600), ft.Text(datetime.now().strftime("%I:%M %p").lstrip("0"), size=11, color=ft.Colors.BLUE_GREY_700)], spacing=6),
-                                    ],
-                                    spacing=5,
-                                ),
-                            ],
-                            spacing=10,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            wrap=True,
-                        ),
-                        padding=12,
-                        bgcolor=ft.Colors.BLUE_GREY_50,
-                        border_radius=10,
-                    ),
-                    ft.Text("Overview", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                    ft.Row([metric_card(item) for item in summary_items], spacing=10, run_spacing=10, wrap=True),
-                    ft.Text("Quick Access", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                    ft.Row(buttons, spacing=12, run_spacing=12, wrap=True),
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.PEOPLE_ALT_OUTLINED, color=ft.Colors.BLUE_700, size=21),
-                            ft.Text("User & Document Summary", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                            ft.Text(f"Welcome back, {display_name}", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                            ft.Container(width=56, height=4, bgcolor=ACCENT, border_radius=2),
+                            ft.Text(f"{current_user_role or 'User'} · Here's what's happening across the system today.", size=13, color=ON_BLUE_MUTED),
                         ],
                         spacing=8,
-                    ),
-                    ft.Row([metric_card(item) for item in user_cards], spacing=10, run_spacing=10, wrap=True),
-                    document_analytics_section,
-                    ft.Row(
-                        [
-                            ft.Container(content=recent_activity_section, width=520),
-                            ft.Container(content=recent_security_section, width=520),
-                        ],
-                        spacing=12,
-                        wrap=True,
+                        tight=True,
                     ),
                     ft.Row(
                         [
-                            ft.Container(content=storage_section, width=520),
-                            ft.Container(content=system_health_section, width=520),
+                            banner_chip(ft.Icons.CALENDAR_TODAY_OUTLINED, date.today().strftime("%B %d, %Y")),
+                            banner_chip(ft.Icons.ACCESS_TIME_OUTLINED, datetime.now().strftime("%I:%M %p").lstrip("0")),
                         ],
-                        spacing=12,
+                        spacing=8,
+                        tight=True,
                         wrap=True,
-                    ),
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.Icon(ft.Icons.SHIELD_OUTLINED, color=ft.Colors.BLUE_700, size=22),
-                                ft.Column(
-                                    [
-                                        ft.Text("System Overview", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                        ft.Text("Monitor and manage your legislative document tracking system efficiently.", size=11, color=ft.Colors.BLUE_GREY_600),
-                                    ],
-                                    spacing=2,
-                                ),
-                            ],
-                            spacing=10,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                        padding=12,
-                        bgcolor=ft.Colors.BLUE_GREY_50,
-                        border_radius=10,
                     ),
                 ],
-                spacing=14,
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                wrap=True,
+                run_spacing=14,
             ),
-            width="100%",
-            padding=22,
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+            gradient=blue_band_gradient(),
             border_radius=18,
+            padding=ft.Padding(26, 22, 26, 22),
+            shadow=ft.BoxShadow(blur_radius=18, offset=ft.Offset(0, 8), color=ft.Colors.with_opacity(0.18, "#0c4279")),
         )
 
-        return ft.Column([dashboard_content], spacing=12, tight=True)
+        two_up = {"xs": 12, "lg": 6}
+        dashboard_content = ft.Column(
+            [
+                welcome_banner,
+                section_title(ft.Icons.DESCRIPTION_OUTLINED, "Documents", "Where every document stands right now."),
+                metric_grid(summary_items),
+                section_title(ft.Icons.PEOPLE_ALT_OUTLINED, "Users", "Accounts that can sign in to the system."),
+                metric_grid(user_cards),
+                surface_card(
+                    ft.Column(
+                        [
+                            section_title(ft.Icons.ANALYTICS_OUTLINED, "Document Analytics", "How documents break down by status, type, category and month."),
+                            ft.ResponsiveRow(
+                                [
+                                    breakdown("By Status", analytics_payload.get("status_breakdown") or {}),
+                                    breakdown("By Document Type", analytics_payload.get("document_types") or {}),
+                                    breakdown("By Category", analytics_payload.get("document_categories") or {}),
+                                    breakdown("Monthly Activity", monthly_values),
+                                ],
+                                spacing=12,
+                                run_spacing=12,
+                            ),
+                        ],
+                        spacing=16,
+                    ),
+                    padding=20,
+                ),
+                ft.ResponsiveRow(
+                    [
+                        panel(ft.Icons.HISTORY_OUTLINED, ft.Colors.BLUE_700, "Recent System Activity", activity_rows or [empty_line("No recent system activity")], two_up),
+                        panel(ft.Icons.SECURITY_OUTLINED, ft.Colors.RED_700, "Recent Security Events", security_rows or [empty_line("No recent security events")], two_up),
+                        panel(ft.Icons.STORAGE_OUTLINED, ft.Colors.BLUE_700, "Storage Usage", storage_rows, two_up),
+                        panel(ft.Icons.MONITOR_HEART_OUTLINED, ft.Colors.GREEN_700, "System Health", health_rows, two_up),
+                    ],
+                    spacing=12,
+                    run_spacing=12,
+                ),
+            ],
+            spacing=16,
+        )
+
+        return ft.Container(content=dashboard_content, padding=ft.Padding(4, 4, 4, 20))
 
     def analytics_view():
         return build_analytics_view(

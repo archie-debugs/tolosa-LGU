@@ -194,4 +194,4 @@ def test_a_revoked_sb_member_is_sent_back_to_the_homepage(monkeypatch):
 
     shown = [t for control in page.controls for t in texts(control)]
     assert "Member Workspace" not in shown
-    assert "SANGGUNIAN BAYAN" in shown
+    assert "SANGGUNIANG BAYAN" in shown
