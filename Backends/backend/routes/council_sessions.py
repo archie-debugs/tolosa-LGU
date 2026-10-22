@@ -242,10 +242,16 @@ def change_status(session_id: int, payload: StatusChange, db: Session = Depends(
         raise HTTPException(status_code=400, detail=f"A {session.status} session can only become {allowed}")
     if payload.status == HELD and session.held_on > lgu_today():
         raise HTTPException(status_code=400, detail=f"The session is on {session.held_on}; it can be marked held on or after that day")
+    moved = []
+    if payload.status == HELD:
+        from .order_of_business import apply_outcomes  # it imports this module
+        moved = apply_outcomes(db, session, current_user)
     previous, session.status = session.status, payload.status
     db.commit()
     summary = quorum(members_in_office(db, session), _entries(db, session))
     extra = f"; {summary['present']} of {summary['in_office']} present" if payload.status == HELD else ""
+    if moved:
+        extra += "; stages: " + ", ".join(moved)
     record_audit_log(db, actor=current_user.username, action="SESSION_STATUS_CHANGED", target_type="Session", target_id=str(session.id),
                      details=f"{session_title(session)} of {session.held_on}: {previous} -> {payload.status}{extra}")
     return _detail(db, session)
@@ -260,6 +266,8 @@ def delete_session(session_id: int, db: Session = Depends(get_db), current_user:
         raise HTTPException(status_code=409, detail="Only a Draft session can be deleted")
     title = f"{session_title(session)} of {session.held_on}"
     db.query(models.SessionAttendance).filter(models.SessionAttendance.session_id == session.id).delete()
+    from .order_of_business import delete_business  # it imports this module
+    delete_business(db, session)
     db.delete(session)
     db.commit()
     record_audit_log(db, actor=current_user.username, action="SESSION_DELETED", target_type="Session", target_id=str(session_id),

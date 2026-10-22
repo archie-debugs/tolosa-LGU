@@ -64,10 +64,11 @@ def registration_stage(document_type: str | None, requested: str | None, number:
 
 
 def add_stage_change(db: Session, doc: models.Document, stage: str, *, user, effective_on: date, note=None,
-                     committee_id=None, is_correction=False) -> models.DocumentStageChange:
+                     committee_id=None, is_correction=False, session_id=None) -> models.DocumentStageChange:
     """Record a stage on a document (the caller commits)."""
     change = models.DocumentStageChange(
         document_id=doc.id, stage=stage, previous_stage=doc.stage, effective_on=effective_on, committee_id=committee_id,
+        session_id=session_id,
         note=(note or "").strip() or None, is_correction=is_correction,
         changed_by_id=getattr(user, "id", None), changed_by=getattr(user, "username", None),
     )
@@ -92,6 +93,13 @@ def _changes(db, doc):
     return (db.query(models.DocumentStageChange)
             .filter(models.DocumentStageChange.document_id == doc.id)
             .order_by(models.DocumentStageChange.id.asc()).all())
+
+
+def _session_title(session):
+    if session is None:
+        return None
+    from .council_sessions import session_title  # council_sessions imports the order of business, which imports this module
+    return f"{session_title(session)}, {session.held_on.isoformat()}"
 
 
 def _document(db, document_id):
@@ -160,6 +168,7 @@ def _payload(db, doc):
             "previous_stage": change.previous_stage,
             "effective_on": change.effective_on.isoformat(),
             "committee": change.committee.name if change.committee else None,
+            "session": _session_title(change.session),
             "note": change.note,
             "is_correction": bool(change.is_correction),
             "changed_by": change.changed_by,

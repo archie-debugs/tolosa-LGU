@@ -50,6 +50,8 @@ def build_stage_section(page, api, document_id, *, can_change, on_saved=None):
         detail = [_date_text(entry.get("effective_on"))]
         if entry.get("committee"):
             detail.append(entry["committee"])
+        if entry.get("session"):
+            detail.append(f"at the {entry['session']}")
         if entry.get("changed_by"):
             detail.append(f"by {entry['changed_by']}")
         lines = [

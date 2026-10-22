@@ -24,13 +24,28 @@ def detail(status="Draft", marks=None, history=None):
             "attendance": rows}
 
 
+SECTIONS = [("call_to_order", "Call to order"), ("roll_call", "Roll call"), ("minutes", "Approval of the previous minutes"),
+            ("first_reading", "First reading and referral"), ("committee_reports", "Committee reports"),
+            ("unfinished", "Unfinished business"), ("second_third", "Business for second and third reading"),
+            ("other", "Other matters and communications"), ("adjournment", "Adjournment")]
+
+
+def business(editable=True, items=None, without_outcome=0):
+    items = items or {}
+    return {"session_id": 4, "editable": editable, "without_outcome": without_outcome,
+            "sections": [{"key": key, "label": label, "items": items.get(key, [])} for key, label in SECTIONS]}
+
+
 class FakeApi:
-    def __init__(self, session=None):
+    def __init__(self, session=None, business_payload=None):
         self.calls = []
         self.session = session or detail()
+        self.business = business_payload or business(editable=self.session["status"] != "Held")
 
     def __call__(self, method, path, **kwargs):
         self.calls.append((method, path, kwargs.get("json")))
+        if "/business" in path:
+            return self.business
         if path == "/council/terms":
             return TERMS
         if path.startswith("/council/sessions?term_id="):
