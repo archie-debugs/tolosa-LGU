@@ -48,6 +48,10 @@ def main(page: ft.Page, session=None):
         if token:
             headers["Authorization"] = f"Bearer {token}"
         response = requests.request(method, f"{API_URL}{path}", headers=headers, timeout=15, **kwargs)
+        if response.status_code == 401 and token and render_generation:
+            # The session was revoked or signed out elsewhere: back to the homepage to sign in again.
+            logout()
+            raise RuntimeError("Your session has ended. Please sign in again.")
         if response.status_code >= 400:
             try:
                 detail = response.json().get("detail", "Request failed")
@@ -487,6 +491,8 @@ def main(page: ft.Page, session=None):
         elif current_page == "Documents": body = documents_view()
         elif current_page == "My Account": body = account_view()
         else: body = settings_view()
+        if token is None:
+            return  # the session ended while this view loaded; logout() already showed the homepage
         shell = ft.Row([ft.Container(width=225, bgcolor="#06264b" if not dark else "#071827", padding=16, content=ft.Column([ft.Row([ft.Icon(ft.Icons.ACCOUNT_BALANCE, color="#60a5fa"), ft.Column([ft.Text("SB TOLOSA", size=14, weight=ft.FontWeight.BOLD, color="#ffffff"), ft.Text("Member Workspace", size=10, color="#bfdbfe")], spacing=0)], spacing=9), ft.Divider(height=20, color="#315279"), *nav], spacing=7)), ft.Container(expand=True, padding=ft.padding.symmetric(horizontal=28, vertical=8), content=ft.Column([ft.Row([ft.Row([ft.CircleAvatar(content=ft.Text((user.get("full_name") or "M")[0].upper(), size=12, color="white"), bgcolor="#2563eb", radius=16), ft.Text(user.get("full_name") or "SB Member", size=12, color=color("nav", "#334155", "#d6e2e8"))], spacing=8)], alignment=ft.MainAxisAlignment.END), body], spacing=8, scroll=ft.ScrollMode.AUTO, expand=True))], expand=True, spacing=0)
         page.controls.clear()
         page.add(shell)

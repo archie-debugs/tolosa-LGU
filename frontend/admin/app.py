@@ -226,6 +226,25 @@ def main(page: ft.Page, session=None):
     refresh_token = None
     selected_monitoring_office = None
 
+    def end_session_if_refused(response, *args, **kwargs):
+        # The backend refuses a revoked, signed-out or deactivated session on its next call.
+        # Try one refresh (an access token that simply expired gets a new one); when that is
+        # refused too, refresh_runtime_token_if_needed sends the user to the login screen.
+        if not runtime_token or response.request.headers.get("Authorization") != f"Bearer {runtime_token}":
+            return
+        refused = response.status_code == 401
+        if response.status_code == 403:
+            try:
+                refused = response.json().get("detail") == "Authenticated user required"
+            except Exception:
+                refused = False
+        if refused:
+            refresh_runtime_token_if_needed(force=True)
+
+    # Every backend call in this app goes through `http`, so any refused call ends the session.
+    http = requests.Session()
+    http.hooks["response"].append(end_session_if_refused)
+
     def has_permission(permission):
         normalized_role = (current_user_role or "").strip().lower()
         if normalized_role == "super administrator":
@@ -416,13 +435,13 @@ def main(page: ft.Page, session=None):
 
             request_url = f"{BACKEND_URL}/documents/qr/{quote(str(pending_qr_token), safe='')}/office"
             headers = {"Authorization": f"Bearer {runtime_token}"}
-            response = requests.get(request_url, headers=headers, verify=False, timeout=15)
+            response = http.get(request_url, headers=headers, verify=False, timeout=15)
 
             if response.status_code == 401:
                 refresh_runtime_token_if_needed(force=True)
                 if runtime_token:
                     headers = {"Authorization": f"Bearer {runtime_token}"}
-                    response = requests.get(request_url, headers=headers, verify=False, timeout=15)
+                    response = http.get(request_url, headers=headers, verify=False, timeout=15)
                 if not runtime_token:
                     _save_qr_authorization_state(pending_qr_token, "login_required")
                     show_login()
@@ -493,7 +512,7 @@ def main(page: ft.Page, session=None):
             pass
 
         try:
-            resp = requests.post(
+            resp = http.post(
                 f"{BACKEND_URL}/auth/refresh",
                 data={"refresh_token": refresh_token},
                 verify=False,
@@ -574,7 +593,7 @@ def main(page: ft.Page, session=None):
     def do_login():
         nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
         try:
-            resp = requests.post(
+            resp = http.post(
                 f"{BACKEND_URL}/auth/login",
                 data={"username": login_username.value or "", "password": login_password.value or ""},
                 timeout=10,
@@ -1018,7 +1037,7 @@ def main(page: ft.Page, session=None):
             if audit_filter_state.get("status") and audit_filter_state["status"] not in ("All Status", "all"):
                 params["status"] = audit_filter_state["status"]
 
-            response = requests.get(f"{BACKEND_URL}/audit/logs", headers=get_admin_headers(), verify=False, params=params, timeout=20)
+            response = http.get(f"{BACKEND_URL}/audit/logs", headers=get_admin_headers(), verify=False, params=params, timeout=20)
             if response.status_code != 200:
                 raise ValueError(response.text)
 
@@ -1220,8 +1239,8 @@ def main(page: ft.Page, session=None):
         nonlocal reference_categories, reference_document_types
         try:
             headers = get_admin_headers()
-            categories_response = requests.get(f"{BACKEND_URL}/reference-data/categories", headers=headers, verify=False, timeout=15)
-            types_response = requests.get(f"{BACKEND_URL}/reference-data/document-types", headers=headers, verify=False, timeout=15)
+            categories_response = http.get(f"{BACKEND_URL}/reference-data/categories", headers=headers, verify=False, timeout=15)
+            types_response = http.get(f"{BACKEND_URL}/reference-data/document-types", headers=headers, verify=False, timeout=15)
             if categories_response.status_code != 200 or types_response.status_code != 200:
                 raise Exception(categories_response.text if categories_response.status_code != 200 else types_response.text)
             reference_categories = categories_response.json() or []
@@ -1262,9 +1281,9 @@ def main(page: ft.Page, session=None):
         endpoint_kind = "document-types" if reference_kind_dialog == "Document Types" else "categories"
         try:
             if reference_edit_item:
-                response = requests.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{reference_edit_item.get('id')}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
+                response = http.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{reference_edit_item.get('id')}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
             else:
-                response = requests.post(f"{BACKEND_URL}/reference-data/{endpoint_kind}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
+                response = http.post(f"{BACKEND_URL}/reference-data/{endpoint_kind}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
             if response.status_code not in {200, 201}:
                 raise Exception(response.text)
             close_reference_dialog()
@@ -1277,7 +1296,7 @@ def main(page: ft.Page, session=None):
     def toggle_reference_definition(kind, item):
         endpoint_kind = "document-types" if kind == "Document Type" else "categories"
         try:
-            response = requests.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{item.get('id')}", json={"name": item.get("name"), "is_active": not bool(item.get("is_active", True))}, headers=get_admin_headers(), verify=False, timeout=15)
+            response = http.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{item.get('id')}", json={"name": item.get("name"), "is_active": not bool(item.get("is_active", True))}, headers=get_admin_headers(), verify=False, timeout=15)
             if response.status_code != 200:
                 raise Exception(response.text)
             load_reference_data()
@@ -1591,7 +1610,7 @@ def main(page: ft.Page, session=None):
                         headers["Authorization"] = f"Bearer {runtime_token}"
                 if not runtime_token:
                     raise RuntimeError("Your session has expired. Please sign in again.")
-                response = requests.get(
+                response = http.get(
                     f"{BACKEND_URL}/offices/available-for-handoff",
                     headers=headers,
                     verify=False,
@@ -1602,7 +1621,7 @@ def main(page: ft.Page, session=None):
                     if not runtime_token:
                         raise RuntimeError("Your session has expired. Please sign in again.")
                     headers = {"Authorization": f"Bearer {runtime_token}"}
-                    response = requests.get(
+                    response = http.get(
                         f"{BACKEND_URL}/offices/available-for-handoff",
                         headers=headers,
                         verify=False,
@@ -1670,7 +1689,7 @@ def main(page: ft.Page, session=None):
                         headers["Authorization"] = f"Bearer {runtime_token}"
                 if not runtime_token:
                     raise RuntimeError("Your session has expired. Please sign in again.")
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/documents/{document_id}/handoffs",
                     json={"receiving_office_id": int(selected_office_id)},
                     headers=headers,
@@ -1682,7 +1701,7 @@ def main(page: ft.Page, session=None):
                     if not runtime_token:
                         raise RuntimeError("Your session has expired. Please sign in again.")
                     headers = {"Authorization": f"Bearer {runtime_token}"}
-                    response = requests.post(
+                    response = http.post(
                         f"{BACKEND_URL}/documents/{document_id}/handoffs",
                         json={"receiving_office_id": int(selected_office_id)},
                         headers=headers,
@@ -1948,7 +1967,7 @@ def main(page: ft.Page, session=None):
     def details_api(method, path, **kwargs):
         """backend_api for the details dialog; an employee whose session lapsed is signed in again first."""
         def send():
-            return requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=15, **kwargs)
+            return http.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=15, **kwargs)
 
         response = send()
         if response.status_code == 401 and is_employee():
@@ -1970,7 +1989,7 @@ def main(page: ft.Page, session=None):
         if is_employee() and not has_permission("view_qr_tracking"):
             return None
         try:
-            response = requests.get(f"{BACKEND_URL}/documents/{document_id}/qr-image", headers=get_admin_headers(), verify=False, timeout=10)
+            response = http.get(f"{BACKEND_URL}/documents/{document_id}/qr-image", headers=get_admin_headers(), verify=False, timeout=10)
             if response.status_code == 200:
                 return base64.b64encode(response.content).decode("ascii")
         except Exception:
@@ -2074,7 +2093,7 @@ def main(page: ft.Page, session=None):
             show_document_notice("No PDF attachment available for this document.")
             return
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{doc.get('id')}/attachments/{pdf_attachment.get('id')}/preview-token",
                 headers=get_admin_headers(), verify=False, timeout=10,
             )
@@ -2101,7 +2120,7 @@ def main(page: ft.Page, session=None):
             show_document_notice("No PDF attachment available for printing.")
             return
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{doc.get('id')}/attachments/{pdf_attachment.get('id')}/preview-token",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2129,7 +2148,7 @@ def main(page: ft.Page, session=None):
         # The app runs in the viewer's browser: hand that browser a download link, since a
         # file saved here would land on the machine running the app, not the viewer's.
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{document_id}/attachments/{attachment_id}/download-token",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2251,7 +2270,7 @@ def main(page: ft.Page, session=None):
                 with open(path, "rb") as handle:
                     file_bytes = handle.read()
         try:
-            response = requests.post(
+            response = http.post(
                 f"{BACKEND_URL}/documents/{replace_attachment_document.get('id')}/attachments/{replace_attachment_record.get('id')}/replace",
                 files={"file": (name, file_bytes, mimetypes.guess_type(name)[0] or "application/octet-stream")},
                 headers=get_admin_headers(),
@@ -2276,7 +2295,7 @@ def main(page: ft.Page, session=None):
             show_document_notice("Unable to change visibility: document ID is missing.")
             return
         try:
-            response = requests.put(
+            response = http.put(
                 f"{BACKEND_URL}/documents/{document_id}",
                 json={"is_public": bool(is_public)},
                 headers=get_admin_headers(),
@@ -2713,7 +2732,7 @@ def main(page: ft.Page, session=None):
     def load_office_options():
         nonlocal office_options
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/auth/offices",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2729,7 +2748,7 @@ def main(page: ft.Page, session=None):
     def load_office_management_data():
         nonlocal office_management_data
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/offices",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2752,7 +2771,7 @@ def main(page: ft.Page, session=None):
         nonlocal user_management_data
         previous_data = list(user_management_data)
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/auth/users",
                 headers=get_admin_headers(),
                 verify=False,
@@ -2991,13 +3010,13 @@ def main(page: ft.Page, session=None):
                 "is_active": office_status.value == "Active",
             }
             try:
-                response = requests.put(
+                response = http.put(
                     f"{BACKEND_URL}/offices/{office.get('id')}",
                     json=payload,
                     headers=get_admin_headers(),
                     verify=False,
                     timeout=20,
-                ) if editing else requests.post(
+                ) if editing else http.post(
                     f"{BACKEND_URL}/offices",
                     json=payload,
                     headers=get_admin_headers(),
@@ -3042,7 +3061,7 @@ def main(page: ft.Page, session=None):
 
     def open_view_office_users_dialog(office):
         try:
-            response = requests.get(
+            response = http.get(
                 f"{BACKEND_URL}/offices/{office.get('id')}/users",
                 headers=get_admin_headers(),
                 verify=False,
@@ -3298,7 +3317,7 @@ def main(page: ft.Page, session=None):
                 payload["permissions"] = permissions
 
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/register",
                     json=payload,
                     headers=get_admin_headers(),
@@ -3695,7 +3714,7 @@ def main(page: ft.Page, session=None):
                     payload["permissions"] = str(permissions)
 
                 try:
-                    response = requests.post(
+                    response = http.post(
                         f"{BACKEND_URL}/auth/register",
                         json=payload,
                         headers=get_admin_headers(),
@@ -3804,7 +3823,7 @@ def main(page: ft.Page, session=None):
             )
             payload["office_id"] = selected_office.get("id") if selected_office else None
             try:
-                response = requests.put(
+                response = http.put(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}",
                     json=payload,
                     headers=get_admin_headers(),
@@ -3874,7 +3893,7 @@ def main(page: ft.Page, session=None):
                 page.update()
                 return
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}/reset-password",
                     json={
                         "new_password": new_password.value,
@@ -3920,7 +3939,7 @@ def main(page: ft.Page, session=None):
     def delete_user(user):
         def confirm_delete():
             try:
-                response = requests.delete(
+                response = http.delete(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}",
                     headers=get_admin_headers(),
                     verify=False,
@@ -3956,7 +3975,7 @@ def main(page: ft.Page, session=None):
     def unlock_user(user):
         def confirm_unlock():
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}/unlock",
                     headers=get_admin_headers(),
                     verify=False,
@@ -4010,6 +4029,8 @@ def main(page: ft.Page, session=None):
         return current_profile
 
     def show_shell(view, initial_selected_index=0):
+        if not runtime_token and not AUTH_TOKEN:
+            return  # the session ended while this screen was being built; stay on the login screen
         profile = load_current_profile()
         render_shell(
             page, current_user, logout_user, nav_items, view,
@@ -4036,7 +4057,7 @@ def main(page: ft.Page, session=None):
         return {"find": find, "open": show_document_details}
 
     def backend_api(method, path, timeout=15, **kwargs):
-        response = requests.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=timeout, **kwargs)
+        response = http.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=timeout, **kwargs)
         if response.status_code >= 400:
             try:
                 detail = response.json().get("detail", response.text)
@@ -4058,7 +4079,7 @@ def main(page: ft.Page, session=None):
         nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
         if runtime_token:
             try:
-                requests.post(
+                http.post(
                     f"{BACKEND_URL}/auth/logout",
                     headers={"Authorization": f"Bearer {runtime_token}"},
                     verify=False,
@@ -4113,7 +4134,7 @@ def main(page: ft.Page, session=None):
     def dashboard_view():
         analytics_payload = {}
         try:
-            analytics_response = requests.get(
+            analytics_response = http.get(
                 f"{BACKEND_URL}/analytics",
                 headers=get_admin_headers(),
                 verify=False,
@@ -4337,7 +4358,7 @@ def main(page: ft.Page, session=None):
 
         health_payload = {}
         try:
-            health_response = requests.get(
+            health_response = http.get(
                 f"{BACKEND_URL}/health",
                 headers=get_admin_headers(),
                 verify=False,
@@ -4643,7 +4664,7 @@ def main(page: ft.Page, session=None):
 
         def load_sessions(_=None):
             try:
-                response = requests.get(
+                response = http.get(
                     f"{BACKEND_URL}/auth/sessions",
                     headers=get_admin_headers(),
                     verify=False,
@@ -4658,7 +4679,11 @@ def main(page: ft.Page, session=None):
                         ft.DataCell(ft.Text(item.get("username") or "-", size=12)),
                         *[ft.DataCell(ft.Text(local_time(item.get(key)).strftime("%Y-%m-%d %H:%M:%S") if local_time(item.get(key)) else "-", size=12))
                           for key in ("created_at", "last_activity", "expires_at")],
-                        ft.DataCell(ft.OutlinedButton("Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id))),
+                        ft.DataCell(
+                            ft.Text("Protected", size=12, color=ft.Colors.BLUE_GREY_500, tooltip="Super Administrator sessions cannot be revoked.")
+                            if item.get("role") == "Super Administrator"
+                            else ft.OutlinedButton("Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id))
+                        ),
                     ]))
                 table_holder.content = ft.DataTable(
                     columns=[ft.DataColumn(ft.Text(label, weight=ft.FontWeight.BOLD)) for label in ("User", "Created", "Last Activity", "Expires", "Action")],
@@ -4672,7 +4697,7 @@ def main(page: ft.Page, session=None):
 
         def revoke_session(session_id):
             try:
-                response = requests.post(
+                response = http.post(
                     f"{BACKEND_URL}/auth/sessions/{session_id}/revoke",
                     headers=get_admin_headers(),
                     verify=False,
@@ -4698,6 +4723,10 @@ def main(page: ft.Page, session=None):
         return view
 
     def show_login():
+        # A dialog left open by a session that just ended would cover the login form.
+        for control in page.overlay:
+            if isinstance(control, ft.AlertDialog):
+                control.open = False
         page.clean()
         mobile_scroll = (page.width or 1024) <= 600
         page.scroll = ft.ScrollMode.AUTO if mobile_scroll else None
@@ -4727,7 +4756,7 @@ def main(page: ft.Page, session=None):
                 data = {"username": username, "password": password}
                 if code_field.visible:
                     data["code"] = "".join((code_field.value or "").split())
-                res = requests.post(f"{BACKEND_URL}/auth/login", data=data, verify=False, timeout=10)
+                res = http.post(f"{BACKEND_URL}/auth/login", data=data, verify=False, timeout=10)
                 if login_needs_code(res):
                     code_field.visible = True
                     code_field.value = ""
