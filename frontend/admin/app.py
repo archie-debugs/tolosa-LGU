@@ -153,6 +153,7 @@ from frontend.admin.registration import PickerFiles, open_multiple_register_dial
 from frontend.admin.reference_data import build_reference_data_view
 from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
+from frontend.admin.announcements import build_announcements_view
 from frontend.admin.settings import build_employee_settings_view, build_super_admin_settings_view
 from frontend.admin.todays_documents import build_todays_documents_view
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
@@ -2355,6 +2356,9 @@ def main(page: ft.Page, session=None):
             qr_labels=open_qr_label_download_dialog,
         )
         return view
+
+    def announcements_view():
+        return build_announcements_view(page, surface_card, section_header, backend_api)
 
     def settings_view():
         # Super Administrators and Employees each get their own Settings page; any other role gets none.
@@ -4956,6 +4960,7 @@ def main(page: ft.Page, session=None):
             items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view(), "Administration"))
             items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view(), "Administration"))
             items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view, "Administration"))
+            items.append((ft.Icons.CAMPAIGN_OUTLINED, "Announcements", announcements_view, "Administration"))
         if is_super_admin or has_permission("view_audit_logs"):
             items.append((ft.Icons.HISTORY_OUTLINED, "Audit Logs", lambda: audit_logs_view(), "Administration"))
 
