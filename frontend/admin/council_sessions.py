@@ -10,6 +10,7 @@ from datetime import date
 import flet as ft
 
 from frontend.admin.documents import DROPDOWN_EVENT
+from frontend.admin.order_of_business import build_business_card
 from frontend.admin.tracking_ui import TrackingWidgets
 
 KINDS = ["Regular", "Special"]
@@ -45,7 +46,7 @@ def quorum_text(quorum):
 def build_sessions_view(page, surface_card, api, *, can_manage):
     """`api(method, path, **kwargs)` returns parsed JSON or raises with the backend's detail."""
     ui = TrackingWidgets(page)
-    state = {"terms": [], "term_id": None, "sessions": [], "next_numbers": {}, "session": None}
+    state = {"terms": [], "term_id": None, "sessions": [], "next_numbers": {}, "session": None, "business": None}
     message = ft.Text("", size=12, visible=False)
     body = ft.Column(spacing=16)
     term_choice = ft.Dropdown(label="Term", width=320, options=[], **{DROPDOWN_EVENT: lambda _: select_term(term_choice.value)})
@@ -84,7 +85,11 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
         if detail is not None:
             state["session"] = detail
             message.visible = False
+            load_business()
         update()
+
+    def load_business():
+        state["business"] = call("GET", f"/council/sessions/{state['session']['id']}/business")
 
     def back_to_list():
         state["session"] = None
@@ -200,8 +205,11 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
                 warnings.append(f"{quorum['unmarked']} member(s) are not marked.")
             if not quorum["has_quorum"]:
                 warnings.append(f"Only {quorum['present']} of {quorum['in_office']} are marked present; quorum is {quorum['needed']}.")
+            if (state["business"] or {}).get("without_outcome"):
+                warnings.append(f"{state['business']['without_outcome']} item(s) in the order of business have no outcome.")
             confirm("Mark as held?", [
-                ft.Text("Once the session is held, attendance can only be corrected with a reason, and its number and date are fixed."),
+                ft.Text("Once the session is held, attendance, outcomes and votes can only be corrected with a reason, "
+                        "and its number, date and order of business are fixed. Each measure's stage moves from its outcome."),
                 *[ft.Text(text, color=ft.Colors.AMBER_800) for text in warnings],
             ], "Mark as held", lambda: apply_status(status))
         else:
@@ -211,6 +219,7 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
         result = call("POST", f"/council/sessions/{state['session']['id']}/status", json={"status": status})
         if result is not None:
             state["session"] = result
+            load_business()
             show(f"{result['title']} is now {status}.")
         update()
 
@@ -268,7 +277,12 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
                 *attendance_actions,
                 ft.Column(rows or [ui.empty_box("No members were in office on this date. Check the roster under Members & Committees.")], spacing=8),
             ], spacing=14), padding=20),
+            *([build_business_card(page, ui, surface_card, business_helpers, can_manage=can_manage)] if state["business"] else []),
         ]
+
+    business_helpers = {"state": state, "call": lambda *args, **kwargs: call(*args, **kwargs),
+                        "dialog_call": lambda *args, **kwargs: dialog_call(*args, **kwargs),
+                        "open_dialog": lambda *args: open_dialog(*args), "show": lambda *args: show(*args), "update": lambda: update()}
 
     def render():
         body.controls = session_controls() if state["session"] else list_controls()
@@ -335,6 +349,7 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
                 show("Session details saved.")
             else:
                 state["session"] = dialog_call("POST", "/council/sessions", json={**payload, "term_id": state["term_id"]})
+                state["business"] = dialog_call("GET", f"/council/sessions/{state['session']['id']}/business")
                 show(f"Added the {state['session']['title']} as a draft.")
         open_dialog("Edit session" if session else "Add session",
                     [ft.Row([kind, number], spacing=12, wrap=True), held_on,

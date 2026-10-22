@@ -29,6 +29,7 @@ from .routes.todays_documents import router as todays_documents_router
 from .routes.notifications import router as notifications_router
 from .routes.council import router as council_router
 from .routes.council_sessions import router as council_sessions_router
+from .routes.order_of_business import router as order_of_business_router
 from .routes.measure_stages import router as measure_stages_router
 
 refresh_development_public_urls()
@@ -100,6 +101,7 @@ app.include_router(todays_documents_router)
 app.include_router(notifications_router)
 app.include_router(council_router)
 app.include_router(council_sessions_router)
+app.include_router(order_of_business_router)
 app.include_router(measure_stages_router)
 
 

@@ -131,6 +131,100 @@ class SessionAttendance(Base):
     member = relationship("CouncilMember", foreign_keys=[member_id])
 
 
+
+class SessionItem(Base):
+    """An item in a session's order of business: a document, or a titled item with none (a privilege speech).
+
+    Items are added, removed and reordered until the session is Held, then fixed (docs/adr/0003).
+    """
+
+    __tablename__ = "session_items"
+    __table_args__ = (
+        UniqueConstraint("session_id", "document_id", name="uq_session_items_session_document"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("council_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    section = Column(String(30), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    # The document's title when it was added, so the record reads the same if the document changes.
+    title = Column(Text, nullable=False)
+    added_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    council_session = relationship("CouncilSession", foreign_keys=[session_id])
+
+
+class SessionItemOutcome(Base):
+    """What the SB did with an item; the latest entry is the current outcome.
+
+    Updated in place until the session is Held; after that a change is a new entry with is_correction
+    and the reason in note. stage_before and applied_stages record the stage moves it made, so a
+    correction can redo them.
+    """
+
+    __tablename__ = "session_item_outcomes"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("session_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    outcome = Column(String(40), nullable=False)
+    note = Column(Text, nullable=True)
+    committee_id = Column(Integer, ForeignKey("committees.id"), nullable=True)
+    document_number = Column(String(40), nullable=True)
+    series_year = Column(Integer, nullable=True)
+    stage_before = Column(String(40), nullable=True)
+    applied_stages = Column(Text, nullable=True)  # comma separated, in order
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    recorded_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recorded_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    committee = relationship("Committee", foreign_keys=[committee_id])
+
+
+class SessionItemVote(Base):
+    """The vote on an item: method, tally and result; the latest entry is the current vote.
+
+    A nominal vote also lists each member's vote (SessionMemberVote), and its tally is their count.
+    """
+
+    __tablename__ = "session_item_votes"
+    __table_args__ = (
+        CheckConstraint("method IN ('Voice', 'Nominal')", name="ck_session_item_votes_method"),
+        CheckConstraint("result IN ('Carried', 'Lost')", name="ck_session_item_votes_result"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("session_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    method = Column(String(10), nullable=False)
+    yes = Column(Integer, nullable=False, default=0)
+    no = Column(Integer, nullable=False, default=0)
+    abstain = Column(Integer, nullable=False, default=0)
+    result = Column(String(10), nullable=False)
+    note = Column(Text, nullable=True)
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    recorded_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recorded_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    member_votes = relationship("SessionMemberVote", cascade="all, delete-orphan", order_by="SessionMemberVote.id")
+
+
+class SessionMemberVote(Base):
+    __tablename__ = "session_member_votes"
+    __table_args__ = (
+        CheckConstraint("vote IN ('Yes', 'No', 'Abstain')", name="ck_session_member_votes_vote"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    vote_id = Column(Integer, ForeignKey("session_item_votes.id", ondelete="CASCADE"), nullable=False, index=True)
+    member_id = Column(Integer, ForeignKey("council_members.id"), nullable=False)
+    vote = Column(String(10), nullable=False)
+
+    member = relationship("CouncilMember", foreign_keys=[member_id])
+
 class Category(Base):
     __tablename__ = "categories"
 
@@ -427,6 +521,8 @@ class DocumentStageChange(Base):
     # The day it happened, which can be earlier than the day it was recorded.
     effective_on = Column(Date, nullable=False)
     committee_id = Column(Integer, ForeignKey("committees.id"), nullable=True)
+    # The session whose outcome made this change, if any.
+    session_id = Column(Integer, ForeignKey("council_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
     note = Column(Text, nullable=True)
     is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
     changed_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -434,6 +530,7 @@ class DocumentStageChange(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     committee = relationship("Committee", foreign_keys=[committee_id])
+    session = relationship("CouncilSession", foreign_keys=[session_id])
 
 
 class DocumentHistory(Base):
