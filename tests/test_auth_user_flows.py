@@ -248,6 +248,7 @@ def test_document_registration_creates_stable_qr_token_and_public_qr_lookup(monk
         "title",
         "document_type",
         "current_office",
+        "stage",
         "qr_token",
         "qr_payload",
     }

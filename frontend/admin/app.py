@@ -138,7 +138,8 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
     if BACKEND_URL.startswith("https://"):
         BACKEND_URL = BACKEND_URL.replace("https://", "http://", 1)
 
-from frontend.admin.committees import build_committees_view
+from frontend.admin.council import build_members_committees_view
+from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.document_details import open_document_details
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
@@ -154,7 +155,7 @@ from frontend.admin.users_roles import (
 )
 from frontend.admin.registration import PickerFiles, open_multiple_register_dialog, open_register_dialog
 from frontend.admin.reference_data import build_reference_data_view
-from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view, page_banner
+from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.announcements import build_announcements_view
 from frontend.admin.settings import build_employee_settings_view, build_super_admin_settings_view
@@ -629,37 +630,6 @@ def main(page: ft.Page, session=None):
         dt = local_time(value)
         return dt.strftime("%m/%d/%Y") if dt else value
 
-    committee_editor_column = ft.Column(spacing=10)
-    committee_notice = ft.Text("", size=12, color=ft.Colors.BLUE_GREY_600)
-    pending_delete_committee = None
-    committee_edit_index = None
-    committee_name_input = ft.TextField(label="Committee Name", width=420)
-
-    COMMITTEES = [
-        {"name": "Committee on Finance"},
-        {"name": "Committee on Health"},
-        {"name": "Committee on Education"},
-    ]
-
-    committee_edit_dialog = ft.AlertDialog(
-        title=ft.Text("Edit Committee"),
-        content=committee_name_input,
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_committee_dialog()),
-            ft.Button("Save", on_click=lambda _: on_committee_save()),
-        ],
-    )
-    delete_committee_dialog = ft.AlertDialog(
-        title=ft.Text("Confirm Action"),
-        content=ft.Text(""),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_delete_committee_dialog()),
-            ft.Button("Delete", on_click=lambda _: delete_committee_action(), bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
-        ],
-    )
-    page.overlay.append(delete_committee_dialog)
-    page.overlay.append(committee_edit_dialog)
-
     audit_logs_table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Date & Time", weight=ft.FontWeight.BOLD, size=12)),
@@ -696,10 +666,6 @@ def main(page: ft.Page, session=None):
         {"created_at": "2026-08-22T16:12:00+00:00", "actor": "marla", "action": "REPORT_EXPORT", "target_type": "Analytics", "details": "Summary export generated for leadership review.", "status": "Success"},
         {"created_at": "2026-08-20T10:08:00+00:00", "actor": "admin", "action": "DOCUMENT_ARCHIVE", "target_type": "Documents", "details": "Document archived and moved to closed records.", "status": "Success"},
     ]
-
-    def save_committees_to_file(committees):
-        # UI preview only: no persistent save is required for the current design.
-        pass
 
     delete_dialog = ft.AlertDialog(title=ft.Text("Confirm Action"), content=ft.Text(""), actions=[])
     page.overlay.append(delete_dialog)
@@ -744,58 +710,6 @@ def main(page: ft.Page, session=None):
             spacing=14,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-
-    def open_committee_dialog(index: int | None):
-        nonlocal committee_edit_index
-        committee_edit_index = index
-        if index is None:
-            committee_name_input.value = ""
-            committee_edit_dialog.title.value = "Add Committee"
-        else:
-            committee_name_input.value = COMMITTEES[index]["name"]
-            committee_edit_dialog.title.value = "Edit Committee"
-        committee_edit_dialog.open = True
-        page.update()
-
-    def close_committee_dialog():
-        committee_edit_dialog.open = False
-        page.update()
-
-    def on_committee_save():
-        nonlocal committee_edit_index
-        name = (committee_name_input.value or "").strip()
-        if not name:
-            return
-        if committee_edit_index is None:
-            COMMITTEES.append({"name": name})
-        else:
-            COMMITTEES[committee_edit_index]["name"] = name
-        save_committees_to_file(COMMITTEES)
-        committee_edit_dialog.open = False
-        page.update()
-
-    def confirm_delete_committee(index: int):
-        nonlocal pending_delete_committee
-        pending_delete_committee = index
-        delete_committee_dialog.open = True
-        page.update()
-
-    def delete_committee_action():
-        nonlocal pending_delete_committee
-        try:
-            if pending_delete_committee is not None and 0 <= pending_delete_committee < len(COMMITTEES):
-                COMMITTEES.pop(pending_delete_committee)
-                save_committees_to_file(COMMITTEES)
-        finally:
-            pending_delete_committee = None
-            delete_committee_dialog.open = False
-            page.update()
-
-    def close_delete_committee_dialog():
-        nonlocal pending_delete_committee
-        pending_delete_committee = None
-        delete_committee_dialog.open = False
-        page.update()
 
     audit_summary_cards = ft.Row([], spacing=12, wrap=True)
     audit_filter_bar = ft.Row([], spacing=10, wrap=True)
@@ -1190,43 +1104,12 @@ def main(page: ft.Page, session=None):
             print("audit_logs_view error:\n", tb)
             return ft.Column([ft.Text("Error building Audit Logs view"), ft.Text(str(e)), ft.Text(tb)])
 
-    def committees_view():
-        committee_rows = []
-        for index, committee in enumerate(COMMITTEES):
-            committee_rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text(str(index + 1))),
-                        ft.DataCell(ft.Text(committee["name"])),
-                        ft.DataCell(
-                            ft.Row(
-                                [
-                                    ft.IconButton(ft.Icons.EDIT, tooltip="Edit", on_click=lambda _, idx=index: open_committee_dialog(idx)),
-                                    ft.IconButton(ft.Icons.DELETE, tooltip="Delete", on_click=lambda _, idx=index: confirm_delete_committee(idx)),
-                                ],
-                                spacing=4,
-                            )
-                        ),
-                    ]
-                )
-            )
+    def members_committees_view():
+        return build_members_committees_view(page, surface_card, backend_api,
+                                             can_manage=has_permission("manage_members_and_committees"))
 
-        committee_table = ft.DataTable(
-            columns=[
-                ft.DataColumn(ft.Text("#", weight=ft.FontWeight.BOLD, size=12)),
-                ft.DataColumn(ft.Text("Committee", weight=ft.FontWeight.BOLD, size=12)),
-                ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
-            ],
-            rows=committee_rows,
-            column_spacing=12,
-        )
-        try:
-            return build_committees_view(committee_table, open_committee_dialog, surface_card, section_header)
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            print("committees_view error:\n", tb)
-            return ft.Column([ft.Text("Error building Committees view"), ft.Text(str(e)), ft.Text(tb)])
+    def council_sessions_view():
+        return build_sessions_view(page, surface_card, backend_api, can_manage=has_permission("manage_sessions"))
 
     reference_categories = []
     reference_document_types = []
@@ -1313,7 +1196,7 @@ def main(page: ft.Page, session=None):
 
     def reference_data_view():
         load_reference_data()
-        return build_reference_data_view(reference_categories, reference_document_types, reference_search, reference_kind_filter, open_reference_create_dialog, open_reference_edit_dialog, toggle_reference_definition, load_reference_data, page, section_header)
+        return build_reference_data_view(reference_categories, reference_document_types, reference_search, reference_kind_filter, open_reference_create_dialog, open_reference_edit_dialog, toggle_reference_definition, load_reference_data, page)
 
     documents_data = []
     archived_documents_data = []
@@ -2025,6 +1908,7 @@ def main(page: ft.Page, session=None):
                 can_edit=has_permission("edit_documents"),
                 can_download=has_permission("download_documents"),
                 can_print=has_permission("print_documents"),
+                can_change_stage=has_permission("change_measure_stage"),
                 open_pass=open_pass_document_dialog,
                 open_edit=open_edit_document_dialog,
                 preview=preview_document_pdf,
@@ -2079,6 +1963,7 @@ def main(page: ft.Page, session=None):
             "attachments": doc.get("attachments") or [],
             "document_number": doc.get("document_number"),
             "series_year": doc.get("series_year"),
+            "stage": doc.get("stage"),
             "due_date": doc.get("due_date"),
             "current_office_id": doc.get("current_office_id"),
             "is_public": bool(doc.get("is_public", False)),
@@ -2334,7 +2219,6 @@ def main(page: ft.Page, session=None):
             page,
             backend_api,
             surface_card,
-            section_header,
             normalize=normalize_document,
             selection=selected_qr_document_ids,
             loaded=documents_data,
@@ -2364,7 +2248,7 @@ def main(page: ft.Page, session=None):
         return view
 
     def announcements_view():
-        return build_announcements_view(page, surface_card, section_header, backend_api)
+        return build_announcements_view(page, surface_card, backend_api)
 
     def settings_view():
         # Super Administrators and Employees each get their own Settings page; any other role gets none.
@@ -2732,7 +2616,7 @@ def main(page: ft.Page, session=None):
 
     def qr_tracking_view():
         return build_qr_tracking_view(
-            page, backend_api, surface_card, section_header,
+            page, backend_api, surface_card,
             open_details=show_document_details if has_permission("view_document_details") else None,
         )
 
@@ -2887,9 +2771,9 @@ def main(page: ft.Page, session=None):
             ft.dropdown.Option("Delete Users"),
             ft.dropdown.Option("Assign Roles"),
             ft.dropdown.Option("Manage Permissions"),
-            ft.dropdown.Option("Add Committee"),
-            ft.dropdown.Option("Edit Committee"),
-            ft.dropdown.Option("Delete Committee"),
+            ft.dropdown.Option("Change Measure Stage"),
+            ft.dropdown.Option("Manage Members And Committees"),
+            ft.dropdown.Option("Manage Sessions"),
             ft.dropdown.Option("View Audit Logs"),
             ft.dropdown.Option("Export Audit Logs"),
             ft.dropdown.Option("Modify System Settings"),
@@ -2955,13 +2839,6 @@ def main(page: ft.Page, session=None):
         load_user_management_data()
         visible_users = filter_user_data()
 
-        create_button = ft.Button(
-            "+ Create User",
-            on_click=lambda _: open_create_user_dialog(),
-            bgcolor=ft.Colors.BLUE_800,
-            color=ft.Colors.WHITE,
-        )
-        refresh_button = ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=refresh_user_management_data)
         view = build_users_roles_view(
             visible_users,
             user_search_field,
@@ -2969,8 +2846,6 @@ def main(page: ft.Page, session=None):
             user_status_filter,
             user_office_filter,
             user_permission_filter,
-            create_button,
-            refresh_button,
             lambda _: open_create_user_dialog(),
             lambda _, item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
             lambda _, item=None: open_edit_user_dialog(item or visible_users[0] if visible_users else {}),
@@ -2978,7 +2853,6 @@ def main(page: ft.Page, session=None):
             lambda _, item=None: delete_user(item or visible_users[0] if visible_users else {}),
             page,
             surface_card,
-            section_header,
             user_table_holder,
             user_no_users_notice,
             offices_data=office_management_data,
@@ -3486,7 +3360,8 @@ def main(page: ft.Page, session=None):
             "QR Code": "Control QR code generation, printing, and tracking access.",
             "Today's Documents": "Let this employee set the documents SB Members see for the day.",
             "Users & Roles": "Control employee access to user and role administration.",
-            "Committees": "Control committee management permissions.",
+            "Members & Committees": "Let this employee keep the SB member roster, terms and committees up to date.",
+            "Sessions": "Let this employee add SB sessions, move them to held, and record or correct attendance.",
             "Audit Logs": "Control access to system activity records.",
             "Analytics": "Control access to analytics and reports.",
             "Office Workflow": "Control this employee's access to future office document functions.",
@@ -4107,7 +3982,6 @@ def main(page: ft.Page, session=None):
             page,
             backend_api,
             surface_card,
-            section_header,
             normalize=normalize_document,
             selection=selected_archived_document_ids,
             loaded=archived_documents_data,
@@ -4404,7 +4278,7 @@ def main(page: ft.Page, session=None):
         except Exception:
             display_name = current_user
 
-        # The Office Dashboard's banner; today's date and time sit where it has its Refresh button.
+        # Every admin screen's banner; today's date and time sit in its top-right corner.
         today_line = ft.Container(
             content=ft.Row(
                 [
@@ -4419,7 +4293,7 @@ def main(page: ft.Page, session=None):
             ),
             padding=ft.Padding(12, 8, 12, 8),
         )
-        welcome_banner = page_banner(
+        welcome_banner = TrackingWidgets(page).banner(
             "Dashboard",
             f"Welcome back, {display_name} · {current_user_role or 'User'}",
             ft.Icons.DASHBOARD_OUTLINED,
@@ -4483,8 +4357,51 @@ def main(page: ft.Page, session=None):
         return users_roles_view()
 
     def sessions_view():
-        table_holder = ft.Container(width="100%")
+        widgets = TrackingWidgets(page)
+        rows_column = ft.Column(spacing=12)
+        count_text = ft.Text("", size=13, color=widgets.body_color())
         notice = ft.Text("", size=12, color=ft.Colors.RED_700)
+
+        def session_time(value):
+            parsed = local_time(value)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S") if parsed else "-"
+
+        def session_row(item):
+            username = item.get("username") or "-"
+            times = [
+                ft.Column([widgets.hint(label), ft.Text(session_time(item.get(key)), size=13, color=widgets.body_color())], spacing=2, width=160)
+                for label, key in (("Created", "created_at"), ("Last activity", "last_activity"), ("Expires", "expires_at"))
+            ]
+            if item.get("role") == "Super Administrator":
+                action = ft.Container(
+                    widgets.chip("Protected", widgets.accent()),
+                    tooltip="Super Administrator sessions cannot be revoked.",
+                )
+            else:
+                action = ft.OutlinedButton(
+                    "Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id),
+                    style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=ft.Colors.RED_600, side=ft.BorderSide(1, ft.Colors.RED_300)),
+                )
+            return ft.Container(
+                content=ft.Row(
+                    [
+                        ft.CircleAvatar(content=ft.Text(username[:2].upper(), size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE), bgcolor=ft.Colors.BLUE_700, radius=21),
+                        ft.Column(
+                            [ft.Text(username, size=15, weight=ft.FontWeight.W_600, color=widgets.link_color()), widgets.hint(item.get("role") or "")],
+                            spacing=2,
+                            expand=True,
+                        ),
+                        *times,
+                        ft.Container(action, width=110, alignment=ft.Alignment(1, 0)),
+                    ],
+                    spacing=16,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(12, 10, 12, 10),
+                bgcolor=widgets.tone("#F7FAFE", "#1B2430"),
+                border=ft.border.all(1, widgets.line_color()),
+                border_radius=12,
+            )
 
         def load_sessions(_=None):
             try:
@@ -4497,25 +4414,11 @@ def main(page: ft.Page, session=None):
                 if response.status_code != 200:
                     raise Exception(response.text)
                 sessions = response.json() or []
-                rows = []
-                for item in sessions:
-                    rows.append(ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(item.get("username") or "-", size=12)),
-                        *[ft.DataCell(ft.Text(local_time(item.get(key)).strftime("%Y-%m-%d %H:%M:%S") if local_time(item.get(key)) else "-", size=12))
-                          for key in ("created_at", "last_activity", "expires_at")],
-                        ft.DataCell(
-                            ft.Text("Protected", size=12, color=ft.Colors.BLUE_GREY_500, tooltip="Super Administrator sessions cannot be revoked.")
-                            if item.get("role") == "Super Administrator"
-                            else ft.OutlinedButton("Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id))
-                        ),
-                    ]))
-                table_holder.content = ft.DataTable(
-                    columns=[ft.DataColumn(ft.Text(label, weight=ft.FontWeight.BOLD)) for label in ("User", "Created", "Last Activity", "Expires", "Action")],
-                    rows=rows,
-                    column_spacing=24,
-                )
-                notice.value = "No active sessions." if not sessions else ""
+                rows_column.controls = [session_row(item) for item in sessions] or [widgets.empty_box("No active sessions.")]
+                count_text.value = f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}"
+                notice.value = ""
             except Exception as exc:
+                rows_column.controls = []
                 notice.value = f"Unable to load sessions: {exc}"
             page.update()
 
@@ -4534,15 +4437,24 @@ def main(page: ft.Page, session=None):
                 notice.value = f"Unable to revoke session: {exc}"
                 page.update()
 
-        view = surface_card(
-            ft.Column([
-                section_header("Active Sessions", "Monitor and revoke active user sessions.", ft.Icons.SECURITY_OUTLINED, ft.Colors.BLUE_700),
-                ft.Row([ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=load_sessions)], spacing=8),
-                notice,
-                table_holder,
-            ], spacing=12, tight=True),
-            padding=18,
-        )
+        view = ft.Column([
+            widgets.banner(
+                "Active Sessions", "Monitor and revoke active user sessions.", ft.Icons.SECURITY,
+                corner=ft.IconButton(ft.Icons.REFRESH, icon_color=ft.Colors.WHITE, tooltip="Refresh", on_click=load_sessions),
+            ),
+            surface_card(
+                ft.Column([
+                    widgets.card_title(
+                        "Signed-in sessions", ft.Icons.DEVICES_OUTLINED,
+                        subtitle="Super Administrator sessions are protected and cannot be revoked.",
+                        trailing=count_text,
+                    ),
+                    notice,
+                    rows_column,
+                ], spacing=18, tight=True),
+                padding=20,
+            ),
+        ], spacing=16, tight=True)
         load_sessions()
         return view
 
@@ -4741,7 +4653,8 @@ def main(page: ft.Page, session=None):
 
         # Legislative
         if not is_employee() or has_permission("view_documents"):
-            items.append((ft.Icons.GROUP_OUTLINED, "Committees", lambda: committees_view(), "Legislative"))
+            items.append((ft.Icons.GROUPS_OUTLINED, "Members & Committees", lambda: members_committees_view(), "Legislative"))
+            items.append((ft.Icons.EVENT_AVAILABLE_OUTLINED, "Sessions", lambda: council_sessions_view(), "Legislative"))
 
         # Administration
         if is_super_admin:

@@ -30,6 +30,201 @@ class Office(Base):
     users = relationship("User", back_populates="office", foreign_keys="User.office_id")
 
 
+class CouncilTerm(Base):
+    """One elected Sangguniang Bayan, e.g. the 13th Sangguniang Bayan, 2025-2028."""
+
+    __tablename__ = "council_terms"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), unique=True, nullable=False)
+    starts_on = Column(Date, nullable=False)
+    ends_on = Column(Date, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class CouncilMember(Base):
+    """A member of the SB for one term. Never deleted: past sessions keep pointing at them (docs/adr/0002)."""
+
+    __tablename__ = "council_members"
+    __table_args__ = (
+        CheckConstraint(
+            "position IN ('Vice Mayor', 'Regular Member', 'Liga ng mga Barangay President', "
+            "'SK Federation President', 'IPMR')",
+            name="ck_council_members_position",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    term_id = Column(Integer, ForeignKey("council_terms.id"), nullable=False, index=True)
+    full_name = Column(String(160), nullable=False)
+    position = Column(String(60), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Set when the member leaves before the term ends; members are never deleted.
+    left_on = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    term = relationship("CouncilTerm", foreign_keys=[term_id])
+    user = relationship("User", foreign_keys=[user_id])
+
+
+class Committee(Base):
+    """A standing committee of the SB. Deactivated rather than deleted, since measures are referred to it."""
+
+    __tablename__ = "committees"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(160), unique=True, nullable=False)
+    chair_member_id = Column(Integer, ForeignKey("council_members.id"), nullable=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    chair = relationship("CouncilMember", foreign_keys=[chair_member_id])
+
+
+class CouncilSession(Base):
+    """A meeting of the SB, numbered within its term separately for Regular and Special sessions.
+
+    Draft and Scheduled sessions can be edited; once Held, attendance is only corrected (docs/adr/0003).
+    """
+
+    __tablename__ = "council_sessions"
+    __table_args__ = (
+        UniqueConstraint("term_id", "kind", "number", name="uq_council_sessions_term_kind_number"),
+        CheckConstraint("kind IN ('Regular', 'Special')", name="ck_council_sessions_kind"),
+        CheckConstraint("status IN ('Draft', 'Scheduled', 'Held')", name="ck_council_sessions_status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    term_id = Column(Integer, ForeignKey("council_terms.id"), nullable=False, index=True)
+    kind = Column(String(10), nullable=False)
+    number = Column(Integer, nullable=False)
+    held_on = Column(Date, nullable=False, index=True)
+    status = Column(String(10), nullable=False, default="Draft", server_default="Draft")
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    term = relationship("CouncilTerm", foreign_keys=[term_id])
+
+
+class SessionAttendance(Base):
+    """A member's attendance mark at a session; the latest entry per member is the current one.
+
+    Before the session is Held the entry is updated in place. After that a change is a new entry with
+    is_correction and the reason in note, and earlier entries stay (docs/adr/0003).
+    """
+
+    __tablename__ = "session_attendance"
+    __table_args__ = (
+        CheckConstraint("mark IN ('Present', 'Absent', 'On leave', 'Excused')", name="ck_session_attendance_mark"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("council_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    member_id = Column(Integer, ForeignKey("council_members.id"), nullable=False, index=True)
+    mark = Column(String(10), nullable=False)
+    note = Column(Text, nullable=True)
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    recorded_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recorded_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    member = relationship("CouncilMember", foreign_keys=[member_id])
+
+
+
+class SessionItem(Base):
+    """An item in a session's order of business: a document, or a titled item with none (a privilege speech).
+
+    Items are added, removed and reordered until the session is Held, then fixed (docs/adr/0003).
+    """
+
+    __tablename__ = "session_items"
+    __table_args__ = (
+        UniqueConstraint("session_id", "document_id", name="uq_session_items_session_document"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("council_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    section = Column(String(30), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    # The document's title when it was added, so the record reads the same if the document changes.
+    title = Column(Text, nullable=False)
+    added_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    council_session = relationship("CouncilSession", foreign_keys=[session_id])
+
+
+class SessionItemOutcome(Base):
+    """What the SB did with an item; the latest entry is the current outcome.
+
+    Updated in place until the session is Held; after that a change is a new entry with is_correction
+    and the reason in note. stage_before and applied_stages record the stage moves it made, so a
+    correction can redo them.
+    """
+
+    __tablename__ = "session_item_outcomes"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("session_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    outcome = Column(String(40), nullable=False)
+    note = Column(Text, nullable=True)
+    committee_id = Column(Integer, ForeignKey("committees.id"), nullable=True)
+    document_number = Column(String(40), nullable=True)
+    series_year = Column(Integer, nullable=True)
+    stage_before = Column(String(40), nullable=True)
+    applied_stages = Column(Text, nullable=True)  # comma separated, in order
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    recorded_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recorded_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    committee = relationship("Committee", foreign_keys=[committee_id])
+
+
+class SessionItemVote(Base):
+    """The vote on an item: method, tally and result; the latest entry is the current vote.
+
+    A nominal vote also lists each member's vote (SessionMemberVote), and its tally is their count.
+    """
+
+    __tablename__ = "session_item_votes"
+    __table_args__ = (
+        CheckConstraint("method IN ('Voice', 'Nominal')", name="ck_session_item_votes_method"),
+        CheckConstraint("result IN ('Carried', 'Lost')", name="ck_session_item_votes_result"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("session_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    method = Column(String(10), nullable=False)
+    yes = Column(Integer, nullable=False, default=0)
+    no = Column(Integer, nullable=False, default=0)
+    abstain = Column(Integer, nullable=False, default=0)
+    result = Column(String(10), nullable=False)
+    note = Column(Text, nullable=True)
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    recorded_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recorded_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    member_votes = relationship("SessionMemberVote", cascade="all, delete-orphan", order_by="SessionMemberVote.id")
+
+
+class SessionMemberVote(Base):
+    __tablename__ = "session_member_votes"
+    __table_args__ = (
+        CheckConstraint("vote IN ('Yes', 'No', 'Abstain')", name="ck_session_member_votes_vote"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    vote_id = Column(Integer, ForeignKey("session_item_votes.id", ondelete="CASCADE"), nullable=False, index=True)
+    member_id = Column(Integer, ForeignKey("council_members.id"), nullable=False)
+    vote = Column(String(10), nullable=False)
+
+    member = relationship("CouncilMember", foreign_keys=[member_id])
+
 class Category(Base):
     __tablename__ = "categories"
 
@@ -97,6 +292,10 @@ class Document(Base):
 
     # When the document needs to be acted on; drives the due chips and reminders.
     due_date = Column(Date, nullable=True, index=True)
+
+    # A measure's legislative stage (Backends/backend/stages.py); None for documents that aren't measures.
+    # Always the stage of its latest DocumentStageChange.
+    stage = Column(String(40), nullable=True, index=True)
 
     archived = Column(Boolean, nullable=False, default=False, index=True)
     archived_at = Column(DateTime(timezone=True), nullable=True, index=True)
@@ -307,6 +506,31 @@ class TodaysDocument(Base):
 
     document = relationship("Document", foreign_keys=[document_id])
     added_by = relationship("User", foreign_keys=[added_by_id])
+
+
+class DocumentStageChange(Base):
+    """One entry in a measure's stage history. Never edited or deleted: a mistake gets a new
+    entry with is_correction and a reason (docs/adr/0003)."""
+
+    __tablename__ = "document_stage_changes"
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    stage = Column(String(40), nullable=False)
+    previous_stage = Column(String(40), nullable=True)
+    # The day it happened, which can be earlier than the day it was recorded.
+    effective_on = Column(Date, nullable=False)
+    committee_id = Column(Integer, ForeignKey("committees.id"), nullable=True)
+    # The session whose outcome made this change, if any.
+    session_id = Column(Integer, ForeignKey("council_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
+    note = Column(Text, nullable=True)
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    changed_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    changed_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    committee = relationship("Committee", foreign_keys=[committee_id])
+    session = relationship("CouncilSession", foreign_keys=[session_id])
 
 
 class DocumentHistory(Base):

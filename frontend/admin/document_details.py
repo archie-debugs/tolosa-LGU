@@ -6,7 +6,8 @@ from urllib.parse import quote
 
 import flet as ft
 
-from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time, parse_time
+from frontend.admin.stage_panel import build_stage_section
+from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time, parse_time, stage_color
 
 # What an office can record having done to a document it holds. Receiving is its own step.
 ACTION_TYPES = ("Signed", "Reviewed", "Approved", "Noted", "Other")
@@ -72,6 +73,7 @@ def open_document_details(
     can_edit=False,
     can_download=False,
     can_print=False,
+    can_change_stage=False,
     open_pass=None,
     open_edit=None,
     preview=None,
@@ -84,7 +86,8 @@ def open_document_details(
     The backend decides what the user's office can do now (receive, pass on, record an
     action); the `can_*` flags only cover what the user's permissions allow.
     `load_qr_image(document_id)` returns the QR code as base64 PNG, or None when the
-    user may not see it. `on_change()` runs after a receipt or action is recorded.
+    user may not see it. `on_change()` runs after a receipt, action or stage change is recorded.
+    A measure's stage section comes from frontend/admin/stage_panel.py.
     """
     widgets = TrackingWidgets(page)
     state = {"payload": None, "confirming": False, "action": None, "notice": ("", False)}
@@ -156,6 +159,8 @@ def open_document_details(
 
     def tags(document):
         chips = []
+        if document.get("stage"):
+            chips.append(widgets.chip(document["stage"], stage_color(document["stage"])))
         if "is_public" in document:
             chips.append(widgets.chip("Public", ft.Colors.TEAL_700) if document.get("is_public") else widgets.chip("Private", ft.Colors.BLUE_GREY_600))
         if document.get("priority"):
@@ -285,7 +290,6 @@ def open_document_details(
             ("Originating office", "originating_office", None),
             ("Assigned to", "assigned_to", None),
             ("Author", "author", None),
-            ("Session", "session", None),
             ("Registered", "created_at", format_date),
             ("Registered by", "created_by", None),
             ("Last updated", "updated_at", format_date),
@@ -341,6 +345,7 @@ def open_document_details(
             body,
             *([text_block("Description", document["description"])] if document.get("description") else []),
             *([text_block("Remarks", document["remarks"])] if document.get("remarks") else []),
+            *([ft.Divider(height=1, color=widgets.line_color()), stage_section] if stage_section else []),
             ft.Divider(height=1, color=widgets.line_color()),
             widgets.title(f"Trail ({len(events)})"),
             ft.Column([widgets.event_row(event, show_document=False) for event in events] or [widgets.empty("No movement recorded yet.")], spacing=0),
@@ -354,7 +359,12 @@ def open_document_details(
             padding=ft.Padding(4, 0, 4, 0),
         )
 
+    def stage_saved():
+        changed()
+        reload()
+
     fetch()
+    stage_section = build_stage_section(page, api, document_id, can_change=can_change_stage, on_saved=stage_saved)
     render()
     dialog.open = True
     page.update()

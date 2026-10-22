@@ -13,6 +13,7 @@ ALLOWED_EXTENSIONS = ("pdf", "doc", "docx")
 PRIORITIES = ("Low", "Medium", "High")
 OLDEST_YEAR = 1900
 NO_CATEGORY = "No category"
+FILED = "Filed"
 
 # Flet 0.28 labels a button with `text`; newer releases use `content`.
 _BUTTON_CLASS = ft.Button if inspect.isclass(ft.Button) else (getattr(ft, "FilledButton", None) or ft.ElevatedButton)
@@ -94,6 +95,12 @@ def error_detail(exc):
     if isinstance(detail, dict):
         return detail.get("message") or str(detail), detail
     return str(exc) or "Something went wrong.", None
+
+
+def measure_kind(document_type):
+    """"ordinance" or "resolution" for a measure's type, else None (as Backends/backend/stages.measure_kind)."""
+    name = (document_type or "").strip().lower()
+    return "ordinance" if "ordinance" in name else "resolution" if "resolution" in name else None
 
 
 def title_from_filename(name):
@@ -180,6 +187,26 @@ def _pill_button(widgets, text, icon, on_click):
     )
 
 
+# Flet 0.21 calls button states MaterialState; newer releases call them ControlState.
+_STATE = getattr(ft, "ControlState", None) or ft.MaterialState
+
+
+def _primary_button(text, icon, on_click):
+    """The blue Register button: one rounded shape, greyed out while it is disabled."""
+    return ft.FilledButton(
+        text,
+        icon=icon,
+        on_click=on_click,
+        height=44,
+        style=ft.ButtonStyle(
+            shape=ft.RoundedRectangleBorder(radius=10),
+            bgcolor={_STATE.DISABLED: ft.Colors.BLUE_GREY_200, _STATE.DEFAULT: ft.Colors.BLUE_700},
+            color={_STATE.DISABLED: ft.Colors.WHITE, _STATE.DEFAULT: ft.Colors.WHITE},
+            padding=ft.Padding(22, 0, 22, 0),
+        ),
+    )
+
+
 def _upload_box(widgets, heading, hint, *buttons):
     return ft.Container(
         content=ft.Row(
@@ -230,6 +257,7 @@ def load_options(api):
         "office_locked": bool(options.get("office_locked")),
         "categories": options.get("categories") or [],
         "document_types": options.get("document_types") or [],
+        "measure_stages": options.get("measure_stages") or {},
     }
 
 
@@ -403,6 +431,8 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     title = ft.TextField(data="Title", hint_text="Enter document title...", autofocus=True, **style)
     number = ft.TextField(data="Number", hint_text="Enter document number...", **style)
     year = _year_dropdown(this_year, width=None, widgets=widgets)
+    stage = ft.Dropdown(data="Stage", hint_text="Stage", value=FILED, **style)
+    stage_hint = widgets.hint("A measure gets its number when it is approved or adopted. Leave the number blank before then.")
     file_name = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=widgets.heading_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
     file_hint = widgets.hint("")
     remove_file = ft.IconButton(ft.Icons.CLOSE, tooltip="Remove file", on_click=lambda _: set_file(None))
@@ -410,7 +440,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     message = _Notice()
     progress = ft.ProgressBar(value=None, visible=False)
     duplicate_box = ft.Column(spacing=6, visible=False)
-    register_button = ft.Button("Register", icon=ft.Icons.SAVE_OUTLINED, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: submit())
+    register_button = _primary_button("Register", ft.Icons.SAVE, lambda _: submit())
     cancel_button = ft.TextButton("Cancel", on_click=lambda _: close())
 
     def close():
@@ -442,7 +472,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         progress.visible = busy
         register_button.disabled = busy
         set_label(register_button, label or "Register")
-        for control in (title, number, year):
+        for control in (title, number, year, stage):
             control.disabled = busy
         form.lock(busy)
         render_file()
@@ -488,13 +518,29 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         duplicate_box.visible = False
         submit()
 
+    def stage_choices():
+        return options["measure_stages"].get(measure_kind(form.document_type.value)) or []
+
+    def show_stage(update=True):
+        """Only ordinances and resolutions have a stage; a new one starts at Filed."""
+        choices = stage_choices()
+        stage.options = [ft.dropdown.Option(name) for name in choices]
+        if stage.value not in choices:
+            stage.value = FILED if FILED in choices else None
+        stage_box.visible = stage_hint.visible = bool(choices)
+        if update:
+            page.update()
+
     def fields():
-        return {
+        values = {
             "title": (title.value or "").strip(),
             "document_number": (number.value or "").strip() or None,
             "series_year": int(year.value),
             **form.shared_fields(),
         }
+        if stage_choices() and stage.value:
+            values["stage"] = stage.value
+        return values
 
     def submit():
         if state["busy"]:
@@ -644,6 +690,9 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     narrow = (page.width or 1024) <= 600
     third = {"xs": 12, "sm": 4}
     half = {"xs": 12, "sm": 6}
+    stage_box = _labelled(widgets, stage, "Stage", ft.Icons.TIMELINE, required=True, col=third)
+    on_dropdown_change(form.document_type, lambda _: show_stage())
+    show_stage(update=False)
     content = ft.Column([
         _section(widgets, ft.Icons.DESCRIPTION, "The document", [
             _labelled(widgets, title, "Title", ft.Icons.TITLE, required=True),
@@ -656,7 +705,9 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
                 _labelled(widgets, form.category, "Category", ft.Icons.LOCAL_OFFER_OUTLINED, required=True, col=third),
                 _labelled(widgets, form.priority, "Priority", ft.Icons.FLAG_OUTLINED, required=True, col=third),
                 _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=third),
+                stage_box,
             ], spacing=14, run_spacing=12),
+            stage_hint,
         ]),
         _section(widgets, ft.Icons.ACCOUNT_BALANCE, "Where it starts", [
             _labelled(widgets, form.office, "Office", ft.Icons.APARTMENT, required=True),
@@ -726,7 +777,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
     message = _Notice()
     year_for_all = _year_dropdown(this_year, width=220, widgets=widgets)
     year_for_all.prefix_icon = ft.Icons.CALENDAR_MONTH_OUTLINED
-    register_button = ft.Button("Register", icon=ft.Icons.SAVE_OUTLINED, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: submit())
+    register_button = _primary_button("Register", ft.Icons.SAVE, lambda _: submit())
     labels_button = ft.OutlinedButton("QR labels", icon=ft.Icons.QR_CODE_2, visible=False, on_click=lambda _: labels())
     close_button = ft.OutlinedButton("Cancel", on_click=lambda _: close())
 

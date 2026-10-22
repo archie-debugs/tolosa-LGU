@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..core import LGU_TIMEZONE
 from ..database import get_db
+from .measure_stages import stage_summary
 
 
 def _as_lgu(value):
@@ -97,6 +98,7 @@ def list_public_documents(
             "date": document.date_registered or (_as_lgu(document.created_at).strftime("%B %d, %Y") if document.created_at else ""),
             "category": document.category,
             "description": document.description,
+            "stage": stage_summary(db, document),
         }
         for document in documents
         ],

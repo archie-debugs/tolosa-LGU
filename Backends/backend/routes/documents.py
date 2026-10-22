@@ -9,11 +9,12 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi import Query
 from sqlalchemy import Integer, String, cast, exc, exists, func, or_, text
 from sqlalchemy.orm import Session
-from .. import models, schemas
+from .. import models, schemas, stages
 from ..database import get_db
 from ..core import LGU_TIMEZONE, UPLOAD_DIR, lgu_today, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
 from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
+from .measure_stages import add_stage_change, registration_stage, stage_summary
 import uuid
 import threading
 import time
@@ -354,6 +355,10 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
     assigned_to = payload.get("assigned_to")
     author = payload.get("author")
     priority = payload.get("priority") or "Medium"
+    # The single-document form sends the stage it was registered at; bulk import leaves it out.
+    requested_stage = (payload.get("stage") or "").strip() or None
+    if requested_stage:
+        registration_stage(type_name, requested_stage, None, number_was_typed=False)
 
     created = []
     failed = []
@@ -395,6 +400,15 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             inferred_number = _extract_legislative_number(original_filename or doc_title)
             document_number = (number_by_tmp_name.get(safe_name) or payload.get("document_number") or inferred_number or "").strip() or None
             series_year = year_by_tmp_name[safe_name]
+            stage_fields = {}
+            if requested_stage:
+                typed_number = number_by_tmp_name.get(safe_name) or payload.get("document_number")
+                try:
+                    stage_fields["stage"], document_number = registration_stage(
+                        type_name, requested_stage, document_number, number_was_typed=bool(typed_number))
+                except HTTPException as exc:
+                    failed.append({"index": idx, "tmp_name": safe_name, "filename": original_filename, "reason": exc.detail})
+                    continue
 
             if not allow_duplicate_number:
                 same_number = _documents_with_number(db, type_name, document_number, series_year)
@@ -409,7 +423,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             doc = _new_registered_document(
                 db, current_user, placement,
                 title=doc_title, document_number=document_number, series_year=series_year, description=description,
-                assigned_to=assigned_to, author=author, priority=priority,
+                assigned_to=assigned_to, author=author, priority=priority, **stage_fields,
             )
 
             # move file from tmp to uploads
@@ -779,10 +793,19 @@ def _duplicate_number_detail(documents: list[models.Document]) -> dict:
 
 
 def _new_registered_document(db: Session, current_user: models.User, placement: dict, **fields) -> models.Document:
-    """Create a document with its tracking number, QR code and starting office."""
+    """Create a document with its tracking number, QR code, starting office and, for a measure, its stage.
+
+    `stage` is the stage chosen on the registration form; without one (bulk import), a measure
+    with a number starts enacted and one without starts at Filed.
+    """
     office = placement["office"]
     category = placement["category"]
     document_type = placement["document_type"]
+    type_name = document_type.name if document_type else None
+    if "stage" in fields:
+        stage = fields["stage"]
+    else:
+        stage, _ = registration_stage(type_name, None, fields.get("document_number"), number_was_typed=True)
     doc = models.Document(
         tracking_number=f"PENDING-{uuid.uuid4().hex}",
         document_number=fields.get("document_number"),
@@ -810,6 +833,8 @@ def _new_registered_document(db: Session, current_user: models.User, placement: 
     _assign_system_tracking_number(db, doc)
     if office:
         _ensure_document_office_association(db, doc.id, office.id)
+    if stage:
+        add_stage_change(db, doc, stage, user=current_user, effective_on=lgu_today(), note="Registered at this stage")
     db.commit()
     db.refresh(doc)
     doc.qr_code_value = _compute_qr_payload(doc)
@@ -854,6 +879,7 @@ def registration_options(db: Session = Depends(get_db), current_user: models.Use
         "office_locked": locked,
         "categories": active_names(models.Category),
         "document_types": active_names(models.DocumentType),
+        "measure_stages": {kind: stages.registration_stages(kind) for kind in stages.PATHS},
     }
 
 
@@ -936,6 +962,7 @@ def _serialize_document(doc: models.Document):
         "originating_office_id": getattr(doc, "originating_office_id", None),
         "current_office_id": getattr(doc, "current_office_id", None),
         "due_date": doc.due_date.isoformat() if doc.due_date else None,
+        "stage": doc.stage,
         "archived": bool(doc.archived),
         "archived_at": doc.archived_at,
         "archived_by": doc.archived_by,
@@ -1269,6 +1296,7 @@ def _serialize_office_document(doc: models.Document):
         "attachment_name": doc.attachment_name,
         "qr_code_value": doc.qr_code_value,
         "due_date": doc.due_date.isoformat() if doc.due_date else None,
+        "stage": doc.stage,
         "archived": bool(doc.archived),
         "archived_at": doc.archived_at,
         "created_at": doc.created_at,
@@ -1920,6 +1948,7 @@ def register_document(
     due_date: Optional[str] = Form(None),
     allow_duplicate_number: bool = Form(False),
     tracking_number: Optional[str] = Form(None),
+    stage: Optional[str] = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1941,7 +1970,11 @@ def register_document(
     )
 
     inferred_number = _extract_legislative_number(file.filename if file and file.filename else title)
-    document_number = (document_number or inferred_number or "").strip() or None
+    typed_number = (document_number or "").strip() or None
+    stage, document_number = registration_stage(
+        placement["document_type"].name if placement["document_type"] else None, stage,
+        typed_number or (inferred_number or "").strip() or None, number_was_typed=typed_number is not None,
+    )
 
     uploaded_content = None
     uploaded_checksum = None
@@ -1968,7 +2001,7 @@ def register_document(
         doc = _new_registered_document(
             db, current_user, placement,
             title=title, document_number=document_number, series_year=series_year, description=description,
-            assigned_to=assigned_to, author=author, priority=priority,
+            assigned_to=assigned_to, author=author, priority=priority, stage=stage,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -2285,6 +2318,7 @@ def public_lookup_qr_by_value(qr_value: str, request: Request, db: Session = Dep
         "title": doc.title,
         "document_type": doc.document_type,
         "current_office": doc.current_office,
+        "stage": stage_summary(db, doc),
         "qr_token": doc.qr_token,
         "qr_payload": doc.qr_code_value or _compute_qr_payload(doc),
     }

@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..backups import backup_health
 from ..core import get_current_admin_user
 from ..database import engine, get_db
 from ..routes.analytics import _storage_information
@@ -79,10 +80,7 @@ def system_health(
             "status": audit_status,
             "detail": {"failed_events": audit_failures},
         },
-        "backup": {
-            "status": "manual",
-            "detail": "Manual backups are managed outside the application.",
-        },
+        "backup": backup_health(),
         "authentication": {
             "status": "operational",
             "detail": {"authenticated_user": current_admin.username},

@@ -97,6 +97,7 @@ class DocumentResponse(BaseModel):
     archived: bool
     archived_at: Optional[datetime] = None
     due_date: Optional[date] = None
+    stage: Optional[str] = None
     archived_by: Optional[str] = None
     office_receipt_status: Optional[str] = None
     office_receipt_confirmed_at: Optional[datetime] = None

@@ -21,6 +21,7 @@ if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
     ft.Icons = ft.icons
 
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
+from frontend.admin.council_sessions import build_sessions_view
 from frontend.theme import CANVAS, PRIMARY
 
 API_URL = os.getenv("SBMEM_BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
@@ -400,6 +401,10 @@ def main(page: ft.Page, session=None):
             ft.Row([ft.FilledButton("View Documents", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: navigate("Documents")), ft.OutlinedButton("Search Documents", icon=ft.Icons.SEARCH, on_click=lambda _: navigate("Documents"))], spacing=10),
         ], spacing=16, tight=True)
 
+    def sessions_view():
+        # Read only: SB Members see the sessions and attendance the Secretariat records.
+        return build_sessions_view(page, card, api, can_manage=False)
+
     def account_view():
         profile_rows = []
         for label, value in [
@@ -470,6 +475,7 @@ def main(page: ft.Page, session=None):
                 (ft.Icons.EVENT_NOTE_OUTLINED, "Today's Documents", screen("Today's Documents", todays_documents_view), "Workspace"),
                 (ft.Icons.DASHBOARD_OUTLINED, "Dashboard", screen("Dashboard", dashboard_view), "Workspace"),
                 (ft.Icons.FOLDER_OPEN_OUTLINED, "Documents", screen("Documents", documents_view), "Workspace"),
+                (ft.Icons.EVENT_AVAILABLE_OUTLINED, "Sessions", screen("Sessions", sessions_view), "Workspace"),
             ]
         nav_items.append((ft.Icons.ACCOUNT_CIRCLE_OUTLINED, "My Account", screen("My Account", account_view), MENU_SECTION))
         selected = next((index for index, item in enumerate(nav_items) if item[1] == current_page), 0)

@@ -10,22 +10,33 @@ from frontend.admin.tracking_ui import TrackingWidgets
 MAX_ANNOUNCEMENTS = 10  # the backend enforces the same limit
 
 
-def build_announcements_view(page, surface_card, section_header, api):
+def build_announcements_view(page, surface_card, api):
     """`api(method, path, **kwargs)` returns parsed JSON or raises with the backend's detail."""
     ui = TrackingWidgets(page)
     message = ft.Text("", size=12, visible=False)
     entries = []  # one dict of TextFields per announcement
     rows = ft.Column(spacing=16)
-    add_button = ft.OutlinedButton("Add announcement", icon=ft.Icons.ADD, on_click=lambda _: add())
-    save_button = ft.ElevatedButton("Save announcements", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: save())
+    add_button = ft.OutlinedButton(
+        "Add announcement", icon=ft.Icons.ADD, on_click=lambda _: add(), height=44,
+        style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=ui.accent(), side=ft.BorderSide(1, ui.accent()), padding=ft.Padding(18, 0, 18, 0)),
+    )
+    save_button = ft.ElevatedButton(
+        "Save announcements", icon=ft.Icons.SAVE, on_click=lambda _: save(), height=44,
+        style=ft.ButtonStyle(shape=ft.StadiumBorder(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, padding=ft.Padding(18, 0, 18, 0)),
+    )
+    style = {
+        "text_size": 14, "border_radius": 10, "border_color": ui.line_color(), "focused_border_color": ui.accent(),
+        "filled": True, "bgcolor": ui.card_color(),
+    }
 
     def fields_for(item):
+        third = {"xs": 12, "md": 4}
         return {
-            "category": ft.TextField(label="Category", hint_text="e.g. Public notice", value=item.get("category") or "", width=200, max_length=40),
-            "title": ft.TextField(label="Title", value=item.get("title") or "", width=360, max_length=120),
-            "date": ft.TextField(label="Date", hint_text="e.g. Oct 27, 2026", value=item.get("date") or "", width=180, max_length=40),
-            "details": ft.TextField(label="Details (optional)", value=item.get("details") or "", width=560,
-                                    multiline=True, min_lines=1, max_lines=3, max_length=300),
+            "category": ft.TextField(label="Category", hint_text="e.g. Public notice", value=item.get("category") or "", max_length=40, col=third, **style),
+            "title": ft.TextField(label="Title", value=item.get("title") or "", max_length=120, col=third, **style),
+            "date": ft.TextField(label="Date", hint_text="e.g. Oct 27, 2026", value=item.get("date") or "", max_length=40, col=third, **style),
+            "details": ft.TextField(label="Details (optional)", value=item.get("details") or "",
+                                    multiline=True, min_lines=2, max_lines=4, max_length=300, **style),
         }
 
     try:
@@ -39,21 +50,39 @@ def build_announcements_view(page, surface_card, section_header, api):
     def render():
         rows.controls = []
         for index, fields in enumerate(entries):
-            rows.controls.append(ft.Column([
-                ft.Row([
-                    ft.Text(f"Announcement {index + 1}", size=13, weight=ft.FontWeight.W_600, color=ui.heading_color()),
-                    ft.IconButton(icon=ft.Icons.ARROW_UPWARD, tooltip="Move up", disabled=index == 0,
+            header = ft.Container(
+                content=ft.Row([
+                    ft.Container(
+                        content=ft.Text(str(index + 1), size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                        width=28, height=28, border_radius=14, alignment=ft.Alignment(0, 0), bgcolor=ft.Colors.BLUE_700,
+                    ),
+                    ft.Text(f"Announcement {index + 1}", size=14, weight=ft.FontWeight.BOLD, color=ui.link_color(), expand=True),
+                    ft.IconButton(icon=ft.Icons.ARROW_UPWARD, tooltip="Move up", icon_color=ui.accent(), disabled=index == 0,
                                   on_click=lambda _, i=index: move(i, -1)),
-                    ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, tooltip="Move down", disabled=index == len(entries) - 1,
+                    ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, tooltip="Move down", icon_color=ui.accent(), disabled=index == len(entries) - 1,
                                   on_click=lambda _, i=index: move(i, 1)),
-                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Remove", icon_color=ft.Colors.RED_700,
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Remove", icon_color=ft.Colors.RED_600,
                                   on_click=lambda _, i=index: remove(i)),
                 ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Row([fields["category"], fields["title"], fields["date"]], wrap=True, spacing=12),
-                fields["details"],
-            ], spacing=8))
+                padding=ft.Padding(14, 4, 8, 4),
+                bgcolor=ui.tone("#E8F1FD", "#1E2B38"),
+            )
+            body = ft.Container(
+                content=ft.Column([
+                    ft.ResponsiveRow([fields["category"], fields["title"], fields["date"]], spacing=14, run_spacing=4),
+                    fields["details"],
+                ], spacing=4),
+                padding=ft.Padding(14, 16, 14, 6),
+            )
+            rows.controls.append(ft.Container(
+                content=ft.Column([header, body], spacing=0),
+                bgcolor=ui.tone("#F7FAFE", "#1B2430"),
+                border=ft.border.all(1, ui.line_color()),
+                border_radius=12,
+                clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            ))
         if not entries:
-            rows.controls.append(ui.hint("No announcements. The homepage will say there are none right now."))
+            rows.controls.append(ui.empty_box("No announcements. The homepage will say there are none right now."))
         if not save_button.disabled:
             add_button.disabled = len(entries) >= MAX_ANNOUNCEMENTS
 
@@ -90,11 +119,11 @@ def build_announcements_view(page, surface_card, section_header, api):
 
     render()
     return ft.Column([
-        surface_card(section_header("Announcements", f"What the public homepage shows under Announcements, in this order (up to {MAX_ANNOUNCEMENTS}).",
-                                    ft.Icons.CAMPAIGN_OUTLINED, ft.Colors.BLUE_700), padding=18),
+        ui.banner("Announcements", f"What the public homepage shows under Announcements, in this order (up to {MAX_ANNOUNCEMENTS}).", ft.Icons.CAMPAIGN),
         surface_card(ft.Column([
+            ui.card_title("Homepage announcements", ft.Icons.CAMPAIGN_OUTLINED, subtitle="Shown on the public homepage from top to bottom. Save to publish your changes."),
             rows,
             message,
             ft.Row([add_button, save_button], alignment=ft.MainAxisAlignment.END, spacing=12),
-        ], spacing=12), padding=18),
+        ], spacing=18), padding=20),
     ], spacing=16)

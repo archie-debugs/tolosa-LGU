@@ -37,7 +37,6 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     priority = ft.Dropdown(label="Priority", width=180, options=[ft.dropdown.Option(p) for p in PRIORITIES], value=document.get("priority") or "Medium")
     assigned_to = ft.TextField(label="Assigned To", value=_text(document.get("assigned_to")), width=280)
     author = ft.TextField(label="Author", value=_text(document.get("author")), width=280)
-    session = ft.TextField(label="Session", value=_text(document.get("session")), width=180)
     due_date = ft.TextField(label="Due date", hint_text="YYYY-MM-DD (optional)", value=_text(document.get("due_date")), width=180)
     remarks = ft.TextField(label="Remarks", value=_text(document.get("remarks")), multiline=True, min_lines=2, max_lines=3)
     message = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
@@ -82,7 +81,6 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             "due_date": due or None,
             "assigned_to": (assigned_to.value or "").strip() or None,
             "author": (author.value or "").strip() or None,
-            "session": (session.value or "").strip() or None,
             "remarks": (remarks.value or "").strip() or None,
         }
         try:
@@ -104,7 +102,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             ft.Row([number, year, priority, due_date], spacing=12, wrap=True),
             description,
             ft.Row([category, document_type], spacing=12, wrap=True),
-            ft.Row([assigned_to, author, session], spacing=12, wrap=True),
+            ft.Row([assigned_to, author], spacing=12, wrap=True),
             remarks,
             message,
         ],

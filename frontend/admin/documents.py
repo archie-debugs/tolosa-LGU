@@ -4,7 +4,7 @@ import inspect
 
 import flet as ft
 
-from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, parse_time
+from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, parse_time, stage_color
 
 PAGE_SIZES = (10, 25, 50)
 SORTS = {
@@ -34,7 +34,6 @@ def build_documents_view(
     page,
     api,
     surface_card,
-    section_header,
     *,
     normalize,
     selection,
@@ -83,39 +82,59 @@ def build_documents_view(
     default_sort = next(iter(sorts))
     state = {"page": 1, "page_size": PAGE_SIZES[0], "total": 0, "total_pages": 1, "quick": None, "summary": {}}
 
-    def dropdown(label, options, value=ALL, width=150):
-        control = ft.Dropdown(
-            label=label,
+    accent = widgets.accent()
+    tint = widgets.tint()
+    field_style = {
+        "dense": True,
+        "text_size": 14,
+        "border_radius": 10,
+        "border_color": widgets.line_color(),
+        "focused_border_color": accent,
+        "filled": True,
+        "bgcolor": widgets.card_color(),
+        "content_padding": ft.Padding(14, 12, 10, 12),
+    }
+
+    def dropdown(label, options, value=ALL):
+        # The name is drawn above the dropdown (see filter_box), so `data` keeps it.
+        return ft.Dropdown(
+            data=label,
             value=value,
             options=[ft.dropdown.Option(key=key, text=text) for key, text in options],
-            width=width,
-            dense=True,
+            **field_style,
             **{DROPDOWN_EVENT: lambda _: load(page_number=1)},
         )
-        return control
+
+    def filter_box(control):
+        return ft.Column(
+            [ft.Text(control.data, size=13, weight=ft.FontWeight.W_600, color=widgets.heading_color()), control],
+            spacing=6,
+            width=190,
+        )
 
     search_field = ft.TextField(
         hint_text="Search by tracking number, title, number, author, office…",
         prefix_icon=ft.Icons.SEARCH,
         expand=True,
-        height=44,
-        content_padding=ft.Padding(12, 4, 12, 4),
+        height=50,
         on_change=lambda _: load(page_number=1),
         on_submit=lambda _: load(page_number=1),
         visible=can_search,
+        **{**field_style, "content_padding": ft.Padding(14, 14, 14, 14)},
     )
-    type_filter = dropdown("Type", [(ALL, ALL)], width=170)
-    category_filter = dropdown("Category", [(ALL, ALL)], width=160)
-    priority_filter = dropdown("Priority", [(ALL, ALL), ("High", "High"), ("Medium", "Medium"), ("Low", "Low")], width=120)
-    status_filter = dropdown("Status", [(ALL, ALL)], width=140)
-    from_year = dropdown("From year", [(ALL, "Any")], width=120)
-    to_year = dropdown("To year", [(ALL, "Any")], width=120)
-    archived_by_filter = dropdown("Archived by", [(ALL, "Anyone")], width=150)
-    sort_filter = dropdown("Sort", [(name, name) for name in sorts], value=default_sort, width=170)
+    type_filter = dropdown("Type", [(ALL, ALL)])
+    category_filter = dropdown("Category", [(ALL, ALL)])
+    priority_filter = dropdown("Priority", [(ALL, ALL), ("High", "High"), ("Medium", "Medium"), ("Low", "Low")])
+    status_filter = dropdown("Status", [(ALL, ALL)])
+    from_year = dropdown("From year", [(ALL, "Any")])
+    to_year = dropdown("To year", [(ALL, "Any")])
+    archived_by_filter = dropdown("Archived by", [(ALL, "Anyone")])
+    sort_filter = dropdown("Sort", [(name, name) for name in sorts], value=default_sort)
     if archived:
         filters = [type_filter, category_filter, archived_by_filter, status_filter, from_year, to_year]
     else:
         filters = [type_filter, category_filter, priority_filter, status_filter, from_year, to_year]
+    filter_boxes = {control: filter_box(control) for control in [*filters, sort_filter]}
 
     kpi_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
     notice_text = ft.Text("", size=12, visible=False)
@@ -180,7 +199,7 @@ def build_documents_view(
             payload = api("GET", "/documents", params=params())
         except Exception as exc:
             loaded[:] = []
-            rows_column.controls = [widgets.empty(f"Unable to load documents: {exc}")]
+            rows_column.controls = [widgets.empty_box(f"Unable to load documents: {exc}")]
             result_text.value = ""
             pagination.controls = []
             page.update()
@@ -193,7 +212,7 @@ def build_documents_view(
         set_options(to_year, list(reversed(years)), "Any")
         statuses = payload.get("available_statuses") or []
         set_options(status_filter, statuses, ALL)
-        status_filter.visible = len(statuses) > 1 or status_filter.value != ALL
+        filter_boxes[status_filter].visible = len(statuses) > 1 or status_filter.value != ALL
         set_options(archived_by_filter, payload.get("available_archivers") or [], "Anyone")
         items = payload.get("items") or []
         loaded[:] = [{**normalize(item), "in_transit_to": item.get("in_transit_to"), "in_transit_since": item.get("in_transit_since")} for item in items]
@@ -223,20 +242,21 @@ def build_documents_view(
             ("archived_last_30_days", "Archived in 30 days", summary.get("archived_last_30_days", 0), "Recently archived", ft.Icons.HISTORY, ft.Colors.BLUE_700),
             ("without_attachment", "No file attached", summary.get("without_attachment", 0), "Missing the scanned copy", ft.Icons.FILE_PRESENT_OUTLINED, ft.Colors.RED_700),
         ] if archived else [
-            ("total", "Active documents", summary.get("total", 0), "Registered and not archived", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700),
-            ("in_transit", "In transit", summary.get("in_transit", 0), "Sent, not yet received", ft.Icons.LOCAL_SHIPPING_OUTLINED, ft.Colors.AMBER_800),
-            ("public", "Public", summary.get("public", 0), "Visible to SB Members", ft.Icons.PUBLIC, ft.Colors.GREEN_700),
-            ("without_attachment", "No file attached", summary.get("without_attachment", 0), "Missing the scanned copy", ft.Icons.FILE_PRESENT_OUTLINED, ft.Colors.RED_700),
+            ("total", "Active documents", summary.get("total", 0), "Registered and not archived", ft.Icons.DESCRIPTION, ft.Colors.BLUE_700),
+            ("in_transit", "In transit", summary.get("in_transit", 0), "Sent, not yet received", ft.Icons.LOCAL_SHIPPING, ft.Colors.AMBER_800),
+            ("public", "Public", summary.get("public", 0), "Visible to SB Members", ft.Icons.VISIBILITY, ft.Colors.GREEN_700),
+            ("without_attachment", "No file attached", summary.get("without_attachment", 0), "Missing the scanned copy", ft.Icons.FILE_PRESENT, ft.Colors.RED_700),
         ]
         controls = []
-        for key, title, value, detail, icon, accent in cards:
-            active = state["quick"] == key or (key == "total" and state["quick"] is None)
-            card = widgets.kpi(title, value, "Showing these" if active and key != "total" else detail, icon, accent, col={"xs": 6, "md": 12 // len(cards)})
+        for key, title, value, detail, icon, color in cards:
+            filtering_by_it = state["quick"] == key and key != "total"
+            card = widgets.stat_card(
+                title, value, "Showing these" if filtering_by_it else detail, icon, color,
+                col={"xs": 12, "sm": 6, "md": 12 // len(cards)}, tile=True, active=filtering_by_it,
+            )
             card.on_click = lambda _, k=key: set_quick(k)
             card.ink = True
             card.tooltip = "Show all" if key == "total" else f"Show only: {title.lower()}"
-            if active and key != "total":
-                card.bgcolor = ft.Colors.with_opacity(0.10, accent)
             controls.append(card)
         kpi_row.controls = controls
 
@@ -272,7 +292,8 @@ def build_documents_view(
         )
 
     def badges(doc):
-        chips = []
+        # A measure's stage comes first: it says where the measure is in the Sanggunian.
+        chips = [widgets.chip(doc["stage"], stage_color(doc["stage"]))] if doc.get("stage") else []
         if doc.get("is_public") and not archived:
             chips.append(widgets.chip("Public", ft.Colors.GREEN_700))
         priority = doc.get("priority")
@@ -428,16 +449,25 @@ def build_documents_view(
                 value=str(state["page_size"]),
                 options=[ft.dropdown.Option(key=str(size), text=f"{size} per page") for size in PAGE_SIZES],
                 width=150,
-                dense=True,
+                **{**field_style, "bgcolor": tint, "border_color": ft.Colors.TRANSPARENT},
                 **{DROPDOWN_EVENT: lambda e: change_page_size(e.control.value)},
             ),
-            ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous page", disabled=current <= 1, on_click=lambda _: load(page_number=current - 1)),
+            ft.Container(width=8),
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=accent, tooltip="Previous page", disabled=current <= 1, on_click=lambda _: load(page_number=current - 1)),
         ]
         for number in range(max(1, current - 2), min(total_pages, current + 2) + 1):
-            controls.append(ft.TextButton(str(number), disabled=number == current, on_click=lambda _, n=number: load(page_number=n)))
+            if number == current:
+                controls.append(ft.Container(
+                    content=ft.Text(str(number), size=14, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+                    width=42, height=42, border_radius=21,
+                    alignment=ft.Alignment(0, 0),
+                    bgcolor=tint,
+                ))
+            else:
+                controls.append(ft.TextButton(str(number), on_click=lambda _, n=number: load(page_number=n)))
         controls += [
-            ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next page", disabled=current >= total_pages, on_click=lambda _: load(page_number=current + 1)),
-            widgets.hint(f"Page {current} of {total_pages}"),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=accent, tooltip="Next page", disabled=current >= total_pages, on_click=lambda _: load(page_number=current + 1)),
+            ft.Text(f"Page {current} of {total_pages}", size=13, color=widgets.muted_color()),
         ]
         pagination.controls = controls
 
@@ -462,57 +492,54 @@ def build_documents_view(
                 message = "No documents match your search or filters."
             else:
                 message = "Nothing is archived. Documents you archive appear here and can be restored." if archived else "No documents yet. Registered documents appear here."
-            rows_column.controls = [widgets.empty(message)]
+            rows_column.controls = [widgets.empty_box(message)]
         render_pagination()
 
+    pill = ft.StadiumBorder()
     header_actions = []
     if can_register and open_register and not archived:
-        header_actions.append(ft.FilledButton("Register document", icon=ft.Icons.ADD, on_click=lambda _: open_register()))
+        header_actions.append(ft.FilledButton(
+            "Register document", icon=ft.Icons.ADD, on_click=lambda _: open_register(), height=44,
+            style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, padding=ft.Padding(18, 0, 18, 0)),
+        ))
     if can_import and open_bulk_register and not archived:
-        header_actions.append(ft.OutlinedButton("Multiple registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register()))
+        header_actions.append(ft.OutlinedButton(
+            "Multiple registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register(), height=44,
+            style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLUE_800, side=ft.BorderSide(1, ft.Colors.WHITE), padding=ft.Padding(18, 0, 18, 0)),
+        ))
 
-    filter_controls = [*filters, sort_filter] if can_filter else [sort_filter]
-    header_card = surface_card(
-        ft.Column(
-            [
-                # A wrapping Row cannot hold an expanding child (Flutter renders a gray box), so split by width instead.
-                ft.ResponsiveRow(
-                    [
-                        ft.Container(
-                            section_header("Archived Documents", "Documents taken out of circulation. Restore one to put it back on Documents.", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BLUE_GREY_700)
-                            if archived else
-                            section_header("Documents", "Every active legislative document, where it is, and what you can do with it.", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700),
-                            col={"xs": 12, "lg": 7},
-                        ),
-                        ft.Container(ft.Row(header_actions, spacing=8, wrap=True, alignment=ft.MainAxisAlignment.END), col={"xs": 12, "lg": 5}),
-                    ],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                kpi_row,
-            ],
-            spacing=14,
-        ),
-        padding=18,
-        expand=False,
+    filter_controls = [filter_boxes[control] for control in ([*filters, sort_filter] if can_filter else [sort_filter])]
+    banner = (
+        widgets.banner("Archived Documents", "Documents taken out of circulation. Restore one to put it back on Documents.", ft.Icons.ARCHIVE_OUTLINED)
+        if archived else
+        widgets.banner("Documents", "Every active legislative document, where it is, and what you can do with it.", ft.Icons.INVENTORY_2, actions=header_actions)
     )
+    kpi_card = surface_card(kpi_row, padding=18, expand=False)
     list_card = surface_card(
         ft.Column(
             [
-                ft.Row([search_field, ft.TextButton("Clear filters", icon=ft.Icons.FILTER_ALT_OFF_OUTLINED, on_click=clear_filters)], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Row(filter_controls, spacing=8, run_spacing=8, wrap=True),
+                ft.Row(
+                    [
+                        search_field,
+                        ft.TextButton("Clear filters", icon=ft.Icons.FILTER_ALT_OUTLINED, on_click=clear_filters, style=ft.ButtonStyle(color=accent)),
+                    ],
+                    spacing=12,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Row(filter_controls, spacing=16, run_spacing=12, wrap=True),
                 selection_bar,
                 ft.Row([result_text, notice_text], spacing=12, wrap=True),
                 rows_column,
                 pagination,
             ],
-            spacing=12,
+            spacing=16,
         ),
-        padding=18,
+        padding=22,
         expand=False,
     )
 
     if can_filter:
         load_reference_options()
     load(page_number=1)
-    view = ft.Column([header_card, list_card], spacing=12, expand=False, tight=True)
+    view = ft.Column([banner, kpi_card, list_card], spacing=16, expand=False, tight=True)
     return view, refresh

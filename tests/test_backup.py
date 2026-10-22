@@ -121,3 +121,29 @@ def test_sqlite_databases_are_copied_instead_of_dumped(tmp_path, storage):
 def test_missing_storage_folder_is_reported_not_silently_skipped(tmp_path):
     with pytest.raises(backup.BackupFailed, match="storage"):
         run(tmp_path, tmp_path / "nowhere")
+
+
+def test_a_mirror_gets_a_verified_copy_and_its_own_retention(tmp_path, storage):
+    mirror = tmp_path / "mirror"
+    (mirror / "2026-09-30_0200_nightly").mkdir(parents=True)
+    folder = run(tmp_path, storage)
+
+    copy = backup.mirror_backup(folder, mirror, now=NOW)
+
+    assert copy == mirror / "2026-10-21_0200_nightly"
+    assert (copy / "legi_sys.dump").read_bytes() == b"PGDMP fake dump"
+    assert (copy / "documents_storage" / "a.pdf").exists()
+    assert sorted(p.name for p in mirror.iterdir()) == ["2026-10-21_0200_nightly"]
+    assert "MIRROR OK 2026-10-21_0200_nightly" in (tmp_path / "backups" / "backup.log").read_text()
+
+
+def test_a_mirror_copy_that_does_not_match_the_manifest_is_discarded(tmp_path, storage):
+    folder = run(tmp_path, storage)
+    manifest = json.loads((folder / "manifest.json").read_text())
+    (folder / "manifest.json").write_text(json.dumps({**manifest, "dump_sha256": "0" * 64}))
+
+    with pytest.raises(backup.BackupFailed, match="SHA-256"):
+        backup.mirror_backup(folder, tmp_path / "mirror", now=NOW)
+
+    assert list((tmp_path / "mirror").iterdir()) == []
+    assert "MIRROR FAILED" in (tmp_path / "backups" / "backup.log").read_text()
