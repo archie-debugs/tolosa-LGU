@@ -74,6 +74,18 @@ def event_summary(event):
 
 
 # Due within this many days counts as "soon".
+# A measure's stage (GLOSSARY.md: Stage): enacted stages green, endings their own colour, the rest blue.
+STAGE_COLORS = {
+    "Withdrawn": ft.Colors.BLUE_GREY_600, "Tabled": ft.Colors.AMBER_800, "Lost": ft.Colors.RED_700,
+    "Vetoed": ft.Colors.RED_700, "Posted": ft.Colors.GREEN_700, "Signed": ft.Colors.GREEN_700,
+    "Approved": ft.Colors.GREEN_700, "Adopted": ft.Colors.GREEN_700, "Lapsed into Law": ft.Colors.GREEN_700,
+}
+
+
+def stage_color(stage):
+    return STAGE_COLORS.get(stage, ft.Colors.BLUE_700)
+
+
 DUE_SOON_DAYS = 3
 DUE_COLORS = {"overdue": ft.Colors.RED_700, "soon": ft.Colors.AMBER_800, "later": ft.Colors.BLUE_GREY_600}
 DUE_DATE_HINT = "Enter the due date as YYYY-MM-DD, for example 2026-11-05."

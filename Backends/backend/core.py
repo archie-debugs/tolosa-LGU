@@ -164,6 +164,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "view_qr_tracking",
         "set_documents_for_sb_members",
         "manage_members_and_committees",
+        "change_measure_stage",
         "view_audit_logs",
         "export_audit_logs",
         "view_analytics",

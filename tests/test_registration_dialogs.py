@@ -303,3 +303,40 @@ def test_several_files_share_one_due_date():
     press(dialog, "Register 1 document")
 
     assert api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["due_date"] == "2026-12-01"
+
+
+MEASURE_OPTIONS = {"offices": [MAYOR], "default_office_id": 2, "office_locked": True, "categories": [],
+                   "document_types": ["Ordinance", "Memorandum"],
+                   "measure_stages": {"ordinance": ["Filed", "First Reading", "Approved"], "resolution": ["Filed", "Adopted"]}}
+
+
+def choose(dropdown, value):
+    dropdown.value = value
+    (getattr(dropdown, "on_change", None) or getattr(dropdown, "on_select", None))(None)
+
+
+def test_a_measure_is_registered_at_the_stage_chosen_and_other_documents_have_none():
+    page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS))
+    stage = field(dialog, "Stage")
+    assert stage.value == "Filed" and [option.key or option.text for option in stage.options] == ["Filed", "First Reading", "Approved"]
+
+    field(dialog, "Title").value = "Market code"
+    stage.value = "First Reading"
+    press(dialog, "Register")
+    assert api.posted("/documents/register")[0]["data"]["stage"] == "First Reading"
+
+    page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS))
+    choose(field(dialog, "Document type"), "Memorandum")
+    field(dialog, "Title").value = "Office memo"
+    press(dialog, "Register")
+    assert "stage" not in api.posted("/documents/register")[0]["data"]
+
+
+def test_a_measure_registered_with_its_file_sends_its_stage():
+    page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS))
+    press(dialog, "Choose file")
+    files.on_picked([{"name": "Parking.pdf", "size": 2048}])
+    press(dialog, "Register")
+    files.on_progress("Parking.pdf", 1.0, None)
+
+    assert api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["stage"] == "Filed"

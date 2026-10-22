@@ -149,6 +149,10 @@ class Document(Base):
     # When the document needs to be acted on; drives the due chips and reminders.
     due_date = Column(Date, nullable=True, index=True)
 
+    # A measure's legislative stage (Backends/backend/stages.py); None for documents that aren't measures.
+    # Always the stage of its latest DocumentStageChange.
+    stage = Column(String(40), nullable=True, index=True)
+
     archived = Column(Boolean, nullable=False, default=False, index=True)
     archived_at = Column(DateTime(timezone=True), nullable=True, index=True)
     archived_by = Column(String, nullable=True, index=True)
@@ -358,6 +362,28 @@ class TodaysDocument(Base):
 
     document = relationship("Document", foreign_keys=[document_id])
     added_by = relationship("User", foreign_keys=[added_by_id])
+
+
+class DocumentStageChange(Base):
+    """One entry in a measure's stage history. Never edited or deleted: a mistake gets a new
+    entry with is_correction and a reason (docs/adr/0003)."""
+
+    __tablename__ = "document_stage_changes"
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    stage = Column(String(40), nullable=False)
+    previous_stage = Column(String(40), nullable=True)
+    # The day it happened, which can be earlier than the day it was recorded.
+    effective_on = Column(Date, nullable=False)
+    committee_id = Column(Integer, ForeignKey("committees.id"), nullable=True)
+    note = Column(Text, nullable=True)
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    changed_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    changed_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    committee = relationship("Committee", foreign_keys=[committee_id])
 
 
 class DocumentHistory(Base):
