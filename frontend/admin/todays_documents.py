@@ -6,6 +6,9 @@ import flet as ft
 
 from frontend.admin.tracking_ui import TrackingWidgets, document_reference
 
+# Served from the shared assets folder; the banner shows plain colour when it is missing.
+BANNER_IMAGE = "sb_tolosa_homepage.jpg"
+
 
 def document_label(document):
     reference = document_reference(document)
@@ -25,7 +28,7 @@ def picked_date(value):
     return value if isinstance(value, date) else None
 
 
-def build_todays_documents_view(page, api, surface_card, section_header, today=None, open_details=None):
+def build_todays_documents_view(page, api, surface_card, today=None, open_details=None):
     """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     `open_details(document)` opens a document's details, when the user may see them."""
     widgets = TrackingWidgets(page)
@@ -38,7 +41,7 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
 
     date_text = ft.Text(size=16, weight=ft.FontWeight.BOLD, color=widgets.heading_color())
     date_hint = widgets.hint("")
-    counts_text = ft.Text("", size=12, color=widgets.body_color())
+    counts_text = ft.Text("", size=13, color=widgets.body_color())
     notice_row = ft.Row([], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
     upcoming_row = ft.Row([], spacing=8, wrap=True, run_spacing=8)
     list_column = ft.Column(spacing=0)
@@ -50,11 +53,112 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
         hint_text="Search by title, tracking or document number",
         prefix_icon=ft.Icons.SEARCH,
         expand=True,
-        height=44,
+        height=46,
+        border_radius=10,
+        border_color=widgets.line_color(),
+        focused_border_color=ft.Colors.BLUE_700,
         content_padding=ft.Padding(12, 4, 12, 4),
     )
-    search_section = ft.Column(spacing=8)
+    search_section = ft.Column(spacing=12)
     date_picker = ft.DatePicker(first_date=datetime(2020, 1, 1), last_date=datetime(2100, 12, 31))
+
+    def accent():
+        return widgets.tone(ft.Colors.BLUE_700, ft.Colors.BLUE_300)
+
+    def tint():
+        return widgets.tone("#F4F8FE", "#1B2430")
+
+    def card_title(icon, title, *extra, subtitle=None):
+        """A card's title with its round icon badge."""
+        heading = ft.Row(
+            [ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color=widgets.link_color()), *extra],
+            spacing=20, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        badge = ft.Container(
+            content=ft.Icon(icon, size=24, color=accent()),
+            width=44, height=44, border_radius=22,
+            alignment=ft.Alignment(0, 0),
+            bgcolor=ft.Colors.with_opacity(0.10, accent()),
+        )
+        lines = [heading, widgets.hint(subtitle)] if subtitle else [heading]
+        return ft.Row([badge, ft.Column(lines, spacing=4, expand=True)], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def empty_state(message):
+        return ft.Container(
+            content=ft.Row(
+                [ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=20, color=widgets.muted_color()), ft.Text(message, size=13, color=widgets.muted_color(), expand=True)],
+                spacing=14,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=18,
+            bgcolor=tint(),
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=10,
+        )
+
+    def boxed(control):
+        """A date-bar button in its own framed tile."""
+        return ft.Container(
+            content=control,
+            padding=ft.Padding(4, 2, 4, 2),
+            bgcolor=tint(),
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=12,
+        )
+
+    def banner():
+        background = widgets.tone("#EEF4FD", "#16202C")
+        icon_tile = ft.Container(
+            content=ft.Container(
+                content=ft.Icon(ft.Icons.DESCRIPTION, size=30, color=ft.Colors.WHITE),
+                width=62, height=62, border_radius=14,
+                alignment=ft.Alignment(0, 0),
+                bgcolor=ft.Colors.BLUE_700,
+            ),
+            padding=6,
+            border_radius=18,
+            bgcolor=ft.Colors.with_opacity(0.14, ft.Colors.BLUE_700),
+        )
+        heading = ft.Column(
+            [
+                ft.Text("Documents for SB Members", size=24, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+                ft.Text("Set the documents SB Members need for the day. They appear right away in the SB Member app.", size=14, color=widgets.muted_color()),
+            ],
+            spacing=4,
+            alignment=ft.MainAxisAlignment.CENTER,
+            expand=True,
+        )
+        return ft.Container(
+            content=ft.Stack(
+                [
+                    ft.Container(
+                        content=ft.Image(src=BANNER_IMAGE, fit=ft.ImageFit.COVER, opacity=0.45, error_content=ft.Container()),
+                        right=0, top=0, bottom=0, width=560,
+                    ),
+                    # Fades the photo in from the left, so it has no visible edge.
+                    ft.Container(
+                        gradient=ft.LinearGradient(
+                            begin=ft.Alignment(-1, 0),
+                            end=ft.Alignment(1, 0),
+                            colors=[background, ft.Colors.with_opacity(0.7, background), ft.Colors.with_opacity(0.2, background), ft.Colors.with_opacity(0.1, background)],
+                            stops=[0.0, 0.3, 0.7, 1.0],
+                        ),
+                        right=0, top=0, bottom=0, width=560,
+                    ),
+                    ft.Container(
+                        content=ft.Row([icon_tile, heading], spacing=22, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        padding=ft.Padding(20, 0, 20, 0),
+                        alignment=ft.Alignment(-1, 0),
+                        left=0, right=0, top=0, bottom=0,
+                    ),
+                ],
+                height=124,
+            ),
+            bgcolor=background,
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=18,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
 
     def editable():
         return state["date"] >= state["today"]
@@ -161,7 +265,7 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
     def render_list():
         items = state["items"]
         list_column.controls = [entry_row(index, entry) for index, entry in enumerate(items)] or [
-            widgets.empty("No documents set for this day yet." + (" Search below to add some." if editable() else ""))
+            empty_state("No documents set for this day yet." + (" Search below to add some." if editable() else ""))
         ]
 
     def render_results():
@@ -194,7 +298,7 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
                 ),
                 action,
             ]))
-        results_column.controls = rows or [widgets.empty("No documents match your search." if searching else "There are no active documents yet.")]
+        results_column.controls = rows or [empty_state("No documents match your search." if searching else "There are no active documents yet.")]
 
     def render(update=True):
         render_header()
@@ -331,29 +435,38 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
 
     search_field.on_submit = search
     search_section.controls = [
-        widgets.title("Add a document"),
-        widgets.hint("All documents except archived ones, newest first. Archived documents are left out because SB Members cannot see them."),
+        card_title(
+            ft.Icons.ADD_CIRCLE, "Add a document",
+            subtitle="All documents except archived ones, newest first. Archived documents are left out because SB Members cannot see them.",
+        ),
         ft.Row(
             [
                 search_field,
-                ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=search, height=44),
-                ft.TextButton("Clear", on_click=clear_search),
+                ft.FilledButton(
+                    "Search", icon=ft.Icons.SEARCH, on_click=search, height=46,
+                    style=ft.ButtonStyle(shape=ft.StadiumBorder(), padding=ft.Padding(28, 0, 28, 0), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+                ),
+                ft.TextButton("Clear", on_click=clear_search, style=ft.ButtonStyle(color=accent())),
             ],
-            spacing=8,
+            spacing=12,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         results_column,
         ft.Row([results_summary, previous_results, next_results], alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER),
     ]
 
+    date_text.size = 19
+    date_text.color = widgets.link_color()
+    date_hint.size = 13
     date_bar = ft.Row(
         [
-            ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous day", on_click=lambda _: go_to(state["date"] - timedelta(days=1))),
-            ft.Column([date_text, date_hint], spacing=1, expand=True),
-            ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next day", on_click=lambda _: go_to(state["date"] + timedelta(days=1))),
-            ft.IconButton(ft.Icons.CALENDAR_MONTH_OUTLINED, tooltip="Pick a date", on_click=pick_date),
-            ft.TextButton("Today", icon=ft.Icons.TODAY, on_click=lambda _: go_to(state["today"])),
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=accent(), tooltip="Previous day", on_click=lambda _: go_to(state["date"] - timedelta(days=1))),
+            ft.Column([date_text, date_hint, upcoming_row], spacing=6, expand=True),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=accent(), tooltip="Next day", on_click=lambda _: go_to(state["date"] + timedelta(days=1))),
+            boxed(ft.IconButton(ft.Icons.CALENDAR_MONTH, icon_color=accent(), tooltip="Pick a date", on_click=pick_date)),
+            boxed(ft.TextButton("Today", icon=ft.Icons.TODAY, on_click=lambda _: go_to(state["today"]), style=ft.ButtonStyle(color=accent()))),
         ],
-        spacing=4,
+        spacing=10,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
@@ -361,10 +474,10 @@ def build_todays_documents_view(page, api, surface_card, section_header, today=N
     load(update=False, keep_notice=True)
     return ft.Column(
         [
-            section_header("Documents for SB Members", "Set the documents SB Members need for the day. They appear right away in the SB Member app.", ft.Icons.EVENT_NOTE_OUTLINED, ft.Colors.BLUE_700),
-            surface_card(ft.Column([date_bar, upcoming_row], spacing=10), padding=18),
-            surface_card(ft.Column([ft.Row([widgets.title("On this day's list"), counts_text], spacing=10, wrap=True), notice_row, list_column], spacing=8), padding=18),
-            surface_card(search_section, padding=18),
+            banner(),
+            surface_card(date_bar, padding=ft.Padding(14, 18, 18, 18)),
+            surface_card(ft.Column([card_title(ft.Icons.DESCRIPTION_OUTLINED, "On this day's list", counts_text), notice_row, list_column], spacing=12), padding=20),
+            surface_card(search_section, padding=20),
         ],
         spacing=16,
     )

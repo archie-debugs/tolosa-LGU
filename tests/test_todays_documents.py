@@ -284,7 +284,7 @@ def test_employee_screen_adds_a_document_then_its_note():
 
     from datetime import date as _date
     page = DummyPage()
-    view = build_todays_documents_view(page, fake_api, lambda content, **k: ft.Container(content=content), lambda *a: ft.Text(a[0]), today=_date(2026, 10, 18))
+    view = build_todays_documents_view(page, fake_api, lambda content, **k: ft.Container(content=content), today=_date(2026, 10, 18))
     page.add(view)
     assert any(text.startswith("No documents set for this day yet.") for text in page_texts(page))
     # Every non-archived document is listed before anything is searched.

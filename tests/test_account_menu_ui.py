@@ -412,7 +412,7 @@ class Search:
 
 
 def search_box(shell):
-    return next(c for c in find(shell.root, ft.TextField) if c.hint_text == "Search documents")
+    return next(c for c in find(shell.root, ft.TextField) if c.hint_text == "Search documents, tracking number, or title...")
 
 
 def results_panel(shell):
@@ -427,7 +427,7 @@ def run_search(shell, text):
 
 def test_no_search_box_without_a_search_function():
     shell = Shell()
-    assert not [c for c in find(shell.root, ft.TextField) if c.hint_text == "Search documents"]
+    assert not [c for c in find(shell.root, ft.TextField) if c.hint_text == "Search documents, tracking number, or title..."]
 
 
 def test_search_lists_matches_under_the_bar_and_opens_one():
