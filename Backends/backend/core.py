@@ -163,6 +163,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "print_qr_codes",
         "view_qr_tracking",
         "set_documents_for_sb_members",
+        "manage_members_and_committees",
         "view_audit_logs",
         "export_audit_logs",
         "view_analytics",
@@ -200,9 +201,6 @@ USER_MANAGEMENT_PERMISSIONS = {
 }
 UI_PERMISSIONS = {
     "delete_documents",
-    "add_committee",
-    "edit_committee",
-    "delete_committee",
     "modify_system_settings",
     "manage_public_visibility",
 }
