@@ -7,6 +7,9 @@ import flet as ft
 
 from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time
 
+# Served from the shared assets folder; the banner shows plain colour when it is missing.
+BANNER_IMAGE = "sb_tolosa_homepage.jpg"
+
 
 def build_office_queue_view(
     page,
@@ -332,21 +335,138 @@ def build_office_queue_view(
     return view, refresh
 
 
-def build_office_overview_view(page, api, surface_card, section_header, open_office):
+def build_office_overview_view(page, api, surface_card, open_office):
     """Every active office's workload, for the Super Administrator. `open_office(office)` opens one."""
     widgets = TrackingWidgets(page)
     notice_text = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
-    rows_column = ft.Column(spacing=0)
+    rows_column = ft.Column(spacing=12)
+    tint = widgets.tone("#F7FAFE", "#1B2430")
+    count_tint = widgets.tone("#EDF3FC", "#22303D")
 
-    def count_cell(value, label, color, width=110):
+    def count_cell(value, label, color, width=140):
         return ft.Column(
             [
-                ft.Text(str(value), size=18, weight=ft.FontWeight.BOLD, color=color if value else widgets.muted_color()),
-                widgets.hint(label),
+                ft.Text(str(value), size=18, weight=ft.FontWeight.BOLD, color=color if value else widgets.link_color()),
+                ft.Text(label, size=12, color=color if value else widgets.muted_color()),
             ],
-            spacing=0,
+            spacing=2,
             width=width,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def count_divider():
+        return ft.Container(width=1, height=38, bgcolor=widgets.line_color())
+
+    def office_row(office):
+        name = office.get("name") or "Unnamed office"
+        if office.get("office_code"):
+            name = f"{name} ({office['office_code']})"
+        overdue = office.get("incoming_overdue") or 0
+        counts = ft.Container(
+            content=ft.Row(
+                [
+                    count_cell(office.get("incoming", 0), "To receive", ft.Colors.AMBER_800),
+                    count_divider(),
+                    count_cell(office.get("holding", 0), "Holding", ft.Colors.GREEN_700),
+                    count_divider(),
+                    count_cell(office.get("outgoing", 0), "Sent, not received", ft.Colors.BLUE_700),
+                ],
+                spacing=0,
+                tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(4, 10, 4, 10),
+            bgcolor=count_tint,
+            border_radius=10,
+        )
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=widgets.tone(ft.Colors.BLUE_700, ft.Colors.BLUE_300), size=26),
+                        width=54, height=54, border_radius=14,
+                        alignment=ft.Alignment(0, 0),
+                        bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.BLUE_700),
+                    ),
+                    ft.Column(
+                        [
+                            ft.Text(name, size=16, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+                            *([widgets.chip(f"{overdue} overdue to receive", ft.Colors.RED_700)] if overdue else []),
+                        ],
+                        spacing=4,
+                        expand=True,
+                    ),
+                    counts,
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT, color=widgets.tone(ft.Colors.BLUE_700, ft.Colors.BLUE_300)),
+                ],
+                spacing=16,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(10, 6, 12, 6),
+            bgcolor=tint,
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=12,
+            on_click=lambda _, selected=office: open_office(selected),
+            ink=True,
+        )
+
+    def banner():
+        blue = "#0D4FB0"
+        return ft.Container(
+            content=ft.Stack(
+                [
+                    ft.Container(
+                        content=ft.Image(src=BANNER_IMAGE, fit=ft.ImageFit.COVER, error_content=ft.Container()),
+                        right=0, top=0, bottom=0, width=700,
+                    ),
+                    # Blends the photo into the blue, so the heading sits on solid colour.
+                    ft.Container(
+                        gradient=ft.LinearGradient(
+                            begin=ft.Alignment(-1, 0),
+                            end=ft.Alignment(1, 0),
+                            colors=[blue, ft.Colors.with_opacity(0.75, blue), ft.Colors.with_opacity(0.15, blue), ft.Colors.with_opacity(0.0, blue)],
+                            stops=[0.0, 0.25, 0.6, 1.0],
+                        ),
+                        right=0, top=0, bottom=0, width=700,
+                    ),
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Container(
+                                    content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, size=32, color=ft.Colors.BLUE_700),
+                                    width=72, height=72, border_radius=16,
+                                    alignment=ft.Alignment(0, 0),
+                                    bgcolor=ft.Colors.with_opacity(0.92, ft.Colors.WHITE),
+                                ),
+                                ft.Column(
+                                    [
+                                        ft.Text("Office Dashboard", size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                        ft.Text("Every active office's workload. Select an office to see its queue.", size=15, color=ft.Colors.with_opacity(0.92, ft.Colors.WHITE)),
+                                    ],
+                                    spacing=4,
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    expand=True,
+                                ),
+                            ],
+                            spacing=24,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        padding=ft.Padding(26, 0, 26, 0),
+                        alignment=ft.Alignment(-1, 0),
+                        left=0, right=0, top=0, bottom=0,
+                    ),
+                    ft.Container(
+                        content=ft.IconButton(ft.Icons.REFRESH, icon_color=ft.Colors.WHITE, tooltip="Refresh", on_click=lambda _: load()),
+                        bgcolor=ft.Colors.with_opacity(0.25, ft.Colors.BLACK),
+                        border_radius=20,
+                        top=10, right=10,
+                    ),
+                ],
+                height=132,
+            ),
+            gradient=ft.LinearGradient(begin=ft.Alignment(-1, 0), end=ft.Alignment(1, 0), colors=["#0B47A3", "#1565C0"]),
+            border_radius=16,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
 
     def load(update=True):
@@ -360,45 +480,14 @@ def build_office_overview_view(page, api, surface_card, section_header, open_off
             if update:
                 page.update()
             return
-        rows = []
-        for office in payload.get("items") or []:
-            name = office.get("name") or "Unnamed office"
-            if office.get("office_code"):
-                name = f"{name} ({office['office_code']})"
-            overdue = office.get("incoming_overdue") or 0
-            rows.append(widgets.list_row(
-                [
-                    ft.Icon(ft.Icons.APARTMENT, color=widgets.link_color(), size=20),
-                    ft.Column(
-                        [
-                            ft.Text(name, size=13, weight=ft.FontWeight.BOLD, color=widgets.heading_color()),
-                            *([widgets.chip(f"{overdue} overdue to receive", ft.Colors.RED_700)] if overdue else []),
-                        ],
-                        spacing=4,
-                        expand=True,
-                    ),
-                    count_cell(office.get("incoming", 0), "To receive", ft.Colors.AMBER_800),
-                    count_cell(office.get("holding", 0), "Holding", ft.Colors.GREEN_700),
-                    count_cell(office.get("outgoing", 0), "Sent, not received", ft.Colors.BLUE_700),
-                    ft.Icon(ft.Icons.CHEVRON_RIGHT, color=widgets.muted_color()),
-                ],
-                on_click=lambda _, selected=office: open_office(selected),
-            ))
-        rows_column.controls = rows or [widgets.empty("No active offices found.")]
+        rows_column.controls = [office_row(office) for office in payload.get("items") or []] or [widgets.empty("No active offices found.")]
         if update:
             page.update()
 
     load(update=False)
     return ft.Column(
         [
-            ft.Row(
-                [
-                    ft.Container(section_header("Office Dashboard", "Every active office's workload. Select an office to see its queue.", ft.Icons.LOCATION_CITY_OUTLINED, ft.Colors.BLUE_700), expand=True),
-                    ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: load()),
-                ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
+            banner(),
             notice_text,
             surface_card(rows_column, padding=18),
         ],

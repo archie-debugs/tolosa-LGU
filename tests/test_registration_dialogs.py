@@ -121,7 +121,8 @@ def find_button(dialog, text):
 
 
 def field(dialog, name):
-    return next(c for c in walk(dialog) if type(c).__name__ in ("TextField", "Dropdown") and c.label == name)
+    """A field by its name: the form draws names above the fields and keeps them in `data`."""
+    return next(c for c in walk(dialog) if type(c).__name__ in ("TextField", "Dropdown") and name in (c.label, c.data))
 
 
 def click(control):
