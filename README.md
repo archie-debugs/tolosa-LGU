@@ -34,14 +34,21 @@ Frontend roles are physically organized under `frontend/admin`, `frontend/employ
 
 ## Database updates
 
-Starting the backend does **not** update the database. After every `git pull`, run:
+Starting the backend **does** update the database. The main backend and the employee backend both run `alembic upgrade head` on startup (`run_database_migrations()` in `Backends/backend/schema.py`) against whatever `DATABASE_URL` in `.env` points at. An empty database is built from the models and stamped at head instead.
+
+This means the code that is checked out when the backend starts decides the database schema:
+
+- **Start the backend from `main`.** If a branch with an unmerged migration is checked out, starting the backend applies that migration to the real database, and `main` may then refuse to start until the branch is merged.
+- **Pull before starting.** A backend whose code is older than the database fails at startup, because Alembic can't find the database's revision.
+- **Only the computer that hosts the database applies migrations.** The laptops connect as users that can't create or alter tables, so their backend fails at startup if their checkout has a migration the database doesn't have yet. Start the backend on the database computer first after pulling a migration.
+
+To check where the database is:
 
 ```
-.venv\Scripts\python.exe -m alembic upgrade head
 .venv\Scripts\python.exe -m alembic current
 ```
 
-`alembic` reads `DATABASE_URL` from `.env`, so there is no need to type the password. `current` should end with `(head)`. Skipping this makes new features fail with database errors.
+`alembic` reads `DATABASE_URL` from `.env`, so there is no need to type the password. `current` should end with `(head)`. Settings → System Information also shows the migration version.
 
 ## Two-step login
 
