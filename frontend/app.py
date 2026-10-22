@@ -71,12 +71,25 @@ def serve_compressed(host, port, assets_dir):
     url = f"http://{host or '127.0.0.1'}:{port}"
 
     def started():
+        # Flet's web app runs its own lifespan, so Starlette never calls "startup" handlers;
+        # wait for the port to answer instead.
+        import socket
+        import time
+
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                break
+            except OSError:
+                time.sleep(0.25)
         print(f"Frontend running at {url}")
         if os.getenv("FRONTEND_OPEN_BROWSER", "1") != "0":  # ft.app's web view opened a tab too
             import webbrowser
             webbrowser.open(url)
 
-    web_app.add_event_handler("startup", started)
+    import threading
+
+    threading.Thread(target=started, daemon=True).start()
     uvicorn.run(web_app, host=host, port=port, log_level="warning")
     return True
 
