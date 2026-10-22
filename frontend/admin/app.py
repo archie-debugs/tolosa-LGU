@@ -121,6 +121,9 @@ load_dotenv(override=True)
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN")
+# Changes every time the app starts. A sign-in saved in the browser during an earlier run
+# is not reused: after a restart everyone goes through the login screen again.
+APP_RUN_ID = secrets.token_hex(16)
 
 
 def get_admin_headers(access_token=None):
@@ -285,6 +288,7 @@ def main(page: ft.Page, session=None):
                 page.client_storage.set("sb_current_user", current_user or "")
                 page.client_storage.set("sb_current_user_role", current_user_role or "")
                 page.client_storage.set("sb_current_user_permissions", json.dumps(current_user_permissions or []))
+                page.client_storage.set("sb_app_run", APP_RUN_ID)
         except Exception:
             pass
 
@@ -296,6 +300,7 @@ def main(page: ft.Page, session=None):
                 page.client_storage.remove("sb_current_user")
                 page.client_storage.remove("sb_current_user_role")
                 page.client_storage.remove("sb_current_user_permissions")
+                page.client_storage.remove("sb_app_run")
         except Exception:
             pass
 
@@ -4944,6 +4949,14 @@ def main(page: ft.Page, session=None):
             saved_role = page.client_storage.get("sb_current_user_role")
             saved_permissions = page.client_storage.get("sb_current_user_permissions")
             if not saved_access or not saved_user:
+                return False
+            if page.client_storage.get("sb_app_run") != APP_RUN_ID:
+                # Saved during an earlier run of the app: end that session and ask for a login.
+                try:
+                    http.post(f"{BACKEND_URL}/auth/logout", headers={"Authorization": f"Bearer {saved_access}"}, verify=False, timeout=10)
+                except Exception:
+                    pass
+                clear_session_state()
                 return False
             runtime_token = saved_access
             refresh_token = saved_refresh
