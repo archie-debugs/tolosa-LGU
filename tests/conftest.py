@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 
 import pytest
@@ -35,7 +36,13 @@ else:
     os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH}"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 
-from Backends.backend import database, models  # noqa: E402
+# Stored attachments, QR images and in-progress uploads go to a throwaway folder too, never
+# the real document storage. The paths are fixed when core is imported, so import it now.
+TEST_STORAGE_ROOT = tempfile.mkdtemp(prefix="sb_tolosa_pytest_storage_")
+os.environ["DOCUMENT_STORAGE_DIR"] = os.path.join(TEST_STORAGE_ROOT, "documents")
+os.environ["TEMP_UPLOAD_DIR"] = os.path.join(TEST_STORAGE_ROOT, "tmp")
+
+from Backends.backend import core, database, models  # noqa: E402
 
 if TEST_DATABASE_URL:
     # Start empty, like the SQLite file, so the app's own startup builds the current schema
@@ -56,10 +63,16 @@ def pytest_collection_finish(session):
             "tests must use the isolated database configured in tests/conftest.py.",
             returncode=1,
         )
+    storage_root = os.path.normcase(os.path.abspath(TEST_STORAGE_ROOT))
+    for name in ("UPLOAD_DIR", "TEMP_UPLOAD_DIR"):
+        path = os.path.normcase(getattr(core, name))
+        if os.path.commonpath([path, storage_root]) != storage_root:
+            pytest.exit(f"Refusing to run tests with {name} outside the test storage folder: {path}", returncode=1)
 
 
 def pytest_sessionfinish(session, exitstatus):
     database.engine.dispose()
+    shutil.rmtree(TEST_STORAGE_ROOT, ignore_errors=True)
     if TEST_DATABASE_PATH:
         try:
             os.remove(TEST_DATABASE_PATH)

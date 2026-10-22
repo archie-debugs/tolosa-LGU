@@ -23,7 +23,9 @@ def _default_document_storage_dir() -> str:
 # repository (DOCUMENT_STORAGE_DIR, or a per-user application data folder). Only in-progress
 # browser uploads belong in the system temp area, which the OS may clean at any time.
 UPLOAD_DIR = os.path.abspath(os.getenv("DOCUMENT_STORAGE_DIR", "").strip() or _default_document_storage_dir())
-TEMP_UPLOAD_DIR = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "tmp"))
+TEMP_UPLOAD_DIR = os.path.abspath(
+    os.getenv("TEMP_UPLOAD_DIR", "").strip() or os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "tmp")
+)
 # Attachments stored before DOCUMENT_STORAGE_DIR existed; scripts/migrate_attachment_storage.py moves them.
 LEGACY_UPLOAD_DIR = os.path.abspath(os.path.join(tempfile.gettempdir(), "sb_tolosa_tracking", "uploads"))
 
