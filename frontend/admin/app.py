@@ -139,6 +139,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
         BACKEND_URL = BACKEND_URL.replace("https://", "http://", 1)
 
 from frontend.admin.council import build_members_committees_view
+from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.document_details import open_document_details
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
@@ -1107,6 +1108,9 @@ def main(page: ft.Page, session=None):
     def members_committees_view():
         return build_members_committees_view(page, surface_card, backend_api,
                                              can_manage=has_permission("manage_members_and_committees"))
+
+    def council_sessions_view():
+        return build_sessions_view(page, surface_card, backend_api, can_manage=has_permission("manage_sessions"))
 
     reference_categories = []
     reference_document_types = []
@@ -2770,6 +2774,7 @@ def main(page: ft.Page, session=None):
             ft.dropdown.Option("Manage Permissions"),
             ft.dropdown.Option("Change Measure Stage"),
             ft.dropdown.Option("Manage Members And Committees"),
+            ft.dropdown.Option("Manage Sessions"),
             ft.dropdown.Option("View Audit Logs"),
             ft.dropdown.Option("Export Audit Logs"),
             ft.dropdown.Option("Modify System Settings"),
@@ -3357,6 +3362,7 @@ def main(page: ft.Page, session=None):
             "Today's Documents": "Let this employee set the documents SB Members see for the day.",
             "Users & Roles": "Control employee access to user and role administration.",
             "Members & Committees": "Let this employee keep the SB member roster, terms and committees up to date.",
+            "Sessions": "Let this employee add SB sessions, move them to held, and record or correct attendance.",
             "Audit Logs": "Control access to system activity records.",
             "Analytics": "Control access to analytics and reports.",
             "Office Workflow": "Control this employee's access to future office document functions.",
@@ -4669,6 +4675,7 @@ def main(page: ft.Page, session=None):
         # Legislative
         if not is_employee() or has_permission("view_documents"):
             items.append((ft.Icons.GROUPS_OUTLINED, "Members & Committees", lambda: members_committees_view(), "Legislative"))
+            items.append((ft.Icons.EVENT_AVAILABLE_OUTLINED, "Sessions", lambda: council_sessions_view(), "Legislative"))
 
         # Administration
         if is_super_admin:

@@ -45,6 +45,9 @@ EMPLOYEE_PERMISSION_GROUPS = {
     "Members & Committees": [
         "Manage Members And Committees",
     ],
+    "Sessions": [
+        "Manage Sessions",
+    ],
     "Audit Logs": [
         "View Audit Logs",
         "Export Audit Logs",
