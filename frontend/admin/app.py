@@ -4041,20 +4041,12 @@ def main(page: ft.Page, session=None):
                 "office": profile.get("office"),
                 "on_change_password": open_change_password,
             },
-            search=document_search() if has_permission("view_document_details") or has_permission("view_office_document_details") else None,
             notifications={
                 "load": lambda: backend_api("GET", "/notifications"),
                 "seen": lambda: backend_api("POST", "/notifications/seen"),
                 "open": lambda item: show_document_details({"id": item.get("document_id")}),
             },
         )
-
-    def document_search():
-        # The top-bar search: find documents this user may open, and open one in Document details.
-        def find(text):
-            return backend_api("GET", "/documents/quick-search", params={"q": text}).get("items") or []
-
-        return {"find": find, "open": show_document_details}
 
     def backend_api(method, path, timeout=15, **kwargs):
         response = http.request(method, f"{BACKEND_URL}{path}", headers=get_admin_headers(), verify=False, timeout=timeout, **kwargs)

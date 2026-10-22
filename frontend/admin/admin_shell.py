@@ -9,7 +9,6 @@ FOOTER_SECTION = "Account"
 MENU_SECTION = "Menu"
 # Below this width the profile button shows only the initials.
 COMPACT_WIDTH = 600
-SEARCH_MIN_LENGTH = 2
 
 
 def initials(name):
@@ -27,14 +26,12 @@ def render_shell(
     content_view,
     initial_selected_index: int = 0,
     account=None,
-    search=None,
     notifications=None,
 ):
     """Draw the sidebar, the profile bar and `content_view`.
 
     `account` describes the signed-in user for the profile menu:
     {"name", "role", "office", "on_change_password"}; missing keys fall back to `current_user`.
-    `search` adds a document search box: {"find": text -> [document, ...], "open": document -> None}.
     `notifications` adds a bell: {"load": () -> {"unread", "items"}, "seen": () -> None, "open": item -> None}.
     """
     account = account or {}
@@ -150,7 +147,6 @@ def render_shell(
         refresh_notifications()
         build_profile_bar()
         set_drawer(False)
-        results_panel.visible = False
         notifications_panel.visible = False
 
         try:
@@ -384,85 +380,6 @@ def render_shell(
 
     profile_bar = ft.Container(padding=ft.Padding(left=8, top=4, right=8, bottom=4))
 
-    # =========================================================
-    # DOCUMENT SEARCH
-    # =========================================================
-
-    search_box = ft.TextField(
-        hint_text="Search documents",
-        prefix_icon=ft.Icons.SEARCH,
-        dense=True,
-        border_radius=20,
-        content_padding=ft.Padding(left=12, top=8, right=12, bottom=8),
-        on_submit=lambda e: run_search(),
-        tooltip="Tracking number, document number or title; press Enter",
-    )
-    results_panel = ft.Container(data="search-results", visible=False, padding=ft.Padding(left=12, top=8, right=12, bottom=8), border_radius=10)
-
-    def show_results(heading, rows):
-        muted = ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_500
-        results_panel.content = ft.Column(
-            [
-                ft.Row(
-                    [
-                        ft.Text(heading, size=12, weight=ft.FontWeight.W_600, color=muted, expand=True),
-                        ft.IconButton(ft.Icons.CLOSE, icon_size=18, tooltip="Close", on_click=lambda e: hide_results()),
-                    ],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                *rows,
-            ],
-            spacing=2,
-            tight=True,
-        )
-        results_panel.bgcolor = ft.Colors.BLUE_GREY_900 if is_dark else ft.Colors.BLUE_GREY_50
-        results_panel.visible = True
-        page.update()
-
-    def hide_results():
-        results_panel.visible = False
-        page.update()
-
-    def open_result(item):
-        hide_results()
-        search["open"](item)
-
-    def result_row(item):
-        muted = ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_500
-        details = " · ".join(part for part in (item.get("document_type"), item.get("current_office")) if part)
-        line = [
-            ft.Text(item.get("tracking_number") or "-", size=12, weight=ft.FontWeight.BOLD, color=(ft.Colors.BLUE_200 if is_dark else ft.Colors.BLUE_900)),
-            ft.Text(item.get("title") or "Untitled", size=12, color=heading_color, expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-        ]
-        if item.get("archived"):
-            line.append(ft.Container(ft.Text("Archived", size=10, color=ft.Colors.AMBER_800), padding=ft.Padding(6, 2, 6, 2),
-                                     bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.AMBER_800), border_radius=8))
-        column = [ft.Row(line, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)]
-        if details:
-            column.append(ft.Text(details, size=11, color=muted))
-        return ft.Container(
-            content=ft.Column(column, spacing=1, tight=True),
-            padding=ft.Padding(left=6, top=6, right=6, bottom=6),
-            border_radius=8,
-            ink=True,
-            on_click=lambda e, chosen=item: open_result(chosen),
-        )
-
-    def run_search():
-        text_value = (search_box.value or "").strip()
-        if len(text_value) < SEARCH_MIN_LENGTH:
-            show_results(f"Type at least {SEARCH_MIN_LENGTH} characters.", [])
-            return
-        try:
-            items = search["find"](text_value) or []
-        except Exception as exc:
-            show_results("Search failed", [ft.Text(str(exc) or "Something went wrong.", size=12, color=ft.Colors.RED_400 if is_dark else ft.Colors.RED_700)])
-            return
-        if not items:
-            show_results(f"No documents match “{text_value}”.", [])
-            return
-        show_results(f"Results for “{text_value}”", [result_row(item) for item in items])
-
     def open_menu_view(label):
         index = next((i for i, item in enumerate(shell_nav_items) if item[1] == label), None)
         if index is not None:
@@ -572,7 +489,6 @@ def render_shell(
         )
         notifications_panel.bgcolor = ft.Colors.BLUE_GREY_900 if is_dark else ft.Colors.BLUE_GREY_50
         notifications_panel.visible = True
-        results_panel.visible = False
         if notification_state["unread"] and not notification_state["error"]:
             try:
                 notifications["seen"]()
@@ -652,11 +568,6 @@ def render_shell(
         leading = []
         if compact:
             leading = [ft.IconButton(ft.Icons.MENU, icon_color=heading_color, tooltip="Menu", on_click=lambda e: set_drawer(not drawer_open))]
-        if search:
-            search_box.expand = compact
-            search_box.width = None if compact else 320
-            search_box.color = heading_color
-            leading.append(search_box)
         profile_menu = ft.PopupMenuButton(
             content=ft.Container(
                 content=ft.Row(button, spacing=8, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -671,7 +582,7 @@ def render_shell(
         right = ft.Row([bell_button(), profile_menu], spacing=4, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER) if notifications else profile_menu
         profile_bar.content = ft.Row(
             leading + [right],
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN if (compact or search) else ft.MainAxisAlignment.END,
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN if compact else ft.MainAxisAlignment.END,
             spacing=8,
         )
         profile_bar.bgcolor = surface_color
@@ -703,7 +614,7 @@ def render_shell(
         bgcolor=surface_color,
         border=None,
         border_radius=0,
-        content=ft.Column([profile_bar, results_panel, notifications_panel, content_holder], expand=True, spacing=4),
+        content=ft.Column([profile_bar, notifications_panel, content_holder], expand=True, spacing=4),
     )
     scrim = ft.Container(
         left=0, top=0, right=0, bottom=0,
