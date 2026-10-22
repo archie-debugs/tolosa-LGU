@@ -789,12 +789,12 @@ def _parse_due_date(value) -> date | None:
         raise HTTPException(status_code=400, detail=DUE_DATE_ERROR)
 
 
-REGISTRATION_DETAILS = (("document_type", "Document type"), ("category", "Category"), ("due_date", "Due date"),
-                        ("assigned_to", "Referred to"), ("action_required", "Action required"), ("author", "Author"))
+REGISTRATION_DETAILS = (("document_type", "Document type"), ("assigned_to", "Referred to"),
+                        ("action_required", "Action required"), ("author", "Author"))
 
 
 def _require_registration_details(**values) -> None:
-    """Everything on the registration form but the description must be filled in."""
+    """Everything on the registration form but the description and due date must be filled in."""
     missing = [label for key, label in REGISTRATION_DETAILS if not str(values.get(key) or "").strip()]
     if missing:
         raise HTTPException(status_code=400, detail=f"Fill in the required fields: {', '.join(missing)}.")

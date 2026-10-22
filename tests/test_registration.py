@@ -185,10 +185,10 @@ def test_ordinance_and_resolution_keep_their_standard_spelling(client):
     assert body["document_type"] == "Ordinance"
 
 
-# Everything but the description is required
+# Everything but the description and due date is required
 
-@pytest.mark.parametrize("blank", ["document_type", "category", "due_date", "assigned_to", "action_required", "author"])
-def test_every_field_but_the_description_is_required(client, blank):
+@pytest.mark.parametrize("blank", ["document_type", "assigned_to", "action_required", "author"])
+def test_every_field_but_the_description_and_due_date_is_required(client, blank):
     response = register(client, headers_for(client, "admin"), **{blank: "  "})
     assert response.status_code == 400
     assert response.json()["detail"].startswith("Fill in the required fields:")
@@ -196,10 +196,11 @@ def test_every_field_but_the_description_is_required(client, blank):
         assert db.query(models.Document).count() == 0
 
 
-def test_the_description_is_optional(client):
-    response = register(client, headers_for(client, "admin"), description="")
+def test_the_description_due_date_and_category_are_optional(client):
+    response = register(client, headers_for(client, "admin"), description="", due_date="", category="")
     assert response.status_code == 200, response.text
-    assert response.json()["description"] is None
+    body = response.json()
+    assert (body["description"], body["due_date"], body["category"]) == (None, None, None)
 
 
 def test_a_document_needs_its_number_unless_it_is_a_measure_not_yet_enacted(client):

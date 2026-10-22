@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 import flet as ft
 
-from frontend.admin.definition_fields import CategoryField, DocumentTypeField
+from frontend.admin.definition_fields import DocumentTypeField
 from frontend.admin.todays_documents import picked_date
 from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date
 
@@ -259,7 +259,6 @@ def load_options(api):
         "offices": options.get("offices") or [],
         "default_office_id": options.get("default_office_id"),
         "office_locked": bool(options.get("office_locked")),
-        "categories": options.get("categories") or [],
         "document_types": options.get("document_types") or [],
         "measure_stages": options.get("measure_stages") or {},
         "enacted_stages": options.get("enacted_stages") or ENACTED_STAGES,
@@ -279,7 +278,6 @@ class _Form:
         # `data` names each field, since its name is drawn above it rather than as its label.
         self.document_type = DocumentTypeField(style, value=options["document_types"][0] if options.get("document_types") else None,
                                                used_before=options.get("other_document_types") or [])
-        self.category = CategoryField(style, used_before=options.get("categories") or [])
         self.office = ft.Dropdown(
             data="Office", hint_text="Office", options=[ft.dropdown.Option(str(office["id"]), office["name"]) for office in offices],
             value=str(default_office) if default_office is not None else None,
@@ -320,10 +318,9 @@ class _Form:
             self.page.update()
 
     def details_problem(self):
-        """Everything but the description must be filled in."""
+        """Everything but the description and due date must be filled in."""
         blank = [name for name, value in (
-            ("Category", self.category.value), ("Due date", self.due_date.value), ("Referred to", self.assigned_to.value),
-            ("Action required", self.action_required.value), ("Author", self.author.value),
+            ("Referred to", self.assigned_to.value), ("Action required", self.action_required.value), ("Author", self.author.value),
         ) if not (value or "").strip()]
         return f"Fill in the required fields: {', '.join(blank)}." if blank else None
 
@@ -349,7 +346,6 @@ class _Form:
     def shared_fields(self):
         return {
             "document_type": self.document_type.value,
-            "category": self.category.value,
             "office_id": int(self.office.value) if self.office.value else None,
             "priority": self.priority.value or "Medium",
             "due_date": (self.due_date.value or "").strip() or None,
@@ -363,7 +359,6 @@ class _Form:
         for control in (self.priority, self.due_date, self.due_button, self.assigned_to, self.action_required, self.author, self.description):
             control.disabled = locked
         self.document_type.lock(locked)
-        self.category.lock(locked)
         self.office.disabled = locked or self.options["office_locked"]
 
 
@@ -716,7 +711,6 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     render_file()
     narrow = (page.width or 1024) <= 600
     third = {"xs": 12, "sm": 4}
-    half = {"xs": 12, "sm": 6}
     stage_box = _labelled(widgets, stage, "Stage", ft.Icons.TIMELINE, required=True, col=third)
     form.document_type.on_change(lambda _: show_stage())
     show_stage(update=False)
@@ -729,9 +723,8 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
                 _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=third),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
-                _labelled(widgets, form.category.control(), "Category", ft.Icons.LOCAL_OFFER_OUTLINED, required=True, col=third),
                 _labelled(widgets, form.priority, "Priority", ft.Icons.FLAG_OUTLINED, required=True, col=third),
-                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, required=True, col=third),
+                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=third),
                 stage_box,
             ], spacing=14, run_spacing=12),
             stage_hint,
@@ -1056,12 +1049,11 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
         _section(widgets, ft.Icons.DESCRIPTION, "Document details", [
             ft.ResponsiveRow([
                 _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=half),
-                _labelled(widgets, form.category.control(), "Category", ft.Icons.GRID_VIEW, required=True, col=half),
+                _labelled(widgets, form.office, "Office", ft.Icons.APARTMENT, required=True, col=half),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
-                _labelled(widgets, form.office, "Office", ft.Icons.APARTMENT, required=True, col=third),
-                _labelled(widgets, form.priority, "Priority", ft.Icons.PRIORITY_HIGH, required=True, col=third),
-                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, required=True, col=third),
+                _labelled(widgets, form.priority, "Priority", ft.Icons.PRIORITY_HIGH, required=True, col=half),
+                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=half),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
                 _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON_OUTLINE, required=True, col=third),

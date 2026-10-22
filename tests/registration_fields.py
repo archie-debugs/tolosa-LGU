@@ -4,6 +4,5 @@ The type is Ordinance so files without a number in their name can still be regis
 """
 
 FILLED = {
-    "document_type": "Ordinance", "category": "Finance", "due_date": "2026-12-01",
-    "assigned_to": "SB Secretary", "action_required": "For Agenda", "author": "Hon. Cruz",
+    "document_type": "Ordinance", "assigned_to": "SB Secretary", "action_required": "For Agenda", "author": "Hon. Cruz",
 }
