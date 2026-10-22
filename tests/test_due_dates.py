@@ -70,11 +70,11 @@ def test_registering_with_a_due_date_stores_and_returns_it(client):
     assert stored_due(response.json()["id"]) == "2026-11-05"
 
 
-def test_due_date_is_required(client):
+def test_due_date_is_optional(client):
     response = register(client, headers_for(client), due_date="")
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Fill in the required fields: Due date."
+    assert response.status_code == 200, response.text
+    assert response.json()["due_date"] is None
 
 
 @pytest.mark.parametrize("value", ["05/11/2026", "2026-13-01", "soon"])

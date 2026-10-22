@@ -134,8 +134,8 @@ def press(dialog, text):
     click(button(dialog, text))
 
 
-REQUIRED = {"Category": "Finance", "Due date": "2026-12-01", "Referred to": "SB Secretary", "Author": "Hon. Cruz"}
-SENT = {"category": "Finance", "due_date": "2026-12-01", "assigned_to": "SB Secretary", "action_required": "None", "author": "Hon. Cruz"}
+REQUIRED = {"Due date": "2026-12-01", "Referred to": "SB Secretary", "Author": "Hon. Cruz"}
+SENT = {"due_date": "2026-12-01", "assigned_to": "SB Secretary", "action_required": "None", "author": "Hon. Cruz"}
 
 
 def fill_required(dialog):
@@ -358,8 +358,9 @@ def test_a_measure_registered_with_its_file_sends_its_stage():
     assert api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["stage"] == "Filed"
 
 
-def test_a_typed_type_and_a_category_used_before_are_sent():
+def test_a_typed_type_is_sent_and_there_is_no_category():
     page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS | {"categories": ["Finance", "Health"]}))
+    assert not any(c.data == "Category" for c in walk(dialog) if type(c).__name__ == "TextField")
     other = field(dialog, "Other document type")
     assert other.visible is False
     choose(field(dialog, "Document type"), OTHER)
@@ -372,13 +373,12 @@ def test_a_typed_type_and_a_category_used_before_are_sent():
     assert api.posted("/documents/register") == []
 
     other.value = "  Executive  Order "
-    press(dialog, "Health")
     press(dialog, "Register")
     data = api.posted("/documents/register")[0]["data"]
-    assert (data["document_type"], data["category"]) == ("Executive Order", "Health")
+    assert data["document_type"] == "Executive Order" and "category" not in data
 
 
-def test_every_field_but_the_description_must_be_filled_before_registering():
+def test_every_field_but_the_description_and_due_date_must_be_filled_before_registering():
     page, dialog, files, api, _ = open_single()
     field(dialog, "Title").value = "Market code"
     for name in ("Author", "Referred to"):
@@ -388,8 +388,10 @@ def test_every_field_but_the_description_must_be_filled_before_registering():
     assert api.posted("/documents/register") == []
 
     field(dialog, "Referred to").value, field(dialog, "Author").value = "SB Secretary", "Hon. Cruz"
+    field(dialog, "Due date").value = ""
     press(dialog, "Register")
     assert len(api.posted("/documents/register")) == 1
+    assert "due_date" not in api.posted("/documents/register")[0]["data"]
 
 
 def test_a_number_is_needed_unless_the_measure_is_not_yet_enacted():
