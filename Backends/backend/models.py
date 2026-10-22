@@ -274,6 +274,8 @@ class Document(Base):
     priority = Column(String, nullable=False, default="Medium", index=True)
     is_public = Column(Boolean, nullable=False, default=False, index=True)
     remarks = Column(Text, nullable=True)
+    # What the SB has to do with the document (For Agenda, Posting, Approval…); None when not set.
+    action_required = Column(String, nullable=True)
     author = Column(String, nullable=True, index=True)
     session = Column(String, nullable=True, index=True)
     date_registered = Column(String, nullable=True, index=True)

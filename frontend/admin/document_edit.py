@@ -3,11 +3,17 @@
 import flet as ft
 
 from frontend.admin.definition_fields import CategoryField, DocumentTypeField
-from frontend.admin.registration import PRIORITIES, error_detail
+from frontend.admin.registration import ACTIONS_REQUIRED, PRIORITIES, STATUSES, error_detail
 from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date
 
 def _text(value):
     return "" if value in (None, "-") else str(value).strip()
+
+
+def _choices(options, current):
+    """`options`, plus the document's current value when it is not one of them, so saving keeps it."""
+    current = _text(current)
+    return [*options, current] if current and current not in options else list(options)
 
 
 def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
@@ -21,7 +27,11 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     year = ft.TextField(label="Series Year", value=_text(document.get("series_year")), width=140)
     description = ft.TextField(label="Description", value=_text(document.get("description")), multiline=True, min_lines=2, max_lines=3)
     priority = ft.Dropdown(label="Priority", width=180, options=[ft.dropdown.Option(p) for p in PRIORITIES], value=document.get("priority") or "Medium")
-    assigned_to = ft.TextField(label="Assigned To", value=_text(document.get("assigned_to")), width=280)
+    assigned_to = ft.TextField(label="Referred To", value=_text(document.get("assigned_to")), width=280)
+    status = ft.Dropdown(label="Status", width=180, options=[ft.dropdown.Option(s) for s in _choices(STATUSES, document.get("status"))],
+                         value=_text(document.get("status")) or "Approved")
+    action_required = ft.Dropdown(label="Action Required", width=180, options=[ft.dropdown.Option(a) for a in _choices(ACTIONS_REQUIRED, document.get("action_required"))],
+                                  value=_text(document.get("action_required")) or None)
     author = ft.TextField(label="Author", value=_text(document.get("author")), width=280)
     due_date = ft.TextField(label="Due date", hint_text="YYYY-MM-DD (optional)", value=_text(document.get("due_date")), width=180)
     remarks = ft.TextField(label="Remarks", value=_text(document.get("remarks")), multiline=True, min_lines=2, max_lines=3)
@@ -67,6 +77,8 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             "priority": priority.value or "Medium",
             "due_date": due or None,
             "assigned_to": (assigned_to.value or "").strip() or None,
+            "status": status.value or "Approved",
+            "action_required": action_required.value or None,
             "author": (author.value or "").strip() or None,
             "remarks": (remarks.value or "").strip() or None,
         }
@@ -89,6 +101,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             ft.Row([number, year, priority, due_date], spacing=12, wrap=True),
             description,
             ft.Row([document_type.control(), category.control()], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.START),
+            ft.Row([status, action_required], spacing=12, wrap=True),
             ft.Row([assigned_to, author], spacing=12, wrap=True),
             remarks,
             message,
