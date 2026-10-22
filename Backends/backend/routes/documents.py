@@ -343,6 +343,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             detail=f"A valid Legislative Year is required for: {', '.join(missing_years)}",
         )
 
+    _require_registration_details(**{key: payload.get(key) for key, _label in REGISTRATION_DETAILS})
     placement = _registration_placement(
         db, current_user,
         office_id=payload.get("office_id"), office_name=payload.get("current_office"),
@@ -410,6 +411,12 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 except HTTPException as exc:
                     failed.append({"index": idx, "tmp_name": safe_name, "filename": original_filename, "reason": exc.detail})
                     continue
+            # Without a stage, a measure with no number starts at Filed and needs none yet.
+            stage_now = stage_fields.get("stage") or registration_stage(type_name, None, document_number, number_was_typed=True)[0]
+            number_problem = _number_problem(type_name, stage_now, document_number)
+            if number_problem:
+                failed.append({"index": idx, "tmp_name": safe_name, "filename": original_filename, "reason": number_problem})
+                continue
 
             if not allow_duplicate_number:
                 same_number = _documents_with_number(db, type_name, document_number, series_year)
@@ -548,6 +555,8 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     if len(series_years) != len(files):
         raise HTTPException(status_code=400, detail="Legislative Year is required for every document.")
     validated_years = [_require_legislative_year(year) for year in series_years]
+    _require_registration_details(document_type=document_type, category=category, due_date=due_date,
+                                  assigned_to=assigned_to, action_required=action_required, author=author)
     placement = _registration_placement(
         db, current_user, office_id=office_id, office_name=current_office, category=category, document_type=document_type,
         due_date=due_date,
@@ -584,6 +593,10 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             inferred_number = _extract_legislative_number(filename or doc_title)
             document_number = (inferred_number or "").strip() or None
             series_year = validated_years[idx - 1]
+            stage_now, _ = registration_stage(placement["document_type"], None, document_number, number_was_typed=True)
+            number_problem = _number_problem(placement["document_type"], stage_now, document_number)
+            if number_problem:
+                raise Exception(f"{number_problem} Put it in the file name, e.g. \"Memo No. 5.pdf\".")
 
             doc = _new_registered_document(
                 db, current_user, placement,
@@ -776,6 +789,27 @@ def _parse_due_date(value) -> date | None:
         raise HTTPException(status_code=400, detail=DUE_DATE_ERROR)
 
 
+REGISTRATION_DETAILS = (("document_type", "Document type"), ("category", "Category"), ("due_date", "Due date"),
+                        ("assigned_to", "Referred to"), ("action_required", "Action required"), ("author", "Author"))
+
+
+def _require_registration_details(**values) -> None:
+    """Everything on the registration form but the description must be filled in."""
+    missing = [label for key, label in REGISTRATION_DETAILS if not str(values.get(key) or "").strip()]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Fill in the required fields: {', '.join(missing)}.")
+
+
+def _number_problem(document_type: str | None, stage: str | None, number: str | None) -> str | None:
+    """A number is required, except on a measure not yet approved or adopted: it gets its number then."""
+    if number:
+        return None
+    kind = stages.measure_kind(document_type)
+    if kind and not stages.is_enacted(kind, stage):
+        return None
+    return "Number is required."
+
+
 def _registration_placement(db: Session, current_user: models.User, *, office_id=None, office_name=None, category=None, document_type=None, due_date=None) -> dict:
     """Check where a new document goes and what it is, before anything is written."""
     return {
@@ -895,6 +929,7 @@ def registration_options(db: Session = Depends(get_db), current_user: models.Use
         "office_locked": locked,
         **_definition_options(db),
         "measure_stages": {kind: stages.registration_stages(kind) for kind in stages.PATHS},
+        "enacted_stages": {kind: stages.ENACTED[kind] for kind in stages.PATHS},
     }
 
 
@@ -1979,6 +2014,8 @@ def register_document(
 
     if (tracking_number or "").strip():
         raise HTTPException(status_code=400, detail="Tracking numbers are generated automatically.")
+    _require_registration_details(document_type=document_type, category=category, due_date=due_date,
+                                  assigned_to=assigned_to, action_required=action_required, author=author)
 
     placement = _registration_placement(
         db, current_user, office_id=office_id, office_name=current_office, category=category, document_type=document_type,
@@ -1991,6 +2028,9 @@ def register_document(
         placement["document_type"], stage,
         typed_number or (inferred_number or "").strip() or None, number_was_typed=typed_number is not None,
     )
+    number_problem = _number_problem(placement["document_type"], stage, document_number)
+    if number_problem:
+        raise HTTPException(status_code=400, detail=number_problem)
 
     uploaded_content = None
     uploaded_checksum = None

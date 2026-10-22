@@ -8,6 +8,7 @@ import Backends.backend.routes.documents as documents_routes
 from Backends.backend import models
 from Backends.backend.core import get_password_hash
 from Backends.backend.database import SessionLocal, engine
+from tests.registration_fields import FILLED
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -44,7 +45,7 @@ def headers_for(client, username="admin"):
 
 
 def register(client, headers, **fields):
-    return client.post("/documents/register", data={"title": "Ordinance No. 7", "series_year": "2025", **fields}, headers=headers)
+    return client.post("/documents/register", data={"title": "Ordinance No. 7", "series_year": "2025", **FILLED, **fields}, headers=headers)
 
 
 def stored_due(document_id):
@@ -69,11 +70,11 @@ def test_registering_with_a_due_date_stores_and_returns_it(client):
     assert stored_due(response.json()["id"]) == "2026-11-05"
 
 
-def test_due_date_is_optional(client):
-    response = register(client, headers_for(client))
+def test_due_date_is_required(client):
+    response = register(client, headers_for(client), due_date="")
 
-    assert response.status_code == 200, response.text
-    assert response.json()["due_date"] is None
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Fill in the required fields: Due date."
 
 
 @pytest.mark.parametrize("value", ["05/11/2026", "2026-13-01", "soon"])
@@ -91,6 +92,7 @@ def test_multiple_registration_shares_the_due_date(client):
     names = [upload(client, headers, "a.pdf"), upload(client, headers, "b.pdf")]
 
     response = client.post("/documents/bulk-register/confirm_tmp", headers=headers, json={
+        **FILLED,
         "tmp_names": names,
         "documents": [{"tmp_name": name, "series_year": 2025, "title": name} for name in names],
         "due_date": "2026-12-01",
@@ -107,7 +109,7 @@ def test_multiple_registration_refuses_a_malformed_due_date(client):
     name = upload(client, headers, "a.pdf")
 
     response = client.post("/documents/bulk-register/confirm_tmp", headers=headers, json={
-        "tmp_names": [name], "documents": [{"tmp_name": name, "series_year": 2025, "title": "A"}], "due_date": "tomorrow",
+        **FILLED, "tmp_names": [name], "documents": [{"tmp_name": name, "series_year": 2025, "title": "A"}], "due_date": "tomorrow",
     })
 
     assert response.status_code == 400
@@ -116,7 +118,7 @@ def test_multiple_registration_refuses_a_malformed_due_date(client):
 
 def test_multipart_bulk_registration_accepts_a_due_date(client):
     response = client.post("/documents/bulk-register/confirm", headers=headers_for(client),
-                           data={"series_years": ["2025"], "due_date": "2026-11-20"},
+                           data={**FILLED, "series_years": ["2025"], "due_date": "2026-11-20"},
                            files=[("files", ("c.pdf", PDF + b"c", "application/pdf"))])
 
     assert response.status_code == 200, response.text

@@ -134,10 +134,22 @@ def press(dialog, text):
     click(button(dialog, text))
 
 
+REQUIRED = {"Category": "Finance", "Due date": "2026-12-01", "Referred to": "SB Secretary", "Author": "Hon. Cruz"}
+SENT = {"category": "Finance", "due_date": "2026-12-01", "assigned_to": "SB Secretary", "action_required": "None", "author": "Hon. Cruz"}
+
+
+def fill_required(dialog):
+    """Fill the fields every registration needs, so a test only sets what it is about."""
+    for name, value in REQUIRED.items():
+        field(dialog, name).value = value
+
+
 def open_single(api=None, **kwargs):
     page, dialog, files, api = DummyPage(), ft.AlertDialog(), FakeFiles(), api or FakeApi()
     opened = []
     open_register_dialog(page, dialog, api, files, today=TODAY, open_details=opened.append, can_print_qr=True, **kwargs)
+    if dialog.content is not None and any(type(c).__name__ == "TextField" and c.data == "Author" for c in walk(dialog)):
+        fill_required(dialog)
     return page, dialog, files, api, opened
 
 
@@ -154,7 +166,7 @@ def test_an_employee_registers_a_record_into_their_own_office():
 
     data = api.posted("/documents/register")[0]["data"]
     assert data == {"title": "Market code", "document_number": "12", "series_year": "2026", "document_type": "Ordinance",
-                    "office_id": "2", "priority": "Medium", "action_required": "None"}
+                    "office_id": "2", "priority": "Medium", **SENT}
     assert "DOC-000001" in texts(dialog) and "Document registered" in texts(dialog)
     press(dialog, "QR label")
     assert page.launched == ["http://backend/labels.pdf"]
@@ -211,6 +223,7 @@ def open_multiple(api=None):
     page, dialog, files, api = DummyPage(), ft.AlertDialog(), FakeFiles(), api or FakeApi()
     registered = []
     open_multiple_register_dialog(page, dialog, api, files, today=TODAY, on_registered=lambda: registered.append(1), can_print_qr=True)
+    fill_required(dialog)
     return page, dialog, files, api, registered
 
 
@@ -330,6 +343,7 @@ def test_a_measure_is_registered_at_the_stage_chosen_and_other_documents_have_no
     choose(field(dialog, "Document type"), OTHER)
     field(dialog, "Other document type").value = "Memorandum"
     field(dialog, "Title").value = "Office memo"
+    field(dialog, "Number").value = "5"
     press(dialog, "Register")
     assert "stage" not in api.posted("/documents/register")[0]["data"]
 
@@ -352,6 +366,7 @@ def test_a_typed_type_and_a_category_used_before_are_sent():
     assert other.visible is True and field(dialog, "Stage").options == []
 
     field(dialog, "Title").value = "Office memo"
+    field(dialog, "Number").value = "5"
     press(dialog, "Register")
     assert "Type the document type, or choose Ordinance or Resolution." in texts(dialog)
     assert api.posted("/documents/register") == []
@@ -361,3 +376,43 @@ def test_a_typed_type_and_a_category_used_before_are_sent():
     press(dialog, "Register")
     data = api.posted("/documents/register")[0]["data"]
     assert (data["document_type"], data["category"]) == ("Executive Order", "Health")
+
+
+def test_every_field_but_the_description_must_be_filled_before_registering():
+    page, dialog, files, api, _ = open_single()
+    field(dialog, "Title").value = "Market code"
+    for name in ("Author", "Referred to"):
+        field(dialog, name).value = " "
+    press(dialog, "Register")
+    assert "Fill in the required fields: Referred to, Author." in texts(dialog)
+    assert api.posted("/documents/register") == []
+
+    field(dialog, "Referred to").value, field(dialog, "Author").value = "SB Secretary", "Hon. Cruz"
+    press(dialog, "Register")
+    assert len(api.posted("/documents/register")) == 1
+
+
+def test_a_number_is_needed_unless_the_measure_is_not_yet_enacted():
+    page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS | {"enacted_stages": {"ordinance": "Approved", "resolution": "Adopted"}}))
+    field(dialog, "Title").value = "Market code"
+    field(dialog, "Stage").value = "Approved"
+    press(dialog, "Register")
+    assert "Enter the document's number." in texts(dialog)
+    assert api.posted("/documents/register") == []
+
+    field(dialog, "Stage").value = "Filed"
+    press(dialog, "Register")
+    assert len(api.posted("/documents/register")) == 1
+
+
+def test_several_files_of_a_non_measure_each_need_a_number():
+    page, dialog, files, api, registered = open_multiple()
+    choose(field(dialog, "Document type"), OTHER)
+    field(dialog, "Other document type").value = "Memorandum"
+    press(dialog, "Choose files")
+    files.on_picked([{"name": "memo.pdf", "size": 10}])
+    files.on_progress("memo.pdf", 1.0, None)
+
+    press(dialog, "Register 1 document")
+    assert "Give every file a number: memo.pdf" in texts(dialog)
+    assert api.posted("/documents/bulk-register/confirm_tmp") == []

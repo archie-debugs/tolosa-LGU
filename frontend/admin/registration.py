@@ -17,6 +17,7 @@ ACTIONS_REQUIRED = ("None", "For Agenda", "Approval", "Posting")
 STATUSES = ("For information", "Approved", "Completed", "Posted")
 OLDEST_YEAR = 1900
 FILED = "Filed"
+ENACTED_STAGES = {"ordinance": "Approved", "resolution": "Adopted"}
 
 # Flet 0.28 labels a button with `text`; newer releases use `content`.
 _BUTTON_CLASS = ft.Button if inspect.isclass(ft.Button) else (getattr(ft, "FilledButton", None) or ft.ElevatedButton)
@@ -261,6 +262,7 @@ def load_options(api):
         "categories": options.get("categories") or [],
         "document_types": options.get("document_types") or [],
         "measure_stages": options.get("measure_stages") or {},
+        "enacted_stages": options.get("enacted_stages") or ENACTED_STAGES,
     }
 
 
@@ -316,6 +318,17 @@ class _Form:
         if day:
             self.due_date.value = day.isoformat()
             self.page.update()
+
+    def details_problem(self):
+        """Everything but the description must be filled in."""
+        blank = [name for name, value in (
+            ("Category", self.category.value), ("Due date", self.due_date.value), ("Referred to", self.assigned_to.value),
+            ("Action required", self.action_required.value), ("Author", self.author.value),
+        ) if not (value or "").strip()]
+        return f"Fill in the required fields: {', '.join(blank)}." if blank else None
+
+    def problem(self):
+        return self.office_problem() or self.document_type.problem() or self.details_problem() or self.due_problem()
 
     def due_problem(self):
         text = (self.due_date.value or "").strip()
@@ -533,6 +546,14 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         if update:
             page.update()
 
+    def number_needed():
+        """Every document needs its number, except a measure not yet approved or adopted."""
+        kind = measure_kind(form.document_type.value)
+        if kind is None:
+            return True
+        choices, enacted = stage_choices(), options["enacted_stages"].get(kind)
+        return enacted in choices and stage.value in choices and choices.index(stage.value) >= choices.index(enacted)
+
     def fields():
         values = {
             "title": (title.value or "").strip(),
@@ -552,7 +573,11 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
             message.value = "Enter the document's title."
             page.update()
             return
-        problem = form.office_problem() or form.document_type.problem() or form.due_problem()
+        if number_needed() and not (number.value or "").strip():
+            message.value = "Enter the document's number."
+            page.update()
+            return
+        problem = form.problem()
         if problem:
             message.value = problem
             page.update()
@@ -704,9 +729,9 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
                 _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=third),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
-                _labelled(widgets, form.category.control(), "Category", ft.Icons.LOCAL_OFFER_OUTLINED, col=third),
+                _labelled(widgets, form.category.control(), "Category", ft.Icons.LOCAL_OFFER_OUTLINED, required=True, col=third),
                 _labelled(widgets, form.priority, "Priority", ft.Icons.FLAG_OUTLINED, required=True, col=third),
-                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=third),
+                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, required=True, col=third),
                 stage_box,
             ], spacing=14, run_spacing=12),
             stage_hint,
@@ -716,11 +741,11 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
             widgets.hint("Employees register into their own office." if options["office_locked"] else "The office that holds the document first."),
         ]),
         _section(widgets, ft.Icons.ATTACH_FILE, "File", [_upload_box(widgets, file_name, file_hint, remove_file, choose_file)]),
-        _section(widgets, ft.Icons.ADD_CIRCLE, "More details (optional)", [
+        _section(widgets, ft.Icons.ADD_CIRCLE, "More details", [
             ft.ResponsiveRow([
-                _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON, col=third),
-                _labelled(widgets, form.action_required, "Action required", ft.Icons.TASK_ALT, col=third),
-                _labelled(widgets, form.author, "Author", ft.Icons.PERSON_OUTLINE, col=third),
+                _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON, required=True, col=third),
+                _labelled(widgets, form.action_required, "Action required", ft.Icons.TASK_ALT, required=True, col=third),
+                _labelled(widgets, form.author, "Author", ft.Icons.PERSON_OUTLINE, required=True, col=third),
             ], spacing=14, run_spacing=12),
             _labelled(widgets, form.description, "Description", ft.Icons.NOTES),
         ]),
@@ -942,7 +967,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
         if status["busy"]:
             return
         message.value = ""
-        problem = form.office_problem() or form.document_type.problem() or form.due_problem()
+        problem = form.problem()
         if problem:
             message.value = problem
             page.update()
@@ -951,6 +976,12 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
         untitled = [row["name"] for row in waiting if not (row["title"] or "").strip()]
         if untitled:
             message.value = "Give every file a title: " + ", ".join(untitled)
+            page.update()
+            return
+        # A measure without a number is registered at Filed and gets its number when enacted.
+        unnumbered = [row["name"] for row in waiting if not (row["number"] or "").strip()]
+        if unnumbered and measure_kind(form.document_type.value) is None:
+            message.value = "Give every file a number: " + ", ".join(unnumbered)
             page.update()
             return
         skipped = [row for row in waiting if row["state"] == "duplicate" and not row["allow"]]
@@ -1025,17 +1056,17 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
         _section(widgets, ft.Icons.DESCRIPTION, "Document details", [
             ft.ResponsiveRow([
                 _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=half),
-                _labelled(widgets, form.category.control(), "Category", ft.Icons.GRID_VIEW, col=half),
+                _labelled(widgets, form.category.control(), "Category", ft.Icons.GRID_VIEW, required=True, col=half),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
                 _labelled(widgets, form.office, "Office", ft.Icons.APARTMENT, required=True, col=third),
                 _labelled(widgets, form.priority, "Priority", ft.Icons.PRIORITY_HIGH, required=True, col=third),
-                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=third),
+                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, required=True, col=third),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
-                _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON_OUTLINE, col=third),
-                _labelled(widgets, form.action_required, "Action required", ft.Icons.TASK_ALT, col=third),
-                _labelled(widgets, form.author, "Author", ft.Icons.EDIT_OUTLINED, col=third),
+                _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON_OUTLINE, required=True, col=third),
+                _labelled(widgets, form.action_required, "Action required", ft.Icons.TASK_ALT, required=True, col=third),
+                _labelled(widgets, form.author, "Author", ft.Icons.EDIT_OUTLINED, required=True, col=third),
             ], spacing=14, run_spacing=12),
             widgets.hint("Employees register into their own office." if options["office_locked"] else "The office that holds the documents first."),
         ]),
