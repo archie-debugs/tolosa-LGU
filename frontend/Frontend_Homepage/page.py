@@ -200,6 +200,7 @@ def build_homepage_view(page=None):
                             color="#ffffff",
                             bgcolor=navy,
                             style=ft.ButtonStyle(padding=ft.Padding(18, 13, 18, 13)),
+                            on_click=open_public_documents,
                         ),
                     ],
                     spacing=8,
@@ -260,7 +261,7 @@ def build_homepage_view(page=None):
         ),
         bgcolor="#23343a" if is_dark else "#ffffff",
         padding=ft.Padding(30, 22, 30, 22),
-        border=ft.border.only(top=ft.border.all(1, "#dce7e5"), bottom=ft.border.all(1, "#dce7e5")),
+        border=ft.Border(top=ft.BorderSide(1, "#dce7e5"), bottom=ft.BorderSide(1, "#dce7e5")),
     )
 
     system_intro = ft.Container(
@@ -299,7 +300,7 @@ def build_homepage_view(page=None):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         bgcolor="#1d2d33" if is_dark else "#f7faf9",
-        border=ft.border.only(top=ft.border.all(1, "#dce7e5"), bottom=ft.border.all(1, "#dce7e5")),
+        border=ft.Border(top=ft.BorderSide(1, "#dce7e5"), bottom=ft.BorderSide(1, "#dce7e5")),
         padding=ft.Padding(44, 42, 44, 42),
         key="about-section",
     )
@@ -319,7 +320,7 @@ def build_homepage_view(page=None):
                     col={"xs": 12, "md": 8},
                 ),
                 ft.Container(
-                    content=ft.ElevatedButton("VIEW PUBLIC DOCUMENTS ->", color=navy, bgcolor=gold, style=ft.ButtonStyle(padding=ft.Padding(18, 13, 18, 13))),
+                    content=ft.ElevatedButton("VIEW PUBLIC DOCUMENTS ->", color=navy, bgcolor=gold, style=ft.ButtonStyle(padding=ft.Padding(18, 13, 18, 13)), on_click=open_public_documents),
                     alignment=ft.Alignment.CENTER_RIGHT,
                     col={"xs": 12, "md": 4},
                 ),
@@ -366,7 +367,7 @@ def build_homepage_view(page=None):
                                     vertical_alignment=ft.CrossAxisAlignment.START,
                                 ),
                                 padding=ft.Padding(0, 0, 0, 14),
-                                border=ft.border.only(bottom=ft.border.all(1, "#dce7e5")),
+                                border=ft.Border(bottom=ft.BorderSide(1, "#dce7e5")),
                             ),
                             ft.Container(
                                 content=ft.Row(
@@ -397,7 +398,7 @@ def build_homepage_view(page=None):
         ),
         bgcolor="#23343a" if is_dark else "#ffffff",
         padding=ft.Padding(44, 46, 44, 46),
-        border=ft.border.only(top=ft.border.all(1, "#dce7e5")),
+        border=ft.Border(top=ft.BorderSide(1, "#dce7e5")),
         key="announcements-section",
     )
 
@@ -453,7 +454,7 @@ def build_homepage_view(page=None):
                 ft.Container(
                     content=ft.Text("© Municipality of Tolosa. All rights reserved.", size=11, color="#c5d9d7"),
                     padding=ft.Padding(0, 16, 0, 0),
-                    border=ft.border.only(top=ft.border.all(1, "#315463")),
+                    border=ft.Border(top=ft.BorderSide(1, "#315463")),
                     col={"xs": 12, "md": 12},
                 ),
             ],
