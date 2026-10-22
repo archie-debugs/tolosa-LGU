@@ -148,16 +148,6 @@ def build_documents_view(
         notice_text.color = ft.Colors.RED_700 if error else ft.Colors.GREEN_700
         notice_text.visible = bool(message)
 
-    def load_reference_options():
-        for control, path in ((type_filter, "/reference-data/document-types"), (category_filter, "/reference-data/categories")):
-            try:
-                names = [item.get("name") for item in api("GET", path, params={"active_only": "true"}) if item.get("name")]
-            except Exception:
-                continue
-            control.options = [ft.dropdown.Option(key=ALL, text=ALL)] + [ft.dropdown.Option(key=name, text=name) for name in names]
-            if control.value not in names:
-                control.value = ALL
-
     def set_options(control, values, any_text):
         current = control.value
         keys = [str(value) for value in values]
@@ -214,6 +204,8 @@ def build_documents_view(
         set_options(status_filter, statuses, ALL)
         filter_boxes[status_filter].visible = len(statuses) > 1 or status_filter.value != ALL
         set_options(archived_by_filter, payload.get("available_archivers") or [], "Anyone")
+        set_options(type_filter, payload.get("available_document_types") or [], ALL)
+        set_options(category_filter, payload.get("available_categories") or [], ALL)
         items = payload.get("items") or []
         loaded[:] = [{**normalize(item), "in_transit_to": item.get("in_transit_to"), "in_transit_since": item.get("in_transit_since")} for item in items]
         selection.intersection_update(doc.get("id") for doc in loaded)
@@ -538,8 +530,6 @@ def build_documents_view(
         expand=False,
     )
 
-    if can_filter:
-        load_reference_options()
     load(page_number=1)
     view = ft.Column([banner, kpi_card, list_card], spacing=16, expand=False, tight=True)
     return view, refresh

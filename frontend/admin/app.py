@@ -154,7 +154,6 @@ from frontend.admin.users_roles import (
     build_users_roles_view,
 )
 from frontend.admin.registration import PickerFiles, open_multiple_register_dialog, open_register_dialog
-from frontend.admin.reference_data import build_reference_data_view
 from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.announcements import build_announcements_view
@@ -1084,93 +1083,6 @@ def main(page: ft.Page, session=None):
 
     def council_sessions_view():
         return build_sessions_view(page, surface_card, backend_api, can_manage=has_permission("manage_sessions"))
-
-    reference_categories = []
-    reference_document_types = []
-    reference_search = ft.TextField(label="Search definitions", width=240, on_change=lambda _: refresh_reference_data_view())
-    reference_kind_filter = ft.Dropdown(label="Definition", width=180, value="All", options=[ft.dropdown.Option("All"), ft.dropdown.Option("Categories"), ft.dropdown.Option("Document Types")], on_change=lambda _: refresh_reference_data_view())
-    reference_name_field = ft.TextField(label="Name", width=360)
-    reference_kind_dialog = "Categories"
-    reference_edit_item = None
-    reference_dialog = ft.AlertDialog(
-        title=ft.Text("Document Definition", size=18, weight=ft.FontWeight.BOLD),
-        content=reference_name_field,
-        actions=[ft.TextButton("Cancel", on_click=lambda _: close_reference_dialog()), ft.Button("Save", on_click=lambda _: save_reference_definition(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE)],
-    )
-    page.overlay.append(reference_dialog)
-
-    def load_reference_data():
-        nonlocal reference_categories, reference_document_types
-        try:
-            headers = get_admin_headers()
-            categories_response = http.get(f"{BACKEND_URL}/reference-data/categories", headers=headers, verify=False, timeout=15)
-            types_response = http.get(f"{BACKEND_URL}/reference-data/document-types", headers=headers, verify=False, timeout=15)
-            if categories_response.status_code != 200 or types_response.status_code != 200:
-                raise Exception(categories_response.text if categories_response.status_code != 200 else types_response.text)
-            reference_categories = categories_response.json() or []
-            reference_document_types = types_response.json() or []
-        except Exception as exc:
-            show_document_notice(f"Unable to load document definitions: {exc}")
-
-    def refresh_reference_data_view():
-        page.update()
-
-    def close_reference_dialog(_=None):
-        reference_dialog.open = False
-        page.update()
-
-    def open_reference_create_dialog(kind):
-        nonlocal reference_kind_dialog, reference_edit_item
-        reference_kind_dialog = "Document Types" if kind == "Document Types" else "Categories"
-        reference_edit_item = None
-        reference_name_field.value = ""
-        reference_dialog.title = ft.Text(f"Add {reference_kind_dialog[:-1]}", size=18, weight=ft.FontWeight.BOLD)
-        reference_dialog.open = True
-        page.update()
-
-    def open_reference_edit_dialog(kind, item):
-        nonlocal reference_kind_dialog, reference_edit_item
-        reference_kind_dialog = kind + "s" if kind == "Category" else "Document Types"
-        reference_edit_item = item
-        reference_name_field.value = item.get("name") or ""
-        reference_dialog.title = ft.Text(f"Edit {kind}", size=18, weight=ft.FontWeight.BOLD)
-        reference_dialog.open = True
-        page.update()
-
-    def save_reference_definition():
-        name = (reference_name_field.value or "").strip()
-        if not name:
-            show_document_notice("Definition name is required.")
-            return
-        endpoint_kind = "document-types" if reference_kind_dialog == "Document Types" else "categories"
-        try:
-            if reference_edit_item:
-                response = http.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{reference_edit_item.get('id')}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
-            else:
-                response = http.post(f"{BACKEND_URL}/reference-data/{endpoint_kind}", json={"name": name}, headers=get_admin_headers(), verify=False, timeout=15)
-            if response.status_code not in {200, 201}:
-                raise Exception(response.text)
-            close_reference_dialog()
-            load_reference_data()
-            page.update()
-            show_document_notice("Document definition saved.")
-        except Exception as exc:
-            show_document_notice(f"Unable to save definition: {exc}")
-
-    def toggle_reference_definition(kind, item):
-        endpoint_kind = "document-types" if kind == "Document Type" else "categories"
-        try:
-            response = http.put(f"{BACKEND_URL}/reference-data/{endpoint_kind}/{item.get('id')}", json={"name": item.get("name"), "is_active": not bool(item.get("is_active", True))}, headers=get_admin_headers(), verify=False, timeout=15)
-            if response.status_code != 200:
-                raise Exception(response.text)
-            load_reference_data()
-            page.update()
-        except Exception as exc:
-            show_document_notice(f"Unable to change definition status: {exc}")
-
-    def reference_data_view():
-        load_reference_data()
-        return build_reference_data_view(reference_categories, reference_document_types, reference_search, reference_kind_filter, open_reference_create_dialog, open_reference_edit_dialog, toggle_reference_definition, load_reference_data, page)
 
     documents_data = []
     archived_documents_data = []
@@ -4633,7 +4545,6 @@ def main(page: ft.Page, session=None):
         # Administration
         if is_super_admin:
             items.append((ft.Icons.PEOPLE_ALT_OUTLINED, "Users & Roles", lambda: users_page_view(), "Administration"))
-            items.append((ft.Icons.LIST_ALT_OUTLINED, "Document Definitions", lambda: reference_data_view(), "Administration"))
             items.append((ft.Icons.SECURITY_OUTLINED, "Active Sessions", sessions_view, "Administration"))
             items.append((ft.Icons.CAMPAIGN_OUTLINED, "Announcements", announcements_view, "Administration"))
         if is_super_admin or has_permission("view_audit_logs"):

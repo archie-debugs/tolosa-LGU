@@ -348,7 +348,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
         office_id=payload.get("office_id"), office_name=payload.get("current_office"),
         category=payload.get("category"), document_type=payload.get("document_type"), due_date=payload.get("due_date"),
     )
-    type_name = placement["document_type"].name if placement["document_type"] else None
+    type_name = placement["document_type"]
     allow_duplicate_number = payload.get("allow_duplicate_number") is True
     title = payload.get("title")
     description = payload.get("description")
@@ -727,14 +727,33 @@ def _registration_office(db: Session, current_user: models.User, office_id=None,
     return db.get(models.Office, own_office_id) if own_office_id is not None else None
 
 
-def _active_reference(db: Session, Model, name: str | None, label: str):
-    name = (name or "").strip()
+# Offered on every registration; any other type or category is typed in.
+STANDARD_DOCUMENT_TYPES = ["Ordinance", "Resolution"]
+DEFINITION_MAX_LENGTH = 120
+
+
+def _typed_name(value: str | None, label: str) -> str | None:
+    """A typed document type or category: trimmed, single-spaced, and the standard spelling when it is one."""
+    name = " ".join((value or "").split())
     if not name:
         return None
-    row = db.query(Model).filter(func.lower(Model.name) == name.lower(), Model.is_active.is_(True)).first()
-    if row is None:
-        raise HTTPException(status_code=400, detail=f"{label} '{name}' is not an active entry in Reference Data.")
-    return row
+    if len(name) > DEFINITION_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"{label} can be at most {DEFINITION_MAX_LENGTH} characters.")
+    return next((standard for standard in STANDARD_DOCUMENT_TYPES if standard.lower() == name.lower()), name)
+
+
+def _names_in_use(db: Session, column) -> list[str]:
+    """Values already on documents, most used first, to suggest when registering or editing."""
+    rows = (db.query(column, func.count(models.Document.id)).filter(column.isnot(None), column != "")
+            .group_by(column).order_by(func.count(models.Document.id).desc(), column.asc()).limit(30).all())
+    return [name for name, _count in rows]
+
+
+def _definition_options(db: Session) -> dict:
+    other_types = [name for name in _names_in_use(db, models.Document.document_type)
+                   if name.lower() not in {standard.lower() for standard in STANDARD_DOCUMENT_TYPES}]
+    return {"document_types": list(STANDARD_DOCUMENT_TYPES), "other_document_types": other_types,
+            "categories": _names_in_use(db, models.Document.category)}
 
 
 DUE_DATE_ERROR = "Due date must be a date like 2026-11-05."
@@ -760,8 +779,8 @@ def _registration_placement(db: Session, current_user: models.User, *, office_id
     return {
         "due_date": _parse_due_date(due_date),
         "office": _registration_office(db, current_user, office_id, office_name),
-        "category": _active_reference(db, models.Category, category, "Category"),
-        "document_type": _active_reference(db, models.DocumentType, document_type, "Document type"),
+        "category": _typed_name(category, "Category"),
+        "document_type": _typed_name(document_type, "Document type"),
     }
 
 
@@ -800,8 +819,7 @@ def _new_registered_document(db: Session, current_user: models.User, placement: 
     """
     office = placement["office"]
     category = placement["category"]
-    document_type = placement["document_type"]
-    type_name = document_type.name if document_type else None
+    type_name = placement["document_type"]
     if "stage" in fields:
         stage = fields["stage"]
     else:
@@ -812,10 +830,8 @@ def _new_registered_document(db: Session, current_user: models.User, placement: 
         series_year=fields.get("series_year"),
         title=fields["title"],
         description=(fields.get("description") or None),
-        category=category.name if category else None,
-        category_id=category.id if category else None,
-        document_type=document_type.name if document_type else None,
-        document_type_id=document_type.id if document_type else None,
+        category=category,
+        document_type=type_name,
         current_office=office.name if office else None,
         current_office_id=office.id if office else None,
         originating_office=office.name if office else None,
@@ -870,28 +886,20 @@ def registration_options(db: Session = Depends(get_db), current_user: models.Use
         offices = [own] if own else []
         locked = True
 
-    def active_names(Model):
-        return [row.name for row in db.query(Model).filter(Model.is_active.is_(True)).order_by(Model.name.asc())]
-
     return {
         "offices": [{"id": office.id, "name": office.name} for office in offices],
         "default_office_id": own_office_id if any(office.id == own_office_id for office in offices) else None,
         "office_locked": locked,
-        "categories": active_names(models.Category),
-        "document_types": active_names(models.DocumentType),
+        **_definition_options(db),
         "measure_stages": {kind: stages.registration_stages(kind) for kind in stages.PATHS},
     }
 
 
 @router.get("/edit-options")
 def edit_options(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """Categories and document types the edit form may offer."""
+    """Document types and categories the edit form may offer or suggest."""
     require_permission(current_user, "edit_documents")
-
-    def active_names(Model):
-        return [row.name for row in db.query(Model).filter(Model.is_active.is_(True)).order_by(Model.name.asc())]
-
-    return {"categories": active_names(models.Category), "document_types": active_names(models.DocumentType)}
+    return _definition_options(db)
 
 
 @router.get("/registration/duplicates")
@@ -1215,14 +1223,13 @@ def _same_name(a, b) -> bool:
     return (a or "").strip().lower() == (b or "").strip().lower()
 
 
-def _edited_reference(db: Session, Model, current_name, current_id, name, label):
-    """(name, id) for an edited category or type: unchanged stays as is, even if retired since; None clears."""
+def _edited_reference(current_name, current_id, name, label):
+    """(name, id) for an edited category or type: unchanged keeps its old link; None clears."""
     if not (name or "").strip():
         return None, None
     if _same_name(name, current_name):
         return current_name, current_id
-    row = _active_reference(db, Model, name, label)
-    return row.name, row.id
+    return _typed_name(name, label), None
 
 
 def _ensure_document_office_association(db: Session, document_id: int, office_id: int | None) -> None:
@@ -1720,6 +1727,8 @@ def list_documents(
         "without_attachment": query.filter(~with_attachment).count(),
     }
     available_statuses = sorted(value for (value,) in query.with_entities(models.Document.status).distinct() if value)
+    available_document_types = sorted(value for (value,) in query.with_entities(models.Document.document_type).distinct() if value)
+    available_categories = sorted(value for (value,) in query.with_entities(models.Document.category).distinct() if value)
     available_archivers = []
     if archived:
         recent_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
@@ -1851,6 +1860,8 @@ def list_documents(
         "available_years": available_years,
         "available_statuses": available_statuses,
         "available_archivers": available_archivers,
+        "available_document_types": available_document_types,
+        "available_categories": available_categories,
         "summary": summary,
     }
 
@@ -1893,9 +1904,9 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
             raise HTTPException(status_code=400, detail=message)
     references = {}
     if "category" in data:
-        references["category"] = _edited_reference(db, models.Category, doc.category, doc.category_id, data["category"], "Category")
+        references["category"] = _edited_reference(doc.category, doc.category_id, data["category"], "Category")
     if "document_type" in data:
-        references["document_type"] = _edited_reference(db, models.DocumentType, doc.document_type, doc.document_type_id, data["document_type"], "Document type")
+        references["document_type"] = _edited_reference(doc.document_type, doc.document_type_id, data["document_type"], "Document type")
     previous_visibility = bool(doc.is_public)
     if "is_public" in data and data["is_public"] != previous_visibility:
         require_permission(current_user, "manage_public_visibility")
@@ -1972,7 +1983,7 @@ def register_document(
     inferred_number = _extract_legislative_number(file.filename if file and file.filename else title)
     typed_number = (document_number or "").strip() or None
     stage, document_number = registration_stage(
-        placement["document_type"].name if placement["document_type"] else None, stage,
+        placement["document_type"], stage,
         typed_number or (inferred_number or "").strip() or None, number_was_typed=typed_number is not None,
     )
 
@@ -1992,7 +2003,7 @@ def register_document(
             raise HTTPException(status_code=409, detail=_duplicate_reason(duplicate_documents))
 
     if not allow_duplicate_number:
-        type_name = placement["document_type"].name if placement["document_type"] else None
+        type_name = placement["document_type"]
         same_number = _documents_with_number(db, type_name, document_number, series_year)
         if same_number:
             raise HTTPException(status_code=409, detail=_duplicate_number_detail(same_number))
