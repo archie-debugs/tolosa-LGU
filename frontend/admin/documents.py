@@ -4,7 +4,7 @@ import inspect
 
 import flet as ft
 
-from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, parse_time
+from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, parse_time, stage_color
 
 PAGE_SIZES = (10, 25, 50)
 SORTS = {
@@ -292,7 +292,8 @@ def build_documents_view(
         )
 
     def badges(doc):
-        chips = []
+        # A measure's stage comes first: it says where the measure is in the Sanggunian.
+        chips = [widgets.chip(doc["stage"], stage_color(doc["stage"]))] if doc.get("stage") else []
         if doc.get("is_public") and not archived:
             chips.append(widgets.chip("Public", ft.Colors.GREEN_700))
         priority = doc.get("priority")

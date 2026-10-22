@@ -22,6 +22,7 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "Download Documents",
         "Print Documents",
         "Update Document Status",
+        "Change Measure Stage",
     ],
     "QR Code": [
         "Generate QR Codes",

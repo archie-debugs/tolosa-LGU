@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import date
 import re
 import os
 
@@ -134,12 +135,29 @@ def _badge(label: str) -> ft.Container:
     )
 
 
-def _status() -> ft.Container:
-    return ft.Container(
-        content=ft.Row([ft.Container(width=7, height=7, border_radius=4, bgcolor="#2d9b61"), ft.Text("Public / Active", size=12, weight=ft.FontWeight.W_600, color="#246544")], spacing=6, tight=True),
+def _stage_date(value) -> str:
+    try:
+        return date.fromisoformat(value).strftime("%b %d, %Y")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _status(document=None) -> ft.Container:
+    """A measure shows its stage and the day it got there; other documents are just public."""
+    stage = (document or {}).get("stage") or {}
+    label = stage.get("stage") or "Public / Active"
+    since = _stage_date(stage.get("entered_on"))
+    badge = ft.Container(
+        content=ft.Row([ft.Container(width=7, height=7, border_radius=4, bgcolor="#2d9b61"), ft.Text(label, size=12, weight=ft.FontWeight.W_600, color="#246544")], spacing=6, tight=True),
         bgcolor="#e4f4e8",
         border_radius=6,
         padding=ft.Padding(9, 5, 9, 5),
+    )
+    if not since:
+        return badge
+    return ft.Container(
+        content=ft.Column([badge, ft.Text(f"since {since}", size=10, color="#6b7b8c")], spacing=2, tight=True),
+        tooltip="\n".join(f"{item['stage']}: {_stage_date(item['date'])}" for item in stage.get("dates") or []),
     )
 
 
@@ -320,7 +338,7 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
                     )
                 ),
                 ft.DataCell(_badge(document["type"])), ft.DataCell(ft.Text(document["date"], size=13, color=muted)),
-                ft.DataCell(_status()), ft.DataCell(_button("View", ft.Icons.VISIBILITY_OUTLINED, outlined=True)),
+                ft.DataCell(_status(document)), ft.DataCell(_button("View", ft.Icons.VISIBILITY_OUTLINED, outlined=True)),
             ]) for document in visible_documents
         ]
         last_document = min(first_document + len(visible_documents) - 1, total_documents) if total_documents else 0
