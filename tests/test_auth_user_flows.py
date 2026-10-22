@@ -2150,8 +2150,10 @@ def test_administrator_can_revoke_session():
     client = TestClient(main.app)
     login = client.post("/auth/login", data={"username": "superuser", "password": "pw123"})
     assert login.status_code == 200
+    assert client.post("/auth/login", data={"username": "activeuser", "password": "pw123"}).status_code == 200
     with SessionLocal() as db:
-        session_id = db.query(models.UserSession).first().session_id
+        employee = db.query(models.User).filter(models.User.username == "activeuser").one()
+        session_id = db.query(models.UserSession).filter(models.UserSession.user_id == employee.id).one().session_id
     response = client.post(
         f"/auth/sessions/{session_id}/revoke",
         headers={"Authorization": f"Bearer {login.json()['access_token']}"},

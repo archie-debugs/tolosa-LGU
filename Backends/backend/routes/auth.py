@@ -836,6 +836,7 @@ def list_active_sessions(
         "id": session.id,
         "session_id": session.session_id,
         "username": session.user.username if session.user else None,
+        "role": normalize_user_role(session.user.role) if session.user else None,
         "created_at": session.created_at.isoformat(),
         "last_activity": session.last_activity.isoformat(),
         "expires_at": session.expires_at.isoformat(),
@@ -851,6 +852,8 @@ def revoke_session(
     session = db.query(models.UserSession).filter(models.UserSession.session_id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session.user and normalize_user_role(session.user.role) == "Super Administrator":
+        raise HTTPException(status_code=403, detail="Super Administrator sessions cannot be revoked.")
     if not session.revoked_at:
         session.revoked_at = datetime.now(timezone.utc)
         session.revoke_reason = "administrator_revocation"
