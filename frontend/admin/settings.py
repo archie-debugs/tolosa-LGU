@@ -208,11 +208,16 @@ def _system_information_card(ui, surface_card, section_header, api):
         rows = [_row(ui, "Backend", status_text("unavailable")), ui.hint(f"Unable to load system information: {exc}")]
     else:
         components = health.get("components") or {}
+        backup = components.get("backup") or {}
+        backup_detail = backup.get("detail") if isinstance(backup.get("detail"), dict) else {}
         rows = [
             _row(ui, "Overall", status_text(health.get("status"))),
             _row(ui, "Backend", status_text("operational")),
             _row(ui, "Database", status_text((components.get("database") or {}).get("status"))),
             _row(ui, "Document storage", status_text((components.get("storage") or {}).get("status"))),
+            _row(ui, "Backups", status_text(backup.get("status"))),
+            _row(ui, "Last backup", _value(ui, format_datetime(backup_detail.get("last_backup_at")) if backup_detail.get("last_backup_at") else "None recorded")),
+            *[ui.hint(problem) for problem in backup_detail.get("problems") or []],
             _row(ui, "Migration version", _value(ui, health.get("migration_version") or "Not recorded")),
             _row(ui, "Maintenance mode", _value(ui, "On" if health.get("maintenance_mode") else "Off")),
             _row(ui, "Checked", _value(ui, format_datetime(health.get("generated_at")))),
