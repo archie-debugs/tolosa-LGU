@@ -9,6 +9,30 @@ FOOTER_SECTION = "Account"
 MENU_SECTION = "Menu"
 # Below this width the profile button shows only the initials.
 COMPACT_WIDTH = 600
+SIDEBAR_WIDTH = 250
+# The most characters of a nav label that fit beside its icon.
+NAV_LABEL_FITS = 20
+# Served from the shared assets folder; the sidebar shows plain colour when it is missing.
+SIDEBAR_IMAGE = "sb_tolosa_homepage.jpg"
+# The Sangguniang Bayan seal; an icon stands in when it is missing.
+SEAL_IMAGE = "sb_tolosa_seal.png"
+
+
+def shell_colors(is_dark):
+    """The sidebar and page colours for light or night mode."""
+    if is_dark:
+        return {
+            "canvas": "#0f171d",
+            "sidebar": ["#13263d", "#0b1622"],
+            "selected": "#1f4b7d",
+            "section": "#7fa6d6",
+        }
+    return {
+        "canvas": "#F2F6FC",
+        "sidebar": ["#1A56B5", "#0E3A86"],
+        "selected": "#2F7BE6",
+        "section": "#A9CBFF",
+    }
 
 
 def initials(name):
@@ -49,10 +73,9 @@ def render_shell(
         pass
 
     surface_color = ft.Colors.GREY_900 if is_dark else ft.Colors.WHITE
-    sidebar_color = "#111c22" if is_dark else None
     text_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_GREY_700
     heading_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_900
-    selected_color = ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_50
+    colors = shell_colors(is_dark)
     page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
 
     def apply_view_theme(control):
@@ -127,8 +150,8 @@ def render_shell(
     # =========================================================
 
     content_holder = ft.Container(
-        padding=0,
-        bgcolor=surface_color,
+        padding=ft.Padding(left=16, top=4, right=16, bottom=16),
+        bgcolor=colors["canvas"],
         border=None,
         border_radius=0,
         expand=True,
@@ -245,22 +268,21 @@ def render_shell(
                 pass
 
     def toggle_night_mode(_):
-        nonlocal is_dark, surface_color, sidebar_color, text_color, heading_color, selected_color
+        nonlocal is_dark, surface_color, text_color, heading_color, colors
 
         is_dark = not is_dark
+        colors = shell_colors(is_dark)
         page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
         surface_color = ft.Colors.GREY_900 if is_dark else ft.Colors.WHITE
-        sidebar_color = "#111c22" if is_dark else None
         text_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_GREY_700
         heading_color = ft.Colors.WHITE if is_dark else ft.Colors.BLUE_900
-        selected_color = ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_50
         try:
             page.client_storage.set("sb_night_mode", is_dark)
         except Exception:
             pass
-        page.bgcolor = surface_color
-        content_holder.bgcolor = surface_color
-        main_panel.bgcolor = surface_color
+        page.bgcolor = colors["canvas"]
+        content_holder.bgcolor = colors["canvas"]
+        main_panel.bgcolor = colors["canvas"]
         style_sidebar()
         switch_view(selected_index)
 
@@ -268,33 +290,47 @@ def render_shell(
     # BUILD NAVIGATION
     # =========================================================
 
-    def nav_tile(icon, label, color, on_click, bgcolor=None):
+    def nav_tile(icon, label, on_click, selected=False):
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(icon, color=color, size=20),
-                    ft.Container(width=8),
-                    ft.Text(label, size=12, color=color),
+                    ft.Icon(icon, color=ft.Colors.WHITE, size=21),
+                    ft.Container(width=10),
+                    ft.Text(
+                        label,
+                        size=13,
+                        color=ft.Colors.WHITE,
+                        weight=ft.FontWeight.W_600 if selected else ft.FontWeight.W_400,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        expand=True,
+                    ),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.Padding(left=12, top=8, right=12, bottom=8),
-            width=200,
-            bgcolor=bgcolor,
-            border_radius=10,
+            padding=ft.Padding(left=14, top=10, right=12, bottom=10),
+            width=SIDEBAR_WIDTH - 24,
+            bgcolor=colors["selected"] if selected else None,
+            border_radius=12,
+            # Long names are cut short, so hovering shows the whole name.
+            tooltip=label if len(label) > NAV_LABEL_FITS else None,
+            shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.with_opacity(0.25, ft.Colors.BLACK), offset=ft.Offset(0, 2)) if selected else None,
             on_click=on_click,
+            ink=not selected,
         )
 
     def section_header(title):
         return ft.Container(
-            content=ft.Text(
-                title.upper(),
-                size=10,
-                weight=ft.FontWeight.BOLD,
-                color=(ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_400),
+            content=ft.Row(
+                [
+                    ft.Text(title.upper(), size=11, weight=ft.FontWeight.BOLD, color=colors["section"]),
+                    ft.Container(height=1, expand=True, bgcolor=ft.Colors.with_opacity(0.35, colors["section"])),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.Padding(left=12, top=14, right=12, bottom=4),
-            width=200,
+            padding=ft.Padding(left=14, top=16, right=12, bottom=6),
+            width=SIDEBAR_WIDTH - 24,
         )
 
     def build_nav():
@@ -307,39 +343,31 @@ def render_shell(
 
         nav_container.controls.append(
             ft.Container(
-                content=ft.Column(
+                content=ft.Row(
                     [
                         ft.Container(
-                            content=ft.Icon(
-                                ft.Icons.ACCOUNT_BALANCE,
-                                color=ft.Colors.WHITE,
+                            content=ft.Image(
+                                src=SEAL_IMAGE,
+                                fit=ft.ImageFit.CONTAIN,
+                                error_content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE, size=30),
                             ),
-                            padding=10,
-                            bgcolor=ft.Colors.BLUE_800,
-                            border_radius=12,
+                            width=58,
+                            height=58,
+                            alignment=ft.Alignment(0, 0),
                         ),
-                        ft.Text(
-                            "SB Tolosa",
-                            size=14,
-                            weight=ft.FontWeight.BOLD,
-                            color=heading_color,
-                        ),
-                        ft.Text(
-                            "Admin Panel",
-                            size=12,
-                            color=(ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_600),
+                        ft.Column(
+                            [
+                                ft.Text("SB Tolosa", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                ft.Text("Admin Panel", size=13, color=ft.Colors.with_opacity(0.85, ft.Colors.WHITE)),
+                            ],
+                            spacing=0,
+                            tight=True,
                         ),
                     ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=6,
+                    spacing=14,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=ft.Padding(
-                    left=0,
-                    top=6,
-                    right=0,
-                    bottom=8,
-                ),
-                alignment=ft.Alignment.TOP_CENTER,
+                padding=ft.Padding(left=14, top=12, right=0, bottom=18),
             )
         )
 
@@ -354,13 +382,7 @@ def render_shell(
         for idx, (icon, label, _, section) in enumerate(shell_nav_items):
 
             is_selected = idx == selected_index
-            tile = nav_tile(
-                icon,
-                label,
-                ft.Colors.BLUE_800 if is_selected else text_color,
-                lambda e, i=idx: switch_view(i),
-                bgcolor=(selected_color if is_selected else None),
-            )
+            tile = nav_tile(icon, label, lambda e, i=idx: switch_view(i), selected=is_selected)
 
             if section == MENU_SECTION:
                 continue
@@ -585,24 +607,37 @@ def render_shell(
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN if compact else ft.MainAxisAlignment.END,
             spacing=8,
         )
-        profile_bar.bgcolor = surface_color
-        profile_bar.border = ft.Border(bottom=ft.BorderSide(1, ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_GREY_100))
+        profile_bar.bgcolor = colors["canvas"]
 
     # =========================================================
     # LAYOUT: sidebar beside the screen, or a drawer over it
     # =========================================================
 
+    sidebar_divider = ft.Container(height=1, bgcolor=ft.Colors.with_opacity(0.2, ft.Colors.WHITE), margin=ft.Padding(left=12, top=0, right=12, bottom=0))
     sidebar_panel = ft.Container(
-        width=220,
-        padding=ft.Padding(left=0, top=8, right=6, bottom=0),
-        content=ft.Column(
-            controls=[
-                ft.Column(controls=[nav_container], expand=True, scroll=ft.ScrollMode.AUTO),
-                ft.Divider(height=1, color=(ft.Colors.BLUE_GREY_800 if is_dark else ft.Colors.BLUE_GREY_100)),
-                ft.Container(content=footer_container, padding=ft.Padding(left=0, top=4, right=0, bottom=8)),
+        width=SIDEBAR_WIDTH,
+        content=ft.Stack(
+            [
+                # The town hall, faded into the bottom of the sidebar.
+                ft.Container(
+                    content=ft.Image(src=SIDEBAR_IMAGE, fit=ft.ImageFit.COVER, opacity=0.12, error_content=ft.Container()),
+                    left=0, right=0, bottom=0, height=260,
+                ),
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Column(controls=[nav_container], expand=True, scroll=ft.ScrollMode.AUTO),
+                            sidebar_divider,
+                            ft.Container(content=footer_container, padding=ft.Padding(left=0, top=8, right=0, bottom=12)),
+                        ],
+                        expand=True,
+                        spacing=0,
+                    ),
+                    padding=ft.Padding(left=12, top=8, right=12, bottom=0),
+                    left=0, right=0, top=0, bottom=0,
+                ),
             ],
             expand=True,
-            spacing=0,
         ),
         border=None,
         border_radius=0,
@@ -610,8 +645,8 @@ def render_shell(
     )
     main_panel = ft.Container(
         expand=True,
-        padding=ft.Padding(top=8, left=8, right=8, bottom=8),
-        bgcolor=surface_color,
+        padding=ft.Padding(top=12, left=16, right=16, bottom=0),
+        bgcolor=colors["canvas"],
         border=None,
         border_radius=0,
         content=ft.Column([profile_bar, notifications_panel, content_holder], expand=True, spacing=4),
@@ -624,8 +659,7 @@ def render_shell(
     )
 
     def style_sidebar():
-        # The drawer floats over the screen, so it needs a solid background.
-        sidebar_panel.bgcolor = sidebar_color or (surface_color if compact else None)
+        sidebar_panel.gradient = ft.LinearGradient(begin=ft.Alignment(0, -1), end=ft.Alignment(0, 1), colors=colors["sidebar"])
         sidebar_panel.shadow = ft.BoxShadow(blur_radius=16, color=ft.Colors.with_opacity(0.3, ft.Colors.BLACK)) if compact else None
 
     def set_drawer(opened):
@@ -684,7 +718,7 @@ def render_shell(
 
     page.horizontal_alignment = ft.CrossAxisAlignment.START
     page.vertical_alignment = ft.MainAxisAlignment.START
-    page.bgcolor = surface_color
+    page.bgcolor = colors["canvas"]
     show_layout()
 
     # =========================================================

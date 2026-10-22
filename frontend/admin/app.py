@@ -4065,7 +4065,7 @@ def main(page: ft.Page, session=None):
 
     def todays_documents_page():
         return build_todays_documents_view(
-            page, backend_api, surface_card, section_header,
+            page, backend_api, surface_card,
             open_details=show_document_details if has_permission("view_document_details") else None,
         )
 
