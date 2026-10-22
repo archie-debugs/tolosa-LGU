@@ -9,6 +9,7 @@ import Backends.SBmem_backend.main as sb_member_main
 from Backends.backend import models
 from Backends.backend.core import get_password_hash
 from Backends.backend.database import SessionLocal, engine
+from tests.registration_fields import FILLED
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -45,7 +46,7 @@ def headers_for(client, username):
 
 
 def register(client, headers, filename="ordinance.pdf", content=PDF, **fields):
-    data = {"title": "Ordinance No. 7 Series 2025", "series_year": "2025", **fields}
+    data = {"title": "Ordinance No. 7 Series 2025", "series_year": "2025", **FILLED, **fields}
     return client.post("/documents/register", data=data, files={"file": (filename, content, "application/pdf")}, headers=headers)
 
 
@@ -184,7 +185,7 @@ def test_every_registration_path_saves_the_category(client):
     assert client.put(path_of(upload["upload_url"]), content=PDF + b"%tmp\n").status_code == 200
     confirmed = client.post(
         "/documents/bulk-register/confirm_tmp",
-        json={"tmp_names": [upload["tmp_name"]], "series_year": 2024, "category": "Health"},
+        json={**FILLED, "tmp_names": [upload["tmp_name"]], "series_year": 2024, "category": "Health"},
         headers=headers,
     ).json()
     assert confirmed["registered"] == 1, confirmed

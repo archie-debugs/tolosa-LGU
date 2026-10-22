@@ -8,6 +8,7 @@ import Backends.backend.routes.documents as documents_routes
 from Backends.backend import models
 from Backends.backend.core import get_password_hash
 from Backends.backend.database import SessionLocal, engine
+from tests.registration_fields import FILLED
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -61,7 +62,7 @@ def office_id(name):
 
 
 def register(client, headers, file=None, **fields):
-    data = {"title": "Ordinance No. 7", "series_year": "2025", **fields}
+    data = {"title": "Ordinance No. 7", "series_year": "2025", **FILLED, **fields}
     files = {"file": file} if file else None
     return client.post("/documents/register", data=data, files=files, headers=headers)
 
@@ -77,7 +78,7 @@ def upload(client, headers, filename, content):
 def confirm(client, headers, specs, **shared):
     return client.post(
         "/documents/bulk-register/confirm_tmp",
-        json={"tmp_names": [spec["tmp_name"] for spec in specs], "documents": specs, **shared},
+        json={"tmp_names": [spec["tmp_name"] for spec in specs], "documents": specs, **FILLED, **shared},
         headers=headers,
     )
 
@@ -184,10 +185,44 @@ def test_ordinance_and_resolution_keep_their_standard_spelling(client):
     assert body["document_type"] == "Ordinance"
 
 
-def test_category_is_optional(client):
-    response = register(client, headers_for(client, "admin"), document_type="Resolution")
+# Everything but the description is required
+
+@pytest.mark.parametrize("blank", ["document_type", "category", "due_date", "assigned_to", "action_required", "author"])
+def test_every_field_but_the_description_is_required(client, blank):
+    response = register(client, headers_for(client, "admin"), **{blank: "  "})
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("Fill in the required fields:")
+    with SessionLocal() as db:
+        assert db.query(models.Document).count() == 0
+
+
+def test_the_description_is_optional(client):
+    response = register(client, headers_for(client, "admin"), description="")
     assert response.status_code == 200, response.text
-    assert response.json()["category"] is None
+    assert response.json()["description"] is None
+
+
+def test_a_document_needs_its_number_unless_it_is_a_measure_not_yet_enacted(client):
+    headers = headers_for(client, "admin")
+    memo = register(client, headers, title="Office memo", document_type="Memorandum")
+    assert (memo.status_code, memo.json()["detail"]) == (400, "Number is required.")
+    approved = register(client, headers, title="Market code", document_type="Ordinance", stage="Approved")
+    assert (approved.status_code, approved.json()["detail"]) == (400, "Number is required.")
+
+    assert register(client, headers, title="Market code", document_type="Ordinance", stage="Filed").status_code == 200
+    assert register(client, headers, title="Office memo", document_type="Memorandum", document_number="3").status_code == 200
+
+
+def test_multiple_registration_needs_the_same_fields_and_a_number_per_file(client):
+    headers = headers_for(client, "admin")
+    unnumbered = upload(client, headers, "memo.pdf", PDF)
+    assert confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025}], author="").status_code == 400
+
+    result = confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025}], document_type="Memorandum").json()
+    assert result["registered"] == 0 and result["errors"][0]["reason"] == "Number is required."
+    numbered = confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025, "document_number": "4"}],
+                       document_type="Memorandum").json()
+    assert numbered["registered"] == 1, numbered
 
 
 def test_an_overlong_type_or_category_is_refused(client):
@@ -201,7 +236,8 @@ def test_an_overlong_type_or_category_is_refused(client):
 def test_the_form_suggests_types_and_categories_already_used(client):
     headers = headers_for(client, "admin")
     for title, category, document_type in [("A", "Finance", "Memorandum"), ("B", "Finance", "Ordinance"), ("C", "Health", "Memorandum")]:
-        assert register(client, headers, title=title, category=category, document_type=document_type).status_code == 200
+        response = register(client, headers, title=title, category=category, document_type=document_type, document_number=title)
+        assert response.status_code == 200, response.text
     options = client.get("/documents/registration/options", headers=headers).json()
     assert options["document_types"] == ["Ordinance", "Resolution"]
     assert options["other_document_types"] == ["Memorandum"]

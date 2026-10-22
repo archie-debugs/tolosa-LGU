@@ -91,7 +91,7 @@ class CategoryField:
         style = style or {}
         sizing = {"width": width} if width else {}
         self.width = width
-        self.text = ft.TextField(data="Category", hint_text="Type a category (optional)", label=label,
+        self.text = ft.TextField(data="Category", hint_text="Type a category", label=label,
                                  value=(value or "").strip(), **style, **sizing)
         pick_style = ft.ButtonStyle(shape=ft.StadiumBorder(), side=ft.BorderSide(1, ft.Colors.BLUE_100), padding=ft.Padding(10, 0, 10, 0))
         self.picks = [ft.TextButton(name, data=name, height=26, style=pick_style, on_click=lambda _, name=name: self.pick(name))

@@ -15,6 +15,7 @@ from Backends.backend.database import SessionLocal, engine
 from Backends.backend.core import OFFICE_WORKFLOW_PERMISSIONS, get_default_permissions_for_role, require_permission
 from Backends.backend.routes import documents as documents_routes
 from fastapi import HTTPException
+from tests.registration_fields import FILLED
 
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 os.environ["DATABASE_URL"] = "sqlite:///./test_auth_user_flows.sqlite"
@@ -148,6 +149,7 @@ def test_individual_registration_allows_repeated_number_across_series_years(monk
             "/documents/register",
             headers=admin_headers,
             data={
+                **FILLED,
                 "title": f"ORDINANCE NO. 04 Series {year}",
                 "document_number": "04",
                 "series_year": str(year),
@@ -225,6 +227,7 @@ def test_document_registration_creates_stable_qr_token_and_public_qr_lookup(monk
         "/documents/register",
         headers=headers,
         data={
+            **FILLED,
             "title": "Stable QR document",
             "document_number": "07",
             "series_year": "2026",
@@ -349,6 +352,7 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
         "/documents/bulk-register/confirm_tmp",
         headers=bearer_headers(client),
         json={
+            **FILLED,
             "tmp_names": tmp_names,
             "documents": [
                 {"tmp_name": tmp_name, "series_year": 1994}
@@ -383,6 +387,7 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
         "/documents/bulk-register/confirm_tmp",
         headers=bearer_headers(client),
         json={
+            **FILLED,
             "tmp_names": [duplicate_name],
             "documents": [{"tmp_name": duplicate_name, "series_year": 1994}],
         },
@@ -458,7 +463,7 @@ def test_uploaded_documents_are_created_as_approved(monkeypatch):
     response = client.post(
         "/documents/register",
         headers=admin_headers,
-        data={"title": "Approved upload", "description": "test", "series_year": "1994"},
+        data={**FILLED, "title": "Approved upload", "description": "test", "series_year": "1994"},
         files={"file": ("sample.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")},
     )
 
@@ -520,7 +525,7 @@ def test_bulk_registration_requires_explicit_per_file_years(tmp_path, monkeypatc
     response = client.post(
         "/documents/bulk-register/confirm_tmp",
         headers=bearer_headers(client),
-        json={"tmp_names": tmp_names, "documents": documents},
+        json={**FILLED, "tmp_names": tmp_names, "documents": documents},
     )
     assert response.status_code == 200, response.text
     result = response.json()
@@ -597,7 +602,7 @@ def test_multipart_bulk_registration_requires_and_stores_each_year(tmp_path, mon
     response = client.post(
         "/documents/bulk-register/confirm",
         headers=headers,
-        data={"series_years": ["1993", "1995"]},
+        data={**FILLED, "series_years": ["1993", "1995"]},
         files=files,
     )
     assert response.status_code == 200, response.text

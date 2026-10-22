@@ -6,6 +6,7 @@ import Backends.backend.routes.documents as documents_routes
 from Backends.backend import models
 from Backends.backend.core import get_password_hash
 from Backends.backend.database import SessionLocal, engine
+from tests.registration_fields import FILLED
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -48,7 +49,7 @@ def headers_for(client, username="admin"):
 @pytest.fixture
 def document(client):
     response = client.post("/documents/register", data={
-        "title": "Ordinance No. 7", "series_year": "2025", "category": "Old Category", "document_type": "Ordinance",
+        **FILLED, "title": "Ordinance No. 7", "series_year": "2025", "category": "Old Category", "document_type": "Ordinance",
     }, headers=headers_for(client))
     assert response.status_code == 200, response.text
     return response.json()
@@ -146,18 +147,18 @@ def test_edit_options_suggest_what_documents_already_use(client, document):
 
 
 def test_edit_sets_status_and_action_required(client, document):
-    assert (document["status"], document["action_required"]) == ("Approved", None)
+    assert (document["status"], document["action_required"]) == ("Approved", "For Agenda")
 
-    response = edit(client, document, status="For information", action_required="For Agenda")
+    response = edit(client, document, status="For information", action_required="Posting")
 
     assert response.status_code == 200, response.text
-    assert (response.json()["status"], response.json()["action_required"]) == ("For information", "For Agenda")
+    assert (response.json()["status"], response.json()["action_required"]) == ("For information", "Posting")
     assert edit(client, document, status="").status_code == 400
 
 
 def test_registration_records_the_action_required(client):
     response = client.post("/documents/register", data={
-        "title": "Request letter", "series_year": "2026", "document_type": "Ordinance", "action_required": "Posting",
+        **FILLED, "title": "Request letter", "series_year": "2026", "document_type": "Ordinance", "action_required": "Posting",
     }, headers=headers_for(client))
 
     assert response.status_code == 200, response.text
