@@ -81,6 +81,56 @@ class Committee(Base):
     chair = relationship("CouncilMember", foreign_keys=[chair_member_id])
 
 
+class CouncilSession(Base):
+    """A meeting of the SB, numbered within its term separately for Regular and Special sessions.
+
+    Draft and Scheduled sessions can be edited; once Held, attendance is only corrected (docs/adr/0003).
+    """
+
+    __tablename__ = "council_sessions"
+    __table_args__ = (
+        UniqueConstraint("term_id", "kind", "number", name="uq_council_sessions_term_kind_number"),
+        CheckConstraint("kind IN ('Regular', 'Special')", name="ck_council_sessions_kind"),
+        CheckConstraint("status IN ('Draft', 'Scheduled', 'Held')", name="ck_council_sessions_status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    term_id = Column(Integer, ForeignKey("council_terms.id"), nullable=False, index=True)
+    kind = Column(String(10), nullable=False)
+    number = Column(Integer, nullable=False)
+    held_on = Column(Date, nullable=False, index=True)
+    status = Column(String(10), nullable=False, default="Draft", server_default="Draft")
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    term = relationship("CouncilTerm", foreign_keys=[term_id])
+
+
+class SessionAttendance(Base):
+    """A member's attendance mark at a session; the latest entry per member is the current one.
+
+    Before the session is Held the entry is updated in place. After that a change is a new entry with
+    is_correction and the reason in note, and earlier entries stay (docs/adr/0003).
+    """
+
+    __tablename__ = "session_attendance"
+    __table_args__ = (
+        CheckConstraint("mark IN ('Present', 'Absent', 'On leave', 'Excused')", name="ck_session_attendance_mark"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("council_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    member_id = Column(Integer, ForeignKey("council_members.id"), nullable=False, index=True)
+    mark = Column(String(10), nullable=False)
+    note = Column(Text, nullable=True)
+    is_correction = Column(Boolean, nullable=False, default=False, server_default="false")
+    recorded_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recorded_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    member = relationship("CouncilMember", foreign_keys=[member_id])
+
+
 class Category(Base):
     __tablename__ = "categories"
 

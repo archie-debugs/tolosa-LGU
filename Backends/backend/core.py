@@ -165,6 +165,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "set_documents_for_sb_members",
         "manage_members_and_committees",
         "change_measure_stage",
+        "manage_sessions",
         "view_audit_logs",
         "export_audit_logs",
         "view_analytics",
