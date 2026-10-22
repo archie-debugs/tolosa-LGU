@@ -4847,7 +4847,7 @@ def main(page: ft.Page, session=None):
             selected_monitoring_office = office
             show_shell(office_monitoring_view(office), initial_selected_index=office_dashboard_index())
 
-        return build_office_overview_view(page, backend_api, surface_card, section_header, open_office)
+        return build_office_overview_view(page, backend_api, surface_card, open_office)
 
     def office_dashboard_view():
         if (current_user_role or "").strip().lower() == "super administrator":
