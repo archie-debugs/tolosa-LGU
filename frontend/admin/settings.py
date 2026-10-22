@@ -9,6 +9,7 @@ import flet as ft
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
 
 LABEL_WIDTH = 150
+MAX_ANNOUNCEMENTS = 10  # the backend enforces the same limit
 
 DEFAULT_SYSTEM_SETTINGS = {
     "organization_name": "LGU Tolosa",
@@ -73,6 +74,7 @@ def build_super_admin_settings_view(page, surface_card, section_header, *, api, 
             ui.hint("Changing your password signs you out on every other device. See everyone's sessions in Active Sessions."),
         ]),
         _system_configuration_card(page, ui, surface_card, section_header, api),
+        _announcements_card(page, ui, surface_card, section_header, api),
         _system_information_card(ui, surface_card, section_header, api),
         _preferences_card(ui, surface_card, section_header),
     ])
@@ -191,6 +193,92 @@ def _system_configuration_card(page, ui, surface_card, section_header, api):
         ft.Row([
             ft.ElevatedButton("Save system settings", icon=ft.Icons.SAVE_OUTLINED, on_click=save),
         ], alignment=ft.MainAxisAlignment.END),
+    ])
+
+
+def _announcements_card(page, ui, surface_card, section_header, api):
+    """Edit the announcements shown on the public homepage, in the order they appear there."""
+    message = ft.Text("", size=12, visible=False)
+    entries = []  # one dict of TextFields per announcement
+    rows = ft.Column(spacing=16)
+    add_button = ft.OutlinedButton("Add announcement", icon=ft.Icons.ADD, on_click=lambda _: add())
+    save_button = ft.ElevatedButton("Save announcements", icon=ft.Icons.SAVE_OUTLINED, on_click=lambda _: save())
+
+    def fields_for(item):
+        return {
+            "category": ft.TextField(label="Category", hint_text="e.g. Public notice", value=item.get("category") or "", width=200, max_length=40),
+            "title": ft.TextField(label="Title", value=item.get("title") or "", width=360, max_length=120),
+            "date": ft.TextField(label="Date", hint_text="e.g. Oct 27, 2026", value=item.get("date") or "", width=180, max_length=40),
+            "details": ft.TextField(label="Details (optional)", value=item.get("details") or "", width=560,
+                                    multiline=True, min_lines=1, max_lines=3, max_length=300),
+        }
+
+    try:
+        stored = (api("GET", "/system-settings").get("settings") or {}).get("homepage_announcements") or []
+        entries.extend(fields_for(item) for item in stored if isinstance(item, dict))
+    except Exception as exc:
+        # Saving now would replace the real announcements with an empty list.
+        message.value, message.color, message.visible = f"Unable to load announcements: {exc}", ft.Colors.RED_700, True
+        add_button.disabled = save_button.disabled = True
+
+    def render():
+        rows.controls = []
+        for index, fields in enumerate(entries):
+            rows.controls.append(ft.Column([
+                ft.Row([
+                    ft.Text(f"Announcement {index + 1}", size=13, weight=ft.FontWeight.W_600, color=ui.heading_color()),
+                    ft.IconButton(icon=ft.Icons.ARROW_UPWARD, tooltip="Move up", disabled=index == 0,
+                                  on_click=lambda _, i=index: move(i, -1)),
+                    ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, tooltip="Move down", disabled=index == len(entries) - 1,
+                                  on_click=lambda _, i=index: move(i, 1)),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Remove", icon_color=ft.Colors.RED_700,
+                                  on_click=lambda _, i=index: remove(i)),
+                ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([fields["category"], fields["title"], fields["date"]], wrap=True, spacing=12),
+                fields["details"],
+            ], spacing=8))
+        if not entries:
+            rows.controls.append(ui.hint("No announcements. The homepage will say there are none right now."))
+        if not save_button.disabled:
+            add_button.disabled = len(entries) >= MAX_ANNOUNCEMENTS
+
+    def refresh():
+        message.visible = False
+        render()
+        page.update()
+
+    def add():
+        entries.append(fields_for({}))
+        refresh()
+
+    def remove(index):
+        entries.pop(index)
+        refresh()
+
+    def move(index, step):
+        entries[index], entries[index + step] = entries[index + step], entries[index]
+        refresh()
+
+    def save():
+        announcements = [{key: (field.value or "").strip() for key, field in fields.items()} for fields in entries]
+        missing = [str(number) for number, item in enumerate(announcements, start=1) if not item["title"]]
+        if missing:
+            message.value, message.color = f"Add a title to announcement {', '.join(missing)}.", ft.Colors.RED_700
+        else:
+            try:
+                api("PUT", "/system-settings", json={"settings": {"homepage_announcements": announcements}})
+                message.value, message.color = "Announcements saved. The homepage shows them the next time it opens.", ft.Colors.GREEN_700
+            except Exception as exc:
+                message.value, message.color = f"Unable to save announcements: {str(exc)[:180]}", ft.Colors.RED_700
+        message.visible = True
+        page.update()
+
+    render()
+    return _card(surface_card, section_header, "Homepage Announcements",
+                 f"What the public homepage shows under Announcements (up to {MAX_ANNOUNCEMENTS}).", ft.Icons.CAMPAIGN_OUTLINED, [
+        rows,
+        message,
+        ft.Row([add_button, save_button], alignment=ft.MainAxisAlignment.END, spacing=12),
     ])
 
 
