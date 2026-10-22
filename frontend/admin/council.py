@@ -24,7 +24,7 @@ def _parse_date(value, label):
         raise ValueError(f"{label} must be a date like 2025-07-01.")
 
 
-def build_members_committees_view(page, surface_card, section_header, api, *, can_manage):
+def build_members_committees_view(page, surface_card, api, *, can_manage):
     """`api(method, path, **kwargs)` returns parsed JSON or raises with the backend's detail."""
     ui = TrackingWidgets(page)
     state = {"terms": [], "term_id": None, "members": [], "committees": [], "users": None}
@@ -71,40 +71,38 @@ def build_members_committees_view(page, surface_card, section_header, api, *, ca
         selected = term()
         term_dates.value = f"{selected['starts_on']} to {selected['ends_on']}" if selected else "No term yet. Add the current SB term first."
 
-        member_rows = []
-        for member in state["members"]:
-            status = "Current" if member.get("is_active") else f"Left {member.get('left_on')}"
-            actions = [ft.IconButton(ft.Icons.EDIT_OUTLINED, tooltip="Edit", on_click=lambda _, m=member: open_member(m))] if can_manage else []
-            member_rows.append(ft.DataRow(cells=[
-                ft.DataCell(ft.Text(member["full_name"], size=12)),
-                ft.DataCell(ft.Text(member["position"], size=12)),
-                ft.DataCell(ft.Text(member.get("username") or "-", size=12)),
-                ft.DataCell(ft.Text(status, size=12, color=ft.Colors.GREEN_700 if member.get("is_active") else ui.muted_color())),
-                ft.DataCell(ft.Row(actions, spacing=2)),
-            ]))
         members_area.controls = [
-            ft.DataTable(columns=[ft.DataColumn(ft.Text(name)) for name in ("Name", "Position", "Login", "Status", "")],
-                         rows=member_rows, column_spacing=24),
-        ] if member_rows else [ui.hint("No members in this term yet.")]
+            row(member["full_name"], f"{member['position']} · login: {member.get('username') or 'none'}",
+                "Current" if member.get("is_active") else f"Left {member.get('left_on')}", member.get("is_active"),
+                [ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_color=ui.accent(), tooltip="Edit", on_click=lambda _, m=member: open_member(m))])
+            for member in state["members"]
+        ] or [ui.empty_box("No members in this term yet." if state["term_id"] else "No term yet. Add the current SB term first.")]
 
-        committee_rows = []
-        for committee in state["committees"]:
-            active = committee.get("is_active")
-            actions = [
-                ft.IconButton(ft.Icons.EDIT_OUTLINED, tooltip="Edit", on_click=lambda _, c=committee: open_committee(c)),
-                ft.IconButton(ft.Icons.PAUSE_CIRCLE_OUTLINE if active else ft.Icons.PLAY_CIRCLE_OUTLINE,
-                              tooltip="Deactivate" if active else "Activate", on_click=lambda _, c=committee: toggle_committee(c)),
-            ] if can_manage else []
-            committee_rows.append(ft.DataRow(cells=[
-                ft.DataCell(ft.Text(committee["name"], size=12)),
-                ft.DataCell(ft.Text(committee.get("chair_name") or "-", size=12)),
-                ft.DataCell(ft.Text("Active" if active else "Inactive", size=12, color=ft.Colors.GREEN_700 if active else ui.muted_color())),
-                ft.DataCell(ft.Row(actions, spacing=2)),
-            ]))
         committees_area.controls = [
-            ft.DataTable(columns=[ft.DataColumn(ft.Text(name)) for name in ("Committee", "Chair", "Status", "")],
-                         rows=committee_rows, column_spacing=24),
-        ] if committee_rows else [ui.hint("No committees yet.")]
+            row(committee["name"], f"Chair: {committee.get('chair_name') or 'none yet'}",
+                "Active" if committee.get("is_active") else "Inactive", committee.get("is_active"),
+                [ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_color=ui.accent(), tooltip="Edit", on_click=lambda _, c=committee: open_committee(c)),
+                 ft.IconButton(ft.Icons.PAUSE_CIRCLE_OUTLINE if committee.get("is_active") else ft.Icons.PLAY_CIRCLE_OUTLINE,
+                               icon_color=ui.accent(), tooltip="Deactivate" if committee.get("is_active") else "Activate",
+                               on_click=lambda _, c=committee: toggle_committee(c))])
+            for committee in state["committees"]
+        ] or [ui.empty_box("No committees yet.")]
+
+    def row(title, detail, status, active, actions):
+        """One member or committee, in the rounded row style the other admin lists use."""
+        return ft.Container(
+            content=ft.Row([
+                ft.Column([
+                    ft.Text(title, size=15, weight=ft.FontWeight.W_600, color=ui.link_color()),
+                    ft.Text(detail, size=12, color=ui.muted_color()),
+                ], spacing=2, expand=True),
+                ui.chip(status, ft.Colors.GREEN_700 if active else ft.Colors.BLUE_GREY_500),
+                *(actions if can_manage else []),
+            ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(14, 8, 8, 8),
+            bgcolor=ui.tone("#F7FAFE", "#1B2430"),
+            border_radius=12,
+        )
 
     def refresh():
         load()
@@ -239,11 +237,10 @@ def build_members_committees_view(page, surface_card, section_header, api, *, ca
         return ft.Row(list(buttons), spacing=8, wrap=True, visible=can_manage)
 
     return ft.Column([
-        surface_card(section_header("Members & Committees", "The SB term, its members, and the standing committees.",
-                                    ft.Icons.GROUPS_OUTLINED, ft.Colors.GREEN_700), padding=18),
+        ui.banner("Members & Committees", "The SB term, its members, and the standing committees.", ft.Icons.GROUPS),
         message,
         surface_card(ft.Column([
-            ft.Text("Term and members", size=15, weight=ft.FontWeight.W_600, color=ui.heading_color()),
+            ui.card_title("Term and members", ft.Icons.PERSON_OUTLINE, subtitle="Members are never deleted; give them a date if they leave."),
             ft.Row([term_choice, term_dates], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             manage(
                 ft.OutlinedButton("Add term", icon=ft.Icons.ADD, on_click=lambda _: open_term()),
@@ -251,10 +248,10 @@ def build_members_committees_view(page, surface_card, section_header, api, *, ca
                 ft.ElevatedButton("Add member", icon=ft.Icons.PERSON_ADD_ALT, on_click=lambda _: open_member()),
             ),
             members_area,
-        ], spacing=12), padding=18),
+        ], spacing=14), padding=20),
         surface_card(ft.Column([
-            ft.Text("Committees", size=15, weight=ft.FontWeight.W_600, color=ui.heading_color()),
+            ui.card_title("Committees", ft.Icons.GROUPS_OUTLINED, subtitle="Committees are deactivated, not deleted, since measures are referred to them."),
             manage(ft.ElevatedButton("Add committee", icon=ft.Icons.ADD, on_click=lambda _: open_committee())),
             committees_area,
-        ], spacing=12), padding=18),
+        ], spacing=14), padding=20),
     ], spacing=16)

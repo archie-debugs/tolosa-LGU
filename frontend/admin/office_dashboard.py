@@ -7,9 +7,6 @@ import flet as ft
 
 from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time
 
-# Served from the shared assets folder; the banner shows plain colour when it is missing.
-BANNER_IMAGE = "sb_tolosa_homepage.jpg"
-
 
 def build_office_queue_view(
     page,
@@ -410,65 +407,6 @@ def build_office_overview_view(page, api, surface_card, open_office):
             ink=True,
         )
 
-    def banner():
-        blue = "#0D4FB0"
-        return ft.Container(
-            content=ft.Stack(
-                [
-                    ft.Container(
-                        content=ft.Image(src=BANNER_IMAGE, fit=ft.ImageFit.COVER, error_content=ft.Container()),
-                        right=0, top=0, bottom=0, width=700,
-                    ),
-                    # Blends the photo into the blue, so the heading sits on solid colour.
-                    ft.Container(
-                        gradient=ft.LinearGradient(
-                            begin=ft.Alignment(-1, 0),
-                            end=ft.Alignment(1, 0),
-                            colors=[blue, ft.Colors.with_opacity(0.75, blue), ft.Colors.with_opacity(0.15, blue), ft.Colors.with_opacity(0.0, blue)],
-                            stops=[0.0, 0.25, 0.6, 1.0],
-                        ),
-                        right=0, top=0, bottom=0, width=700,
-                    ),
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, size=32, color=ft.Colors.BLUE_700),
-                                    width=72, height=72, border_radius=16,
-                                    alignment=ft.Alignment(0, 0),
-                                    bgcolor=ft.Colors.with_opacity(0.92, ft.Colors.WHITE),
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.Text("Office Dashboard", size=28, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                                        ft.Text("Every active office's workload. Select an office to see its queue.", size=15, color=ft.Colors.with_opacity(0.92, ft.Colors.WHITE)),
-                                    ],
-                                    spacing=4,
-                                    alignment=ft.MainAxisAlignment.CENTER,
-                                    expand=True,
-                                ),
-                            ],
-                            spacing=24,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                        padding=ft.Padding(26, 0, 26, 0),
-                        alignment=ft.Alignment(-1, 0),
-                        left=0, right=0, top=0, bottom=0,
-                    ),
-                    ft.Container(
-                        content=ft.IconButton(ft.Icons.REFRESH, icon_color=ft.Colors.WHITE, tooltip="Refresh", on_click=lambda _: load()),
-                        bgcolor=ft.Colors.with_opacity(0.25, ft.Colors.BLACK),
-                        border_radius=20,
-                        top=10, right=10,
-                    ),
-                ],
-                height=132,
-            ),
-            gradient=ft.LinearGradient(begin=ft.Alignment(-1, 0), end=ft.Alignment(1, 0), colors=["#0B47A3", "#1565C0"]),
-            border_radius=16,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-        )
-
     def load(update=True):
         notice_text.visible = False
         try:
@@ -487,7 +425,10 @@ def build_office_overview_view(page, api, surface_card, open_office):
     load(update=False)
     return ft.Column(
         [
-            banner(),
+            widgets.banner(
+                "Office Dashboard", "Every active office's workload. Select an office to see its queue.", ft.Icons.ACCOUNT_BALANCE,
+                corner=ft.IconButton(ft.Icons.REFRESH, icon_color=ft.Colors.WHITE, tooltip="Refresh", on_click=lambda _: load()),
+            ),
             notice_text,
             surface_card(rows_column, padding=18),
         ],

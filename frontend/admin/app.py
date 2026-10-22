@@ -1105,7 +1105,7 @@ def main(page: ft.Page, session=None):
             return ft.Column([ft.Text("Error building Audit Logs view"), ft.Text(str(e)), ft.Text(tb)])
 
     def members_committees_view():
-        return build_members_committees_view(page, surface_card, section_header, backend_api,
+        return build_members_committees_view(page, surface_card, backend_api,
                                              can_manage=has_permission("manage_members_and_committees"))
 
     reference_categories = []
@@ -1193,7 +1193,7 @@ def main(page: ft.Page, session=None):
 
     def reference_data_view():
         load_reference_data()
-        return build_reference_data_view(reference_categories, reference_document_types, reference_search, reference_kind_filter, open_reference_create_dialog, open_reference_edit_dialog, toggle_reference_definition, load_reference_data, page, section_header)
+        return build_reference_data_view(reference_categories, reference_document_types, reference_search, reference_kind_filter, open_reference_create_dialog, open_reference_edit_dialog, toggle_reference_definition, load_reference_data, page)
 
     documents_data = []
     archived_documents_data = []
@@ -2214,7 +2214,6 @@ def main(page: ft.Page, session=None):
             page,
             backend_api,
             surface_card,
-            section_header,
             normalize=normalize_document,
             selection=selected_qr_document_ids,
             loaded=documents_data,
@@ -2244,7 +2243,7 @@ def main(page: ft.Page, session=None):
         return view
 
     def announcements_view():
-        return build_announcements_view(page, surface_card, section_header, backend_api)
+        return build_announcements_view(page, surface_card, backend_api)
 
     def settings_view():
         # Super Administrators and Employees each get their own Settings page; any other role gets none.
@@ -2612,7 +2611,7 @@ def main(page: ft.Page, session=None):
 
     def qr_tracking_view():
         return build_qr_tracking_view(
-            page, backend_api, surface_card, section_header,
+            page, backend_api, surface_card,
             open_details=show_document_details if has_permission("view_document_details") else None,
         )
 
@@ -2833,13 +2832,6 @@ def main(page: ft.Page, session=None):
         load_user_management_data()
         visible_users = filter_user_data()
 
-        create_button = ft.Button(
-            "+ Create User",
-            on_click=lambda _: open_create_user_dialog(),
-            bgcolor=ft.Colors.BLUE_800,
-            color=ft.Colors.WHITE,
-        )
-        refresh_button = ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=refresh_user_management_data)
         view = build_users_roles_view(
             visible_users,
             user_search_field,
@@ -2847,8 +2839,6 @@ def main(page: ft.Page, session=None):
             user_status_filter,
             user_office_filter,
             user_permission_filter,
-            create_button,
-            refresh_button,
             lambda _: open_create_user_dialog(),
             lambda _, item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
             lambda _, item=None: open_edit_user_dialog(item or visible_users[0] if visible_users else {}),
@@ -2856,7 +2846,6 @@ def main(page: ft.Page, session=None):
             lambda _, item=None: delete_user(item or visible_users[0] if visible_users else {}),
             page,
             surface_card,
-            section_header,
             user_table_holder,
             user_no_users_notice,
             offices_data=office_management_data,
@@ -3985,7 +3974,6 @@ def main(page: ft.Page, session=None):
             page,
             backend_api,
             surface_card,
-            section_header,
             normalize=normalize_document,
             selection=selected_archived_document_ids,
             loaded=archived_documents_data,
@@ -4381,8 +4369,51 @@ def main(page: ft.Page, session=None):
         return users_roles_view()
 
     def sessions_view():
-        table_holder = ft.Container(width="100%")
+        widgets = TrackingWidgets(page)
+        rows_column = ft.Column(spacing=12)
+        count_text = ft.Text("", size=13, color=widgets.body_color())
         notice = ft.Text("", size=12, color=ft.Colors.RED_700)
+
+        def session_time(value):
+            parsed = local_time(value)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S") if parsed else "-"
+
+        def session_row(item):
+            username = item.get("username") or "-"
+            times = [
+                ft.Column([widgets.hint(label), ft.Text(session_time(item.get(key)), size=13, color=widgets.body_color())], spacing=2, width=160)
+                for label, key in (("Created", "created_at"), ("Last activity", "last_activity"), ("Expires", "expires_at"))
+            ]
+            if item.get("role") == "Super Administrator":
+                action = ft.Container(
+                    widgets.chip("Protected", widgets.accent()),
+                    tooltip="Super Administrator sessions cannot be revoked.",
+                )
+            else:
+                action = ft.OutlinedButton(
+                    "Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id),
+                    style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=ft.Colors.RED_600, side=ft.BorderSide(1, ft.Colors.RED_300)),
+                )
+            return ft.Container(
+                content=ft.Row(
+                    [
+                        ft.CircleAvatar(content=ft.Text(username[:2].upper(), size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE), bgcolor=ft.Colors.BLUE_700, radius=21),
+                        ft.Column(
+                            [ft.Text(username, size=15, weight=ft.FontWeight.W_600, color=widgets.link_color()), widgets.hint(item.get("role") or "")],
+                            spacing=2,
+                            expand=True,
+                        ),
+                        *times,
+                        ft.Container(action, width=110, alignment=ft.Alignment(1, 0)),
+                    ],
+                    spacing=16,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(12, 10, 12, 10),
+                bgcolor=widgets.tone("#F7FAFE", "#1B2430"),
+                border=ft.border.all(1, widgets.line_color()),
+                border_radius=12,
+            )
 
         def load_sessions(_=None):
             try:
@@ -4395,25 +4426,11 @@ def main(page: ft.Page, session=None):
                 if response.status_code != 200:
                     raise Exception(response.text)
                 sessions = response.json() or []
-                rows = []
-                for item in sessions:
-                    rows.append(ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(item.get("username") or "-", size=12)),
-                        *[ft.DataCell(ft.Text(local_time(item.get(key)).strftime("%Y-%m-%d %H:%M:%S") if local_time(item.get(key)) else "-", size=12))
-                          for key in ("created_at", "last_activity", "expires_at")],
-                        ft.DataCell(
-                            ft.Text("Protected", size=12, color=ft.Colors.BLUE_GREY_500, tooltip="Super Administrator sessions cannot be revoked.")
-                            if item.get("role") == "Super Administrator"
-                            else ft.OutlinedButton("Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id))
-                        ),
-                    ]))
-                table_holder.content = ft.DataTable(
-                    columns=[ft.DataColumn(ft.Text(label, weight=ft.FontWeight.BOLD)) for label in ("User", "Created", "Last Activity", "Expires", "Action")],
-                    rows=rows,
-                    column_spacing=24,
-                )
-                notice.value = "No active sessions." if not sessions else ""
+                rows_column.controls = [session_row(item) for item in sessions] or [widgets.empty_box("No active sessions.")]
+                count_text.value = f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}"
+                notice.value = ""
             except Exception as exc:
+                rows_column.controls = []
                 notice.value = f"Unable to load sessions: {exc}"
             page.update()
 
@@ -4432,15 +4449,24 @@ def main(page: ft.Page, session=None):
                 notice.value = f"Unable to revoke session: {exc}"
                 page.update()
 
-        view = surface_card(
-            ft.Column([
-                section_header("Active Sessions", "Monitor and revoke active user sessions.", ft.Icons.SECURITY_OUTLINED, ft.Colors.BLUE_700),
-                ft.Row([ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=load_sessions)], spacing=8),
-                notice,
-                table_holder,
-            ], spacing=12, tight=True),
-            padding=18,
-        )
+        view = ft.Column([
+            widgets.banner(
+                "Active Sessions", "Monitor and revoke active user sessions.", ft.Icons.SECURITY,
+                corner=ft.IconButton(ft.Icons.REFRESH, icon_color=ft.Colors.WHITE, tooltip="Refresh", on_click=load_sessions),
+            ),
+            surface_card(
+                ft.Column([
+                    widgets.card_title(
+                        "Signed-in sessions", ft.Icons.DEVICES_OUTLINED,
+                        subtitle="Super Administrator sessions are protected and cannot be revoked.",
+                        trailing=count_text,
+                    ),
+                    notice,
+                    rows_column,
+                ], spacing=18, tight=True),
+                padding=20,
+            ),
+        ], spacing=16, tight=True)
         load_sessions()
         return view
 

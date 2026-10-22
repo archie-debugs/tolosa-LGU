@@ -1,6 +1,6 @@
 import flet as ft
 
-from frontend.admin.tracking_ui import local_time
+from frontend.admin.tracking_ui import TrackingWidgets, local_time
 
 
 EMPLOYEE_PERMISSION_GROUPS = {
@@ -73,6 +73,15 @@ SB_MEMBER_PERMISSIONS = [
     "Download Documents",
     "Print Documents",
 ]
+
+
+# Both tables: a tinted heading row and light lines between the rows.
+TABLE_STYLE = {
+    "heading_row_color": ft.Colors.with_opacity(0.08, ft.Colors.BLUE_700),
+    "heading_text_style": ft.TextStyle(color=ft.Colors.BLUE_800, weight=ft.FontWeight.BOLD, size=12),
+    "divider_thickness": 0.5,
+    "data_row_min_height": 56,
+}
 
 
 def _status_badge(status):
@@ -242,34 +251,29 @@ def build_users_roles_table(
         width=1600,
         expand=False,
         column_spacing=16,
-        heading_row_color=ft.Colors.BLUE_GREY_50,
+        **TABLE_STYLE,
     )
 
     return ft.Container(
-        content=ft.Row(
-            [
-                ft.Container(
-                    content=table,
-                    width=1600,
-                    padding=ft.Padding(left=6, top=8, right=6, bottom=8),
-                    bgcolor=ft.Colors.WHITE,
-                    border_radius=12,
-                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                )
-            ],
-            width="100%",
-            scroll=ft.ScrollMode.AUTO,
-            spacing=0,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-        ),
+        content=ft.Row([ft.Container(content=table, width=1600)], width="100%", scroll=ft.ScrollMode.AUTO, spacing=0, vertical_alignment=ft.CrossAxisAlignment.START),
         width="100%",
-        bgcolor=ft.Colors.WHITE,
         border_radius=12,
-        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+        border=ft.border.all(1, ft.Colors.with_opacity(0.15, ft.Colors.BLUE_GREY_400)),
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
     )
 
 
 def build_offices_table(offices_data, open_edit_office_dialog, view_office_users):
+    if not offices_data:
+        return ft.Container(
+            content=ft.Row(
+                [ft.Icon(ft.Icons.INFO, color=ft.Colors.BLUE_400, size=24), ft.Text("No offices yet. Add one so documents can be registered into it.", size=13, color=ft.Colors.BLUE_GREY_500)],
+                spacing=14,
+            ),
+            padding=16,
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.BLUE_700),
+            border_radius=10,
+        )
     rows = []
     for office in offices_data:
         actions = ft.PopupMenuButton(
@@ -300,8 +304,8 @@ def build_offices_table(offices_data, open_edit_office_dialog, view_office_users
             ft.DataColumn(ft.Text("Actions", weight=ft.FontWeight.BOLD, size=12)),
         ],
         rows=rows,
-        column_spacing=20,
-        heading_row_color=ft.Colors.BLUE_GREY_50,
+        column_spacing=28,
+        **TABLE_STYLE,
     )
 
 
@@ -312,8 +316,6 @@ def build_users_roles_view(
     status_filter,
     office_filter,
     permission_filter,
-    create_button,
-    refresh_button,
     open_create_user_dialog,
     open_view_user_dialog,
     open_edit_user_dialog,
@@ -321,7 +323,6 @@ def build_users_roles_view(
     delete_user,
     page,
     surface_card,
-    section_header,
     user_table_holder=None,
     no_users_notice=None,
     offices_data=None,
@@ -426,75 +427,60 @@ def build_users_roles_view(
     else:
         no_users = no_users_notice
 
-    toolbar = ft.Column(
-        [
-            ft.Row(
-                [
-                    search_field,
-                    create_button,
-                ],
-                spacing=20,
-                wrap=True,
-                run_spacing=10,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            ft.Row(
-                [
-                    role_filter,
-                    status_filter,
-                    office_filter,
-                    permission_filter,
-                ],
-                spacing=20,
-                wrap=True,
-                run_spacing=10,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-        ],
-        spacing=10,
-    )
+    widgets = TrackingWidgets(page)
+    if no_users_notice is not None and no_users_notice.content is None:
+        no_users_notice.content = widgets.empty_box("No users found. Try another search or change the filters.")
+    widgets.style_field(search_field, hint="Search users by name, username, role or office...")
+    search_field.prefix_icon = ft.Icons.SEARCH
+    search_field.width = None
+    search_field.expand = True
+    for control in (role_filter, status_filter, office_filter, permission_filter):
+        widgets.style_field(control)
+        control.width = None
+    pill = ft.StadiumBorder()
 
-    header = surface_card(
+    filter_card = surface_card(
         ft.Column(
             [
-                section_header(
-                    "Users & Roles",
-                    "Manage system accounts, roles, permissions, and account status.",
-                    ft.Icons.PEOPLE_ALT_OUTLINED,
-                    ft.Colors.BLUE_700,
+                ft.Row([widgets.labelled(search_field)]),
+                ft.Row(
+                    [widgets.labelled(control, width=width) for control, width in ((role_filter, 200), (status_filter, 200), (office_filter, 220), (permission_filter, 260))],
+                    spacing=16,
+                    run_spacing=12,
+                    wrap=True,
                 ),
-                ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
-                toolbar,
             ],
             spacing=16,
         ),
-        padding=18,
+        padding=20,
         expand=False,
     )
-
-    table_section = ft.Column(
-        [
-            ft.Row(
-                [
-                    ft.Text("User Accounts", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                    ft.Container(
-                        content=ft.Text(f"{len(user_rows)} users", size=12, color=ft.Colors.BLUE_GREY_600),
-                        alignment=ft.Alignment.CENTER_RIGHT,
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                width="100%",
-            ),
-            table_container,
-            no_users,
-        ],
-        spacing=10,
+    users_card = surface_card(
+        ft.Column(
+            [
+                widgets.card_title(
+                    "User Accounts", ft.Icons.PEOPLE_ALT_OUTLINED,
+                    subtitle="Use the ⋮ button on a user to view, edit, reset the password or delete.",
+                    trailing=ft.Text(f"{len(user_rows)} user{'s' if len(user_rows) != 1 else ''}", size=13, color=widgets.body_color()),
+                ),
+                table_container,
+                no_users,
+            ],
+            spacing=16,
+        ),
+        padding=20,
+        expand=False,
     )
-
     sections = [
-        header,
-        surface_card(table_section, padding=18, expand=False),
+        widgets.banner(
+            "Users & Roles", "Manage system accounts, roles, permissions, and account status.", ft.Icons.MANAGE_ACCOUNTS,
+            actions=[ft.FilledButton(
+                "Create User", icon=ft.Icons.PERSON_ADD, on_click=open_create_user_dialog, height=44,
+                style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLUE_800, padding=ft.Padding(18, 0, 18, 0)),
+            )],
+        ),
+        filter_card,
+        users_card,
     ]
     if offices_data is not None:
         office_table = office_table_holder or build_offices_table(
@@ -502,43 +488,34 @@ def build_users_roles_view(
             edit_office or (lambda _office: None),
             view_office_users or (lambda _office: None),
         )
+        office_actions = []
+        if create_employee:
+            office_actions.append(ft.OutlinedButton(
+                "Create Employee Account", icon=ft.Icons.BADGE_OUTLINED, on_click=create_employee, height=40,
+                style=ft.ButtonStyle(shape=pill, color=widgets.accent(), side=ft.BorderSide(1, widgets.accent())),
+            ))
+        office_actions.append(ft.FilledButton(
+            "Add Office", icon=ft.Icons.ADD, on_click=create_office, height=40,
+            style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+        ))
         sections.append(
             surface_card(
                 ft.Column(
                     [
-                        ft.Row(
-                            [
-                                ft.Text("Office Management", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                                ft.Row(
-                                    [
-                                        *([ft.Button(
-                                            "+ Create Employee Account",
-                                            on_click=create_employee,
-                                            bgcolor=ft.Colors.BLUE_800,
-                                            color=ft.Colors.WHITE,
-                                        )] if create_employee else []),
-                                        ft.Button(
-                                            "+ Add Office",
-                                            on_click=create_office,
-                                            bgcolor=ft.Colors.BLUE_800,
-                                            color=ft.Colors.WHITE,
-                                        ),
-                                    ],
-                                    spacing=8,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        widgets.card_title(
+                            "Office Management", ft.Icons.ACCOUNT_BALANCE_OUTLINED,
+                            subtitle="The offices documents are passed between, and the employees in each.",
+                            trailing=ft.Row(office_actions, spacing=10, tight=True),
                         ),
                         ft.Row([office_table], scroll=ft.ScrollMode.AUTO),
                     ],
-                    spacing=10,
+                    spacing=16,
                 ),
-                padding=18,
+                padding=20,
                 expand=False,
             )
         )
     return ft.Column(
         sections,
-        spacing=12,
+        spacing=16,
     )

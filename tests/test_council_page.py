@@ -3,7 +3,7 @@ import flet as ft
 
 from frontend.admin.council import build_members_committees_view
 from tests.test_account_menu_ui import DummyPage, walk as walk_controls
-from tests.test_settings_pages import section_header, surface_card
+from tests.test_settings_pages import surface_card
 
 TERMS = [
     {"id": 2, "name": "13th Sangguniang Bayan", "starts_on": "2025-07-01", "ends_on": "2028-06-30", "is_current": True},
@@ -51,7 +51,7 @@ def walk(control):
 
 def build(api, can_manage=True):
     page = DummyPage()
-    view = build_members_committees_view(page, surface_card, section_header, api, can_manage=can_manage)
+    view = build_members_committees_view(page, surface_card, api, can_manage=can_manage)
     return page, view
 
 
@@ -71,7 +71,7 @@ def test_it_opens_on_the_current_term_with_members_and_committees():
     page, view = build(FakeApi())
     shown = texts(view)
 
-    assert "Hon. Maria Santos" in shown and "Vice Mayor" in shown and "msantos" in shown
+    assert "Hon. Maria Santos" in shown and "Vice Mayor · login: msantos" in shown
     assert "Left 2026-01-15" in shown
     assert "Hon. Past Member" not in shown
     assert "Committee on Health" in shown

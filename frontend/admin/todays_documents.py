@@ -6,9 +6,6 @@ import flet as ft
 
 from frontend.admin.tracking_ui import TrackingWidgets, document_reference
 
-# Served from the shared assets folder; the banner shows plain colour when it is missing.
-BANNER_IMAGE = "sb_tolosa_homepage.jpg"
-
 
 def document_label(document):
     reference = document_reference(document)
@@ -104,60 +101,6 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
             bgcolor=tint(),
             border=ft.border.all(1, widgets.line_color()),
             border_radius=12,
-        )
-
-    def banner():
-        background = widgets.tone("#EEF4FD", "#16202C")
-        icon_tile = ft.Container(
-            content=ft.Container(
-                content=ft.Icon(ft.Icons.DESCRIPTION, size=30, color=ft.Colors.WHITE),
-                width=62, height=62, border_radius=14,
-                alignment=ft.Alignment(0, 0),
-                bgcolor=ft.Colors.BLUE_700,
-            ),
-            padding=6,
-            border_radius=18,
-            bgcolor=ft.Colors.with_opacity(0.14, ft.Colors.BLUE_700),
-        )
-        heading = ft.Column(
-            [
-                ft.Text("Documents for SB Members", size=24, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
-                ft.Text("Set the documents SB Members need for the day. They appear right away in the SB Member app.", size=14, color=widgets.muted_color()),
-            ],
-            spacing=4,
-            alignment=ft.MainAxisAlignment.CENTER,
-            expand=True,
-        )
-        return ft.Container(
-            content=ft.Stack(
-                [
-                    ft.Container(
-                        content=ft.Image(src=BANNER_IMAGE, fit=ft.ImageFit.COVER, opacity=0.45, error_content=ft.Container()),
-                        right=0, top=0, bottom=0, width=560,
-                    ),
-                    # Fades the photo in from the left, so it has no visible edge.
-                    ft.Container(
-                        gradient=ft.LinearGradient(
-                            begin=ft.Alignment(-1, 0),
-                            end=ft.Alignment(1, 0),
-                            colors=[background, ft.Colors.with_opacity(0.7, background), ft.Colors.with_opacity(0.2, background), ft.Colors.with_opacity(0.1, background)],
-                            stops=[0.0, 0.3, 0.7, 1.0],
-                        ),
-                        right=0, top=0, bottom=0, width=560,
-                    ),
-                    ft.Container(
-                        content=ft.Row([icon_tile, heading], spacing=22, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                        padding=ft.Padding(20, 0, 20, 0),
-                        alignment=ft.Alignment(-1, 0),
-                        left=0, right=0, top=0, bottom=0,
-                    ),
-                ],
-                height=124,
-            ),
-            bgcolor=background,
-            border=ft.border.all(1, widgets.line_color()),
-            border_radius=18,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
 
     def editable():
@@ -474,7 +417,7 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
     load(update=False, keep_notice=True)
     return ft.Column(
         [
-            banner(),
+            widgets.banner("Documents for SB Members", "Set the documents SB Members need for the day. They appear right away in the SB Member app.", ft.Icons.DESCRIPTION),
             surface_card(date_bar, padding=ft.Padding(14, 18, 18, 18)),
             surface_card(ft.Column([card_title(ft.Icons.DESCRIPTION_OUTLINED, "On this day's list", counts_text), notice_row, list_column], spacing=12), padding=20),
             surface_card(search_section, padding=20),

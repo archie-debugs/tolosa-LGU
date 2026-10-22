@@ -15,28 +15,29 @@ LOCATION_STYLES = {
 }
 
 
-def build_qr_tracking_view(page, api, surface_card, section_header, open_details=None):
+def build_qr_tracking_view(page, api, surface_card, open_details=None):
     """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     `open_details(document)` opens a tracked document's details, when the user may see them."""
 
     widgets = TrackingWidgets(page)
     heading_color, body_color, muted_color, link_color = widgets.heading_color, widgets.body_color, widgets.muted_color, widgets.link_color
-    kpi, list_row, empty = widgets.kpi, widgets.list_row, widgets.empty
+    list_row, empty = widgets.list_row, widgets.empty
 
     updated_text = ft.Text("", size=11, color=muted_color())
     error_text = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
     kpi_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
-    transit_title = ft.Text("In transit", size=15, weight=ft.FontWeight.BOLD, color=heading_color())
+    transit_title = ft.Text("In transit", size=17, weight=ft.FontWeight.BOLD, color=link_color())
     transit_list = ft.Column(spacing=0)
     activity_list = ft.Column(spacing=0)
 
+    # The box around it draws the border, so the field itself has none.
     scan_field = ft.TextField(
         hint_text="Scan a QR code or type a tracking number, then press Enter",
-        prefix_icon=ft.Icons.QR_CODE_SCANNER,
         autofocus=True,
         expand=True,
-        height=48,
-        content_padding=ft.Padding(12, 4, 12, 4),
+        border=ft.InputBorder.NONE,
+        text_size=14,
+        content_padding=ft.Padding(4, 14, 12, 14),
     )
     trail_panel = ft.Column(spacing=10, visible=False)
 
@@ -46,14 +47,15 @@ def build_qr_tracking_view(page, api, surface_card, section_header, open_details
     def render_monitor(payload):
         summary = payload.get("summary") or {}
         overdue_hours = payload.get("overdue_hours") or 24
-        kpi_row.controls = [
-            kpi("In transit", summary.get("in_transit", 0), "Sent, awaiting receipt", ft.Icons.LOCAL_SHIPPING_OUTLINED, ft.Colors.AMBER_800),
-            kpi("Overdue", summary.get("overdue", 0), f"Waiting {overdue_hours}h or more", ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_700),
-            kpi("Sent today", summary.get("sent_today", 0), "Handoffs started", ft.Icons.SEND_OUTLINED, ft.Colors.BLUE_700),
-            kpi("Received today", summary.get("received_today", 0), "Receipts confirmed", ft.Icons.MOVE_TO_INBOX_OUTLINED, ft.Colors.GREEN_700),
-            kpi("Actions today", summary.get("actions_today", 0), "Signed, reviewed, noted…", ft.Icons.TASK_ALT, ft.Colors.INDIGO_600),
-            kpi("Scans today", summary.get("scans_today", 0), f"{summary.get('unrecognized_today', 0)} unrecognized", ft.Icons.QR_CODE_SCANNER, ft.Colors.TEAL_700),
+        counts = [
+            ("In transit", summary.get("in_transit", 0), "Sent, awaiting receipt", ft.Icons.LOCAL_SHIPPING_OUTLINED, ft.Colors.AMBER_700),
+            ("Overdue", summary.get("overdue", 0), f"Waiting {overdue_hours}h or more", ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_400),
+            ("Sent today", summary.get("sent_today", 0), "Handoffs started", ft.Icons.SEND_OUTLINED, ft.Colors.BLUE_700),
+            ("Received today", summary.get("received_today", 0), "Receipts confirmed", ft.Icons.MOVE_TO_INBOX_OUTLINED, ft.Colors.GREEN_600),
+            ("Actions today", summary.get("actions_today", 0), "Signed, reviewed, noted…", ft.Icons.TASK_ALT, ft.Colors.DEEP_PURPLE_300),
+            ("Scans today", summary.get("scans_today", 0), f"{summary.get('unrecognized_today', 0)} unrecognized", ft.Icons.QR_CODE_SCANNER, ft.Colors.TEAL_600),
         ]
+        kpi_row.controls = [widgets.stat_card(*count, col={"xs": 6, "md": 4, "xl": 2}) for count in counts]
 
         in_transit = payload.get("in_transit") or []
         transit_title.value = f"In transit ({len(in_transit)})"
@@ -74,10 +76,12 @@ def build_qr_tracking_view(page, api, surface_card, section_header, open_details
                 ],
                 on_click=lambda _, value=item.get("tracking_number"): track(value),
             ))
-        transit_list.controls = rows or [empty("Nothing in transit. Every handed-off document has been received.")]
+        transit_list.controls = rows or [widgets.empty_box("Nothing in transit. Every handed-off document has been received.")]
 
         events = payload.get("recent_activity") or []
-        activity_list.controls = [event_row(event, show_document=True) for event in events] or [empty("No tracking activity yet.")]
+        activity_list.controls = [event_row(event, show_document=True) for event in events] or [
+            widgets.empty_box("No tracking activity yet.", icon=ft.Icons.DESCRIPTION_OUTLINED, centered=True)
+        ]
         updated_text.value = f"Updated {format_time(payload.get('generated_at'))}"
 
     def refresh(_=None, update=True):
@@ -168,38 +172,67 @@ def build_qr_tracking_view(page, api, surface_card, section_header, open_details
 
     scan_field.on_submit = lambda _: track()
 
+    scan_box = ft.Container(
+        content=ft.Row(
+            [
+                ft.Container(
+                    content=ft.Icon(ft.Icons.QR_CODE_SCANNER, color=widgets.accent(), size=24),
+                    width=46, height=46, border_radius=10,
+                    alignment=ft.Alignment(0, 0),
+                    bgcolor=widgets.tint(),
+                ),
+                scan_field,
+            ],
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        padding=ft.Padding(4, 2, 4, 2),
+        bgcolor=widgets.card_color(),
+        border=ft.border.all(1, widgets.line_color()),
+        border_radius=12,
+        expand=True,
+    )
+    track_button = ft.FilledButton(
+        "Track", icon=ft.Icons.SEARCH, on_click=lambda _: track(), height=52,
+        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE, padding=ft.Padding(26, 0, 26, 0)),
+    )
+
     refresh(update=False)
     return ft.Column(
         [
-            ft.Row(
-                [
-                    ft.Container(section_header("QR Tracking", "Scan a document to see where it is, and watch documents move between offices.", ft.Icons.QR_CODE_2, ft.Colors.BLUE_700), expand=True),
-                    updated_text,
-                    ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=refresh),
-                ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            widgets.banner(
+                "QR Tracking", "Scan a document to see where it is, and watch documents move between offices.", ft.Icons.QR_CODE_2,
+                corner=ft.IconButton(ft.Icons.REFRESH, icon_color=ft.Colors.WHITE, tooltip="Refresh", on_click=refresh),
             ),
             error_text,
             surface_card(
                 ft.Column(
                     [
-                        ft.Row([scan_field, ft.FilledButton("Track", icon=ft.Icons.SEARCH, on_click=lambda _: track(), height=48)], spacing=8),
+                        ft.Row([scan_box, track_button], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         trail_panel,
                     ],
                     spacing=14,
                 ),
-                padding=18,
+                padding=20,
             ),
             kpi_row,
             ft.ResponsiveRow(
                 [
                     ft.Container(
-                        surface_card(ft.Column([transit_title, ft.Text("Oldest first. Select a document to see its route.", size=11, color=muted_color()), transit_list], spacing=6), padding=18),
+                        surface_card(
+                            ft.Column(
+                                [widgets.card_title(transit_title, ft.Icons.DESCRIPTION_OUTLINED, subtitle="Oldest first. Select a document to see its route."), transit_list],
+                                spacing=16,
+                            ),
+                            padding=20,
+                        ),
                         col={"xs": 12, "lg": 7},
                     ),
                     ft.Container(
-                        surface_card(ft.Column([ft.Text("Recent activity", size=15, weight=ft.FontWeight.BOLD, color=heading_color()), activity_list], spacing=6), padding=18),
+                        surface_card(
+                            ft.Column([widgets.card_title("Recent activity", ft.Icons.SCHEDULE, trailing=updated_text), activity_list], spacing=16),
+                            padding=20,
+                        ),
                         col={"xs": 12, "lg": 5},
                     ),
                 ],

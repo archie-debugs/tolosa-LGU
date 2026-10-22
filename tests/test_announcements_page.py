@@ -7,7 +7,7 @@ import flet as ft
 from frontend.admin.announcements import build_announcements_view
 from tests.test_account_menu_ui import DummyPage, click, walk
 from tests.test_session_revocation import AppPage, BackendSession, login, reset_db, sidebar_tile
-from tests.test_settings_pages import FakeApi, buttons, section_header, surface_card, words
+from tests.test_settings_pages import FakeApi, buttons, surface_card, words
 
 
 class AnnouncementsApi:
@@ -27,7 +27,7 @@ class AnnouncementsApi:
 
 
 def announcements_view(api):
-    return build_announcements_view(DummyPage(), surface_card, section_header, api)
+    return build_announcements_view(DummyPage(), surface_card, api)
 
 
 def announcement_fields(view):
