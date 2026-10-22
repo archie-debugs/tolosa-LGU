@@ -4065,162 +4065,6 @@ def main(page: ft.Page, session=None):
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
 
-        def panel(icon, accent, title, rows, col):
-            # A white card with a small header, for the lists under the metrics.
-            card = surface_card(
-                ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                tinted_icon(icon, accent, size=18),
-                                ft.Text(title, size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                            ],
-                            spacing=10,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        ),
-                        ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
-                        *rows,
-                    ],
-                    spacing=10,
-                ),
-                padding=20,
-            )
-            card.col = col
-            return card
-
-        def list_row(icon, accent, title, subtitle, trailing):
-            return ft.Row(
-                [
-                    tinted_icon(icon, accent, size=16),
-                    ft.Column(
-                        [
-                            ft.Text(title, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                            ft.Text(subtitle, size=11, color=ft.Colors.BLUE_GREY_600, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                        ],
-                        spacing=1,
-                        expand=True,
-                    ),
-                    ft.Text(trailing, size=10, color=ft.Colors.BLUE_GREY_500),
-                ],
-                spacing=10,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            )
-
-        def empty_line(message):
-            return ft.Text(message, size=12, color=ft.Colors.BLUE_GREY_600)
-
-        def value_row(label, value, value_color=ft.Colors.BLUE_GREY_900):
-            return ft.Row(
-                [
-                    ft.Text(label, size=12, color=ft.Colors.BLUE_GREY_600, expand=True),
-                    ft.Text(str(value), size=12, weight=ft.FontWeight.BOLD, color=value_color),
-                ],
-                spacing=8,
-            )
-
-        def short_time(value):
-            timestamp = format_audit_datetime(value) if value else "-"
-            return timestamp.split(".", 1)[0]
-
-        recent_activity = analytics_payload.get("recent_activity") or []
-        activity_rows = []
-        for item in recent_activity[:5]:
-            target = str(item.get("tracking_number") or "-")
-            activity_rows.append(list_row(
-                ft.Icons.HISTORY_OUTLINED,
-                ft.Colors.BLUE_700,
-                str(item.get("activity") or "Activity"),
-                f"{item.get('actor') or 'System'} · {f'Target: {target}' if target != '-' else 'System event'}",
-                short_time(item.get("created_at")),
-            ))
-
-        recent_security_events = analytics_payload.get("recent_security_events") or []
-        security_rows = []
-        for event in recent_security_events[:5]:
-            status = str(event.get("status") or "Success")
-            details = str(event.get("details") or "")
-            security_rows.append(list_row(
-                ft.Icons.SECURITY_OUTLINED,
-                ft.Colors.RED_700 if status == "Failed" else ft.Colors.BLUE_700,
-                str(event.get("action") or "Security event"),
-                f"{event.get('actor') or 'System'} · {details or status}",
-                short_time(event.get("created_at")),
-            ))
-
-        def format_storage_size(value):
-            try:
-                amount = float(value or 0)
-            except (TypeError, ValueError):
-                return "Unavailable"
-            units = ("B", "KB", "MB", "GB", "TB")
-            unit_index = 0
-            while amount >= 1024 and unit_index < len(units) - 1:
-                amount /= 1024
-                unit_index += 1
-            return f"{amount:.1f} {units[unit_index]}"
-
-        storage_data = analytics_payload.get("storage") or {}
-        storage_rows = [
-            value_row("Status", str(storage_data.get("status") or "unavailable").capitalize()),
-            value_row("Document storage", f"{format_storage_size(storage_data.get('document_storage_bytes'))} · {storage_data.get('stored_document_files', 0)} files"),
-            value_row("Temporary uploads", f"{format_storage_size(storage_data.get('temporary_upload_storage_bytes'))} · {storage_data.get('temporary_upload_files', 0)} files"),
-            value_row("Available disk", format_storage_size(storage_data.get("available_disk_bytes"))),
-        ]
-
-        health_payload = {}
-        try:
-            health_response = http.get(
-                f"{BACKEND_URL}/health",
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=10,
-            )
-            if health_response.status_code == 200 and health_response.content:
-                health_payload = health_response.json() or {}
-        except Exception:
-            health_payload = {}
-
-        health_rows = []
-        for label, key in (
-            ("Backend", "backend"),
-            ("Database", "database"),
-            ("Document Storage", "document_storage"),
-            ("Temporary Upload Storage", "temporary_upload_storage"),
-        ):
-            status = str((health_payload.get(key) or {}).get("status") or "unavailable").capitalize()
-            status_color = ft.Colors.GREEN_700 if status == "Operational" else ft.Colors.ORANGE_700 if status == "Warning" else ft.Colors.RED_700
-            health_rows.append(
-                ft.Row(
-                    [
-                        ft.Icon(ft.Icons.CIRCLE, size=10, color=status_color),
-                        ft.Text(label, size=12, color=ft.Colors.BLUE_GREY_600, expand=True),
-                        ft.Container(
-                            content=ft.Text(status, size=11, weight=ft.FontWeight.BOLD, color=status_color),
-                            bgcolor=ft.Colors.with_opacity(0.1, status_color),
-                            border_radius=10,
-                            padding=ft.Padding(9, 3, 9, 3),
-                        ),
-                    ],
-                    spacing=8,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                )
-            )
-
-        def breakdown(title, values):
-            rows = [value_row(label, count) for label, count in list(values.items())[:6]] or [empty_line("No data available")]
-            return ft.Container(
-                content=ft.Column([ft.Text(title, size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900), *rows], spacing=6),
-                padding=14,
-                bgcolor=ft.Colors.BLUE_GREY_50,
-                border_radius=14,
-                col={"xs": 12, "sm": 6, "xl": 3},
-            )
-
-        monthly_values = {
-            str(item.get("label") or item.get("month") or "-"): item.get("count", 0)
-            for item in (analytics_payload.get("monthly_activity") or [])
-        }
-
         def metric_card(item):
             card = surface_card(
                 ft.Column(
@@ -4274,7 +4118,6 @@ def main(page: ft.Page, session=None):
             corner=today_line,
         )
 
-        two_up = {"xs": 12, "lg": 6}
         dashboard_content = ft.Column(
             [
                 welcome_banner,
@@ -4282,35 +4125,6 @@ def main(page: ft.Page, session=None):
                 metric_grid(summary_items),
                 section_title(ft.Icons.PEOPLE_ALT_OUTLINED, "Users", "Accounts that can sign in to the system."),
                 metric_grid(user_cards),
-                surface_card(
-                    ft.Column(
-                        [
-                            section_title(ft.Icons.ANALYTICS_OUTLINED, "Document Analytics", "How documents break down by status, type, category and month."),
-                            ft.ResponsiveRow(
-                                [
-                                    breakdown("By Status", analytics_payload.get("status_breakdown") or {}),
-                                    breakdown("By Document Type", analytics_payload.get("document_types") or {}),
-                                    breakdown("By Category", analytics_payload.get("document_categories") or {}),
-                                    breakdown("Monthly Activity", monthly_values),
-                                ],
-                                spacing=12,
-                                run_spacing=12,
-                            ),
-                        ],
-                        spacing=16,
-                    ),
-                    padding=20,
-                ),
-                ft.ResponsiveRow(
-                    [
-                        panel(ft.Icons.HISTORY_OUTLINED, ft.Colors.BLUE_700, "Recent System Activity", activity_rows or [empty_line("No recent system activity")], two_up),
-                        panel(ft.Icons.SECURITY_OUTLINED, ft.Colors.RED_700, "Recent Security Events", security_rows or [empty_line("No recent security events")], two_up),
-                        panel(ft.Icons.STORAGE_OUTLINED, ft.Colors.BLUE_700, "Storage Usage", storage_rows, two_up),
-                        panel(ft.Icons.MONITOR_HEART_OUTLINED, ft.Colors.GREEN_700, "System Health", health_rows, two_up),
-                    ],
-                    spacing=12,
-                    run_spacing=12,
-                ),
             ],
             spacing=16,
         )
