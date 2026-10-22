@@ -130,8 +130,9 @@ class AppPage(DummyPage):
 
 
 def on_login_screen(page):
-    labels = [getattr(c, "label", None) for control in page.controls for c in walk(control) if isinstance(c, ft.TextField)]
-    return "Username" in labels and "Password" in labels
+    fields = [c for control in page.controls for c in walk(control) if isinstance(c, ft.TextField)]
+    names = {getattr(c, "label", None) for c in fields} | {getattr(c, "hint_text", None) for c in fields}
+    return {"Enter your username", "Enter your password"} <= names
 
 
 def sidebar_tile(page, label):
