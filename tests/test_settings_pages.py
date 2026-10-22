@@ -105,11 +105,8 @@ def buttons(control, label):
 
 
 def surface_card(content, width=None, padding=24, expand=False):
+    """A plain card, for the page tests that import it from here."""
     return ft.Container(content=content, padding=padding)
-
-
-def section_header(title, subtitle, icon, accent_color):
-    return ft.Column([ft.Text(title), ft.Text(subtitle)])
 
 
 PROFILE = {
@@ -141,7 +138,7 @@ class FakeApi:
 def employee_view(**overrides):
     actions = []
     view = build_employee_settings_view(
-        DummyPage(), surface_card, section_header,
+        DummyPage(),
         profile={**PROFILE, **overrides},
         change_password=lambda: actions.append("password"),
         edit_profile=lambda: actions.append("profile"),
@@ -152,7 +149,7 @@ def employee_view(**overrides):
 def admin_view(api=None, pages=("Users & Roles", "Active Sessions", "Audit Logs", "Settings")):
     opened = []
     view = build_super_admin_settings_view(
-        DummyPage(), surface_card, section_header,
+        DummyPage(),
         api=api or FakeApi(),
         profile={**PROFILE, "role": "Super Administrator", "office": None},
         change_password=lambda: None,

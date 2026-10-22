@@ -711,10 +711,8 @@ def main(page: ft.Page, session=None):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-    audit_summary_cards = ft.Row([], spacing=12, wrap=True)
-    audit_filter_bar = ft.Row([], spacing=10, wrap=True)
-    audit_action_bar = ft.Row([], spacing=8, wrap=True)
-    audit_pagination_bar = ft.Row([], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    audit_summary_cards = ft.ResponsiveRow([], spacing=14, run_spacing=14)
+    audit_pagination_bar = ft.Row([], spacing=8, wrap=True, alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER)
     audit_details_dialog = ft.AlertDialog(
         title=ft.Text("Audit Log Details"),
         content=ft.Column([], spacing=8, tight=True),
@@ -734,22 +732,39 @@ def main(page: ft.Page, session=None):
         dt = local_time(value)
         return dt.strftime("%Y-%m-%d %H:%M") if dt else str(value)
 
-    def get_audit_status_style(status):
-        normalized = (status or "Success").strip().lower()
-        if normalized == "failed":
-            return ft.Colors.RED_700, ft.Colors.RED_50
-        return ft.Colors.GREEN_700, ft.Colors.GREEN_50
-
     def render_status_badge(status):
-        is_dark = page.theme_mode == ft.ThemeMode.DARK
-        color, background = get_audit_status_style(status)
-        text_color = ft.Colors.RED_100 if is_dark and status == "Failed" else ft.Colors.GREEN_100 if is_dark and status != "Failed" else color
-        return ft.Container(
-            content=ft.Text(str(status or "Success"), size=11, weight=ft.FontWeight.W_500, color=text_color),
-            padding=ft.Padding(6, 4, 6, 4),
-            bgcolor=ft.Colors.with_opacity(0.12, color) if not is_dark else ft.Colors.with_opacity(0.2, color),
-            border_radius=8,
+        status = str(status or "Success")
+        failed = status.strip().lower() == "failed"
+        widgets = TrackingWidgets(page)
+        color = widgets.tone(ft.Colors.RED_700, ft.Colors.RED_300) if failed else widgets.tone(ft.Colors.GREEN_700, ft.Colors.GREEN_300)
+        return ft.Row(
+            [ft.Icon(ft.Icons.ERROR_OUTLINE if failed else ft.Icons.CHECK_CIRCLE_OUTLINE, size=14, color=color), widgets.chip(status, color)],
+            spacing=4,
+            tight=True,
         )
+
+    def render_audit_actor(actor):
+        widgets = TrackingWidgets(page)
+        name = str(actor or "System")
+        return ft.Row(
+            [
+                ft.Container(
+                    content=ft.Text(name[:1].upper(), size=12, weight=ft.FontWeight.BOLD, color=widgets.accent()),
+                    width=28, height=28, border_radius=14,
+                    alignment=ft.Alignment(0, 0),
+                    bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.BLUE_700),
+                ),
+                ft.Text(name, size=12, weight=ft.FontWeight.W_600, color=widgets.heading_color()),
+            ],
+            spacing=8,
+            tight=True,
+        )
+
+    def render_audit_action(action):
+        """USER_LOGIN reads as "User login"."""
+        widgets = TrackingWidgets(page)
+        text = str(action or "—").replace("_", " ").strip().capitalize()
+        return ft.Text(text, size=12, weight=ft.FontWeight.W_600, color=widgets.link_color(), tooltip=str(action or ""))
 
     audit_filter_state = {
         "page": 1,
@@ -772,11 +787,12 @@ def main(page: ft.Page, session=None):
         return text
 
     def build_audit_results_label(total_items, current_page, page_size):
+        muted = TrackingWidgets(page).muted_color()
         if total_items <= 0:
-            return ft.Text("Showing 0–0 of 0 audit logs", size=12, color=ft.Colors.BLUE_GREY_600)
+            return ft.Text("Showing 0–0 of 0 audit logs", size=12, color=muted)
         start = min((current_page - 1) * page_size + 1, total_items)
         end = min(current_page * page_size, total_items)
-        return ft.Text(f"Showing {start}–{end} of {total_items} audit logs", size=12, color=ft.Colors.BLUE_GREY_600)
+        return ft.Text(f"Showing {start}–{end} of {total_items} audit logs", size=12, color=muted)
 
     audit_search_field = ft.TextField(label="Search", hint_text="Search audit logs...", width=220, value="", prefix_icon=ft.Icon(ft.Icons.SEARCH, size=18), dense=True)
     audit_date_filter = ft.Dropdown(
@@ -855,52 +871,50 @@ def main(page: ft.Page, session=None):
     def render_summary_cards(summary_payload):
         summary = summary_payload or {}
         cards = [
-            ("Total Activities", summary.get("total_activities", 0), "All tracked actions"),
-            ("Today", summary.get("today", 0), "Last 24 hours"),
-            ("This Week", summary.get("this_week", 0), "Last 7 days"),
-            ("This Month", summary.get("this_month", 0), "Current month"),
-            ("Failed Actions", summary.get("failed_actions", 0), "Blocked / rejected"),
+            ("Total Activities", summary.get("total_activities", 0), "All tracked actions", ft.Icons.HISTORY, ft.Colors.BLUE_700),
+            ("Today", summary.get("today", 0), "Last 24 hours", ft.Icons.TODAY_OUTLINED, ft.Colors.TEAL_700),
+            ("This Week", summary.get("this_week", 0), "Last 7 days", ft.Icons.DATE_RANGE_OUTLINED, ft.Colors.INDIGO_600),
+            ("This Month", summary.get("this_month", 0), "Current month", ft.Icons.CALENDAR_MONTH_OUTLINED, ft.Colors.DEEP_PURPLE_600),
+            ("Failed Actions", summary.get("failed_actions", 0), "Blocked or rejected", ft.Icons.GPP_BAD_OUTLINED, ft.Colors.RED_700),
         ]
-        summary_controls = []
-        for label, value, hint in cards:
-            summary_controls.append(
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text(label, size=11, color=ft.Colors.BLUE_GREY_600, weight=ft.FontWeight.W_500),
-                            ft.Text(str(value), size=22, weight=ft.FontWeight.BOLD),
-                            ft.Text(hint, size=10, color=ft.Colors.BLUE_GREY_500),
-                        ],
-                        spacing=3,
-                    ),
-                    width=170,
-                    padding=ft.Padding(14, 12, 14, 12),
-                    border_radius=14,
-                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                    bgcolor=ft.Colors.BLUE_GREY_50,
-                )
-            )
-        audit_summary_cards.controls = summary_controls
+        widgets = TrackingWidgets(page)
+        audit_summary_cards.columns = 10
+        audit_summary_cards.controls = [
+            widgets.stat_card(label, f"{int(value or 0):,}", hint, icon, color, col={"xs": 10, "sm": 5, "xl": 2}, tile=True)
+            for label, value, hint, icon, color in cards
+        ]
 
     def format_details_cell(item):
         text = str(item.get("details") or item.get("description") or "—")
         if len(text) > 110:
             text = text[:107] + "..."
-        return ft.Text(text, size=11, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+        return ft.Text(text, size=12, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, width=380)
 
     def build_audit_details_dialog(item):
+        widgets = TrackingWidgets(page)
         content_rows = []
         for label, key in (["Date & Time", "created_at"], ["User", "actor"], ["Action", "action"], ["Module", "module"], ["Status", "status"], ["IP Address", "ip_address"], ["Description", "details"], ["Additional Details", "metadata"]):
             if key == "metadata":
                 value = item.get("metadata") or {}
-                if value:
-                    content_rows.append(ft.Text(f"{label}: {json.dumps(value, ensure_ascii=False)}", size=12))
-                continue
-            value = item.get(key)
+                value = json.dumps(value, ensure_ascii=False) if value else None
+            elif key == "created_at":
+                value = format_audit_datetime(item.get(key)) if item.get(key) else None
+            else:
+                value = item.get(key)
             if value is None or value == "" or value == "None":
                 continue
-            content_rows.append(ft.Text(f"{label}: {value}", size=12, selectable=True))
-        audit_details_dialog.content = ft.Column(content_rows or [ft.Text("No additional details available.", size=12)], spacing=8, tight=True)
+            content_rows.append(ft.Row(
+                [
+                    ft.Text(label, size=12, color=widgets.muted_color(), width=130),
+                    render_status_badge(value) if key == "status" else ft.Text(str(value), size=13, color=widgets.heading_color(), selectable=True, expand=True),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ))
+        audit_details_dialog.content = ft.Container(
+            ft.Column(content_rows or [ft.Text("No additional details available.", size=12)], spacing=12, tight=True),
+            width=520,
+        )
         audit_details_dialog.open = True
         page.update()
 
@@ -911,22 +925,30 @@ def main(page: ft.Page, session=None):
         audit_filter_state["page_count"] = page_count
         audit_filter_state["page"] = current_page
 
-        buttons = [ft.TextButton("Previous", on_click=lambda _: advance_audit_page(-1), disabled=current_page <= 1)]
-        if page_count > 0:
-            for page_num in range(1, min(5, page_count) + 1):
-                button_style = ft.ButtonStyle(color=ft.Colors.BLUE if page_num == current_page else None)
-                buttons.append(
-                    ft.TextButton(
-                        str(page_num),
-                        on_click=lambda _, target_page=page_num: go_to_audit_page(target_page),
-                        style=button_style,
-                    )
-                )
-            if page_count > 5:
-                buttons.append(ft.Text("...", size=12, color=ft.Colors.BLUE_GREY_600))
-                buttons.append(ft.TextButton(str(page_count), on_click=lambda _, target_page=page_count: go_to_audit_page(target_page)))
-        buttons.append(ft.TextButton("Next", on_click=lambda _: advance_audit_page(1), disabled=current_page >= page_count))
-        audit_pagination_bar.controls = [build_audit_results_label(total_items, current_page, audit_filter_state.get("limit", 10))] + buttons
+        widgets = TrackingWidgets(page)
+
+        def page_button(page_num):
+            current = page_num == current_page
+            return ft.TextButton(
+                str(page_num),
+                on_click=lambda _, target_page=page_num: go_to_audit_page(target_page),
+                style=ft.ButtonStyle(
+                    color=ft.Colors.WHITE if current else widgets.link_color(),
+                    bgcolor=ft.Colors.BLUE_700 if current else None,
+                    shape=ft.RoundedRectangleBorder(radius=8),
+                ),
+            )
+
+        buttons = [ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous page", on_click=lambda _: advance_audit_page(-1), disabled=current_page <= 1)]
+        buttons += [page_button(page_num) for page_num in range(1, min(5, page_count) + 1)]
+        if page_count > 5:
+            buttons.append(ft.Text("…", size=12, color=widgets.muted_color()))
+            buttons.append(page_button(page_count))
+        buttons.append(ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next page", on_click=lambda _: advance_audit_page(1), disabled=current_page >= page_count))
+        audit_pagination_bar.controls = [
+            build_audit_results_label(total_items, current_page, audit_filter_state.get("limit", 10)),
+            ft.Row(buttons, spacing=4, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ]
 
     def go_to_audit_page(target_page):
         max_page = max(1, audit_filter_state.get("page_count", 1))
@@ -974,10 +996,10 @@ def main(page: ft.Page, session=None):
                 rows.append(
                     ft.DataRow(
                         cells=[
-                            ft.DataCell(ft.Text(format_audit_datetime(item.get("created_at")), size=11)),
-                            ft.DataCell(ft.Text(str(item.get("actor") or "—"), size=11)),
-                            ft.DataCell(ft.Text(str(item.get("action") or "—"), size=11)),
-                            ft.DataCell(ft.Text(str(item.get("module") or item.get("target_type") or "—"), size=11)),
+                            ft.DataCell(ft.Text(format_audit_datetime(item.get("created_at")), size=12)),
+                            ft.DataCell(render_audit_actor(item.get("actor"))),
+                            ft.DataCell(render_audit_action(item.get("action"))),
+                            ft.DataCell(ft.Text(str(item.get("module") or item.get("target_type") or "—"), size=12)),
                             ft.DataCell(format_details_cell(item)),
                             ft.DataCell(render_status_badge(status)),
                         ],
@@ -1001,16 +1023,15 @@ def main(page: ft.Page, session=None):
             current_page = payload.get("page") or 1
             total_pages = payload.get("pages") or 1
             set_audit_pagination(total_pages, current_page, total_items)
-            audit_pagination_bar.alignment = ft.MainAxisAlignment.SPACE_BETWEEN
         except Exception:
             sample_rows = AUDIT_LOGS_SAMPLE
             audit_logs_table.rows = [
                 ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(format_audit_datetime(item.get("created_at", "")), size=11)),
-                    ft.DataCell(ft.Text(str(item.get("actor", "Admin")), size=11)),
-                    ft.DataCell(ft.Text(str(item.get("action", "USER_LOGIN")), size=11)),
-                    ft.DataCell(ft.Text(str(item.get("target_type", "Auth")), size=11)),
-                    ft.DataCell(ft.Text(str(item.get("details", "Sample audit log entry.")), size=11)),
+                    ft.DataCell(ft.Text(format_audit_datetime(item.get("created_at", "")), size=12)),
+                    ft.DataCell(render_audit_actor(item.get("actor", "Admin"))),
+                    ft.DataCell(render_audit_action(item.get("action", "USER_LOGIN"))),
+                    ft.DataCell(ft.Text(str(item.get("target_type", "Auth")), size=12)),
+                    ft.DataCell(format_details_cell(item)),
                     ft.DataCell(render_status_badge(item.get("status", "Success"))),
                 ])
                 for item in sample_rows
@@ -1028,18 +1049,6 @@ def main(page: ft.Page, session=None):
 
         page.update()
 
-    audit_filter_bar.controls = [
-        audit_search_field,
-        audit_date_filter,
-        audit_user_filter,
-        audit_module_filter,
-        audit_action_filter,
-        audit_status_filter,
-        ft.ElevatedButton("Apply Filters", on_click=lambda _: apply_audit_filters()),
-        ft.TextButton("Clear Filters", on_click=lambda _: clear_audit_filters()),
-    ]
-    audit_filter_bar.wrap = True
-
     def on_export_audit_logs(_):
         page.snack_bar = ft.SnackBar(
             ft.Text("Export continues using the existing backend export route."),
@@ -1047,56 +1056,21 @@ def main(page: ft.Page, session=None):
         )
         page.update()
 
-    audit_action_bar.controls = [
-        ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=lambda _: load_audit_logs_view()),
-        ft.OutlinedButton("Export", icon=ft.Icons.DOWNLOAD, on_click=on_export_audit_logs),
-    ]
-
     def audit_logs_view():
         try:
             if audit_details_dialog not in page.overlay:
                 page.overlay.append(audit_details_dialog)
             audit_filter_state["page"] = 1
-            load_audit_logs_view()
             return build_audit_logs_view(
+                page,
                 audit_logs_table,
                 load_audit_logs_view,
-                surface_card,
-                section_header,
                 summary_cards=audit_summary_cards,
-                filter_bar=surface_card(
-                    ft.Column(
-                        [
-                            ft.Text("Filters", size=13, weight=ft.FontWeight.BOLD),
-                            audit_filter_bar,
-                        ],
-                        spacing=10,
-                        tight=True,
-                    ),
-                    padding=14,
-                    expand=False,
-                ),
-                action_bar=surface_card(
-                    ft.Row(
-                        audit_action_bar.controls,
-                        spacing=8,
-                        wrap=True,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=10,
-                    expand=False,
-                ),
-                pagination_bar=surface_card(
-                    ft.Row(
-                        audit_pagination_bar.controls,
-                        spacing=8,
-                        wrap=True,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=10,
-                    expand=False,
-                ),
-                details_dialog=audit_details_dialog,
+                filter_fields=[audit_search_field, audit_date_filter, audit_user_filter, audit_module_filter, audit_action_filter, audit_status_filter],
+                apply_filters=apply_audit_filters,
+                clear_filters=clear_audit_filters,
+                export=on_export_audit_logs,
+                pagination_bar=audit_pagination_bar,
             )
         except Exception as e:
             import traceback
@@ -2257,7 +2231,7 @@ def main(page: ft.Page, session=None):
         role = (current_user_role or "").strip().lower()
         if role == "super administrator":
             return build_super_admin_settings_view(
-                page, surface_card, section_header,
+                page,
                 api=backend_api,
                 profile=profile,
                 change_password=open_change_password,
@@ -2269,7 +2243,7 @@ def main(page: ft.Page, session=None):
             )
         if is_employee():
             return build_employee_settings_view(
-                page, surface_card, section_header,
+                page,
                 profile=profile,
                 change_password=open_change_password,
                 edit_profile=lambda: open_profile_dialog(page, edit_profile_dialog, backend_api, profile, on_saved=settings_profile_saved),

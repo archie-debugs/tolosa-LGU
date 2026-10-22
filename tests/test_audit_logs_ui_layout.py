@@ -1,3 +1,4 @@
+import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
 import flet as ft
 
 from frontend.admin.audit_logs import build_audit_logs_view
@@ -12,21 +13,6 @@ class DummyPage:
         pass
 
 
-def surface_card(content, width=None, padding=24, expand=False):
-    return ft.Container(content=content, width=width, expand=expand, padding=padding, bgcolor=ft.Colors.WHITE, border_radius=24)
-
-
-def section_header(title, subtitle, icon, accent_color):
-    return ft.Row(
-        [
-            ft.Container(content=ft.Icon(icon, color=accent_color, size=24), padding=10, bgcolor=ft.Colors.BLUE_GREY_50, border_radius=14),
-            ft.Column([ft.Text(title, size=18, weight=ft.FontWeight.BOLD), ft.Text(subtitle, size=13, color=ft.Colors.BLUE_GREY_600)], spacing=2, expand=True),
-        ],
-        spacing=14,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-    )
-
-
 def test_audit_logs_view_uses_compact_non_expanding_layout():
     page = DummyPage()
     table = ft.DataTable(
@@ -39,7 +25,18 @@ def test_audit_logs_view_uses_compact_non_expanding_layout():
         column_spacing=12,
     )
 
-    view = build_audit_logs_view(table, lambda: None, surface_card, section_header)
+    fields = [ft.TextField(label="Search"), ft.Dropdown(label="Date Range"), ft.Dropdown(label="Status")]
+    pagination = ft.Row([ft.Text("Showing 0–0 of 0 audit logs")])
+
+    view = build_audit_logs_view(
+        page, table, lambda: None,
+        summary_cards=ft.ResponsiveRow([]),
+        filter_fields=fields,
+        apply_filters=lambda: None,
+        clear_filters=lambda: None,
+        export=lambda _: None,
+        pagination_bar=pagination,
+    )
 
     assert getattr(view, "expand", False) is False
     assert getattr(view, "tight", False) is True
@@ -62,5 +59,35 @@ def test_audit_logs_view_uses_compact_non_expanding_layout():
         if isinstance(control, ft.Container)
         and find_datatable(control) is not None
     )
-    assert table_host.padding == 12
+    assert table_host.padding == 20
     assert table_host.expand is False
+
+
+def test_audit_logs_view_places_the_live_pagination_bar_and_keeps_filter_names():
+    page = DummyPage()
+    table = ft.DataTable(columns=[ft.DataColumn(ft.Text("Date & Time"))], rows=[])
+    fields = [ft.TextField(label="Search"), ft.Dropdown(label="User")]
+    pagination = ft.Row([])
+
+    view = build_audit_logs_view(
+        page, table, lambda: None,
+        summary_cards=ft.ResponsiveRow([]),
+        filter_fields=fields,
+        apply_filters=lambda: None,
+        clear_filters=lambda: None,
+        export=lambda _: None,
+        pagination_bar=pagination,
+    )
+
+    def walk(control):
+        yield control
+        for child in getattr(control, "controls", None) or []:
+            yield from walk(child)
+        content = getattr(control, "content", None)
+        if isinstance(content, ft.Control):
+            yield from walk(content)
+
+    controls = list(walk(view))
+    # The app refills this row on every page change, so the view must hold the row itself, not a copy.
+    assert any(control is pagination for control in controls)
+    assert "User" in [c.value for c in controls if isinstance(c, ft.Text)]

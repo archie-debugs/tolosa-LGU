@@ -1,9 +1,36 @@
+"""Analytics: document volume, status, where documents sit and how fast they move, from GET /analytics."""
+
 import flet as ft
 import requests
-import traceback
 
+from frontend.admin.tracking_ui import TrackingWidgets
 
 BACKEND_URL = "http://127.0.0.1:8001"
+
+# Colours for the statuses the backend normalises to (routes/analytics._norm_status).
+STATUS_COLORS = {
+    "Pending": ft.Colors.AMBER_800,
+    "In Progress": ft.Colors.BLUE_700,
+    "Completed": ft.Colors.GREEN_700,
+    "Archived": ft.Colors.BROWN_400,
+    "Returned": ft.Colors.DEEP_ORANGE_700,
+    "Rejected": ft.Colors.RED_700,
+}
+# How many rows each "by type / category / office" breakdown shows before folding the rest into "Others".
+BREAKDOWN_ROWS = 6
+MONTH_CHART_HEIGHT = 130
+
+
+def status_color(status):
+    return STATUS_COLORS.get(str(status or "").strip().title(), ft.Colors.BLUE_GREY_500)
+
+
+def top_counts(counts, limit=BREAKDOWN_ROWS):
+    """`counts` largest first, with everything past `limit` added up as "Others"."""
+    ranked = sorted(((str(label), int(count or 0)) for label, count in (counts or {}).items()), key=lambda pair: -pair[1])
+    if len(ranked) <= limit:
+        return ranked
+    return ranked[:limit - 1] + [("Others", sum(count for _, count in ranked[limit - 1:]))]
 
 
 def build_analytics_view(
@@ -15,301 +42,275 @@ def build_analytics_view(
     page=None,
 ):
     backend_url = backend_url or BACKEND_URL
-    is_dark = page is not None and page.theme_mode == ft.ThemeMode.DARK
-    primary_text = ft.Colors.BLUE_GREY_100 if is_dark else ft.Colors.BLUE_GREY_900
-    secondary_text = ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_600
-    panel_color = ft.Colors.GREY_900 if is_dark else ft.Colors.WHITE
-    soft_panel_color = "#26343a" if is_dark else ft.Colors.BLUE_GREY_50
-    border_color = ft.Colors.BLUE_GREY_700 if is_dark else ft.Colors.BLUE_GREY_100
+    widgets = TrackingWidgets(page)
+    card_tint = widgets.tone("#F7FAFE", "#1B2430")
 
-    metric_cards = ft.Row([], spacing=12, wrap=True)
-    status_chart = ft.Column([], spacing=8)
-    type_distribution = ft.Column([], spacing=8)
-    category_distribution = ft.Column([], spacing=8)
-    office_distribution = ft.Column([], spacing=8)
-    processing_panel = ft.Column([], spacing=8)
-    monthly_panel = ft.Column([], spacing=8)
-    recent_table = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("Tracking #")),
-            ft.DataColumn(ft.Text("Title")),
-            ft.DataColumn(ft.Text("Document Type")),
-            ft.DataColumn(ft.Text("Status")),
-            ft.DataColumn(ft.Text("Priority")),
-            ft.DataColumn(ft.Text("Current Office")),
-            ft.DataColumn(ft.Text("Date Registered")),
-        ],
-        rows=[],
-        width=900,
-    )
+    notice = ft.Container(visible=False)
+    kpi_row = ft.ResponsiveRow(spacing=14, run_spacing=14)
+    status_list = ft.Column(spacing=14)
+    status_total = ft.Text("", size=13, color=widgets.body_color())
+    month_chart = ft.Row(spacing=10, vertical_alignment=ft.CrossAxisAlignment.END)
+    month_total = ft.Text("", size=13, color=widgets.body_color())
+    breakdown_row = ft.ResponsiveRow(spacing=16, run_spacing=16, vertical_alignment=ft.CrossAxisAlignment.START)
+    processing_row = ft.ResponsiveRow(columns=10, spacing=12, run_spacing=12)
+    recent_list = ft.Column(spacing=10)
 
-    def build_status_bar(max_value, count, label):
-        bar_width = 160
-        if max_value:
-            bar_width = max(16, int((count / max_value) * 180))
-        return ft.Row([
-            ft.Container(
-                content=ft.Text(label, size=11, weight=ft.FontWeight.BOLD, width=110),
-                width=110,
-            ),
-            ft.Container(
-                content=ft.Container(
-                    content=ft.Text(" "),
-                    bgcolor=ft.Colors.BLUE_400,
-                    height=10,
-                    width=bar_width,
-                    border_radius=5,
-                ),
-                width=bar_width + 20,
-            ),
-            ft.Text(str(count), size=11, color=secondary_text),
-        ], spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    def card(content):
+        return ft.Container(
+            content=content,
+            padding=20,
+            bgcolor=widgets.card_color(),
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=18,
+        )
 
-    def load_analytics():
-        try:
-            response = requests.get(
-                f"{backend_url}/analytics",
-                headers=headers,
-                verify=False,
-                timeout=10,
+    def share_bar(count, largest, color):
+        """A track filled in proportion to `count` out of `largest`."""
+        filled = round(1000 * count / largest) if largest else 0
+        parts = []
+        if filled:
+            parts.append(ft.Container(bgcolor=color, border_radius=5, expand=filled))
+        if filled < 1000:
+            parts.append(ft.Container(expand=1000 - filled))
+        return ft.Container(
+            content=ft.Row(parts, spacing=0),
+            height=10,
+            bgcolor=widgets.tone("#E6EDF7", "#26384A"),
+            border_radius=5,
+            expand=True,
+        )
+
+    def share_row(label, count, total, largest, color, dot=False):
+        percent = f"{round(100 * count / total)}%" if total else "0%"
+        label_controls = [ft.Container(width=10, height=10, border_radius=5, bgcolor=color)] if dot else []
+        label_controls.append(ft.Text(label, size=13, weight=ft.FontWeight.W_600, color=widgets.heading_color(), expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=label))
+        label_controls.append(ft.Text(f"{count:,}", size=13, weight=ft.FontWeight.BOLD, color=widgets.link_color()))
+        label_controls.append(ft.Text(percent, size=12, color=widgets.muted_color(), width=40, text_align=ft.TextAlign.RIGHT))
+        return ft.Column(
+            [
+                ft.Row(label_controls, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([share_bar(count, largest, color)]),
+            ],
+            spacing=6,
+        )
+
+    def render_kpis(overview):
+        cards = [
+            ("Total Documents", "total_documents", "All tracked records", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700, open_documents_view),
+            ("Active", "active_documents", "Not yet completed or archived", ft.Icons.LIBRARY_ADD_CHECK_OUTLINED, ft.Colors.GREEN_700, None),
+            ("Pending", "pending_documents", "Awaiting action", ft.Icons.SCHEDULE_OUTLINED, ft.Colors.AMBER_800, None),
+            ("Completed", "completed_documents", "Finished or approved", ft.Icons.CHECK_CIRCLE_OUTLINED, ft.Colors.TEAL_700, None),
+            ("Archived", "archived_documents", "Closed records", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.BROWN_400, open_archived_view),
+            ("Added This Month", "added_this_month", "Registered since the 1st", ft.Icons.CALENDAR_MONTH_OUTLINED, ft.Colors.DEEP_PURPLE_600, None),
+        ]
+        controls = []
+        for title, key, detail, icon, color, open_view in cards:
+            stat = widgets.stat_card(title, f"{int(overview.get(key) or 0):,}", detail, icon, color, col={"xs": 12, "sm": 6, "lg": 4, "xl": 2}, tile=True)
+            if open_view is not None:
+                stat.on_click = lambda _, open_view=open_view: open_view()
+                stat.ink = True
+                stat.tooltip = f"Open {title.lower()}"
+            controls.append(stat)
+        kpi_row.controls = controls
+
+    def render_status(status_data):
+        ranked = top_counts(status_data, limit=len(status_data or {}) or 1)
+        total = sum(count for _, count in ranked)
+        largest = max((count for _, count in ranked), default=0)
+        status_total.value = f"{total:,} document{'s' if total != 1 else ''}"
+        status_list.controls = [
+            share_row(label, count, total, largest, status_color(label), dot=True) for label, count in ranked
+        ] or [widgets.empty_box("No documents yet. Status counts appear once documents are registered.")]
+
+    def render_months(months):
+        largest = max((row.get("count") or 0 for row in months), default=0)
+        total = sum(row.get("count") or 0 for row in months)
+        month_total.value = f"{total:,} registered"
+        columns = []
+        for index, row in enumerate(months):
+            count = row.get("count") or 0
+            latest = index == len(months) - 1
+            height = max(4, round(MONTH_CHART_HEIGHT * count / largest)) if largest else 4
+            columns.append(
+                ft.Column(
+                    [
+                        ft.Text(str(count), size=12, weight=ft.FontWeight.BOLD, color=widgets.link_color() if count else widgets.muted_color()),
+                        ft.Container(
+                            bgcolor=widgets.accent() if latest else ft.Colors.with_opacity(0.45, widgets.accent()),
+                            height=height,
+                            border_radius=ft.border_radius.only(top_left=6, top_right=6),
+                            tooltip=f"{row.get('month') or row.get('label')}: {count} registered",
+                        ),
+                        ft.Text(str(row.get("label") or "-"), size=12, color=widgets.heading_color() if latest else widgets.muted_color(), weight=ft.FontWeight.W_600 if latest else None),
+                    ],
+                    spacing=6,
+                    horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                    alignment=ft.MainAxisAlignment.END,
+                    expand=True,
+                )
             )
+        month_chart.controls = columns or [widgets.empty_box("No monthly activity recorded yet.")]
+
+    def breakdown_card(title, icon, subtitle, counts, empty_message):
+        ranked = top_counts(counts)
+        total = sum(count for _, count in ranked)
+        largest = max((count for _, count in ranked), default=0)
+        rows = [share_row(label, count, total, largest, widgets.accent()) for label, count in ranked]
+        return ft.Container(
+            card(ft.Column([widgets.card_title(title, icon, subtitle=subtitle), *(rows or [widgets.empty_box(empty_message)])], spacing=16)),
+            col={"xs": 12, "lg": 4},
+        )
+
+    def render_breakdowns(payload):
+        breakdown_row.controls = [
+            breakdown_card("By Document Type", ft.Icons.DESCRIPTION_OUTLINED, "Ordinances, resolutions and other kinds.",
+                           payload.get("document_types"), "No document types recorded."),
+            breakdown_card("By Category", ft.Icons.LOCAL_OFFER_OUTLINED, "How documents are classified.",
+                           payload.get("document_categories"), "No categories recorded."),
+            breakdown_card("By Current Office", ft.Icons.ACCOUNT_BALANCE_OUTLINED, "Where documents are right now.",
+                           payload.get("offices"), "No documents are held by an office."),
+        ]
+
+    def processing_tile(label, value, detail, icon, color):
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Icon(icon, color=color, size=22),
+                        width=44, height=44, border_radius=12,
+                        alignment=ft.Alignment(0, 0),
+                        bgcolor=ft.Colors.with_opacity(0.12, color),
+                    ),
+                    ft.Column(
+                        [
+                            ft.Text(label, size=12, color=widgets.muted_color()),
+                            ft.Text(value, size=20, weight=ft.FontWeight.BOLD, color=widgets.link_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            *([ft.Text(detail, size=11, color=widgets.muted_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)] if detail else []),
+                        ],
+                        spacing=1,
+                        expand=True,
+                    ),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(12, 12, 12, 12),
+            bgcolor=card_tint,
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=12,
+            col={"xs": 10, "sm": 5, "xl": 2},
+        )
+
+    def render_processing(processing):
+        average = processing.get("average_processing_days")
+        longest = processing.get("longest_pending") or {}
+        longest_days = longest.get("days")
+        longest_number = longest.get("tracking_number")
+        if not longest_number or longest_number == "N/A":
+            longest_value, longest_detail = "None", "Nothing is pending"
+        else:
+            longest_value = longest_number
+            longest_detail = f"Pending {longest_days} days" if isinstance(longest_days, (int, float)) else "Pending, age not recorded"
+        processing_row.controls = [
+            processing_tile("Average processing time", f"{average} days" if average is not None else "N/A",
+                            "Registration to completion", ft.Icons.TIMER_OUTLINED, ft.Colors.BLUE_700),
+            processing_tile("Awaiting action", f"{int(processing.get('awaiting_action') or 0):,}",
+                            "Pending or in progress", ft.Icons.HOURGLASS_TOP, ft.Colors.AMBER_800),
+            processing_tile("Longest pending", longest_value, longest_detail, ft.Icons.REPORT_PROBLEM_OUTLINED, ft.Colors.RED_700),
+            processing_tile("Completed this month", f"{int(processing.get('completed_this_month') or 0):,}",
+                            None, ft.Icons.TASK_ALT, ft.Colors.GREEN_700),
+            processing_tile("Archived this month", f"{int(processing.get('archived_this_month') or 0):,}",
+                            None, ft.Icons.INVENTORY_2_OUTLINED, ft.Colors.BROWN_400),
+        ]
+
+    def render_recent(documents):
+        rows = []
+        for item in documents:
+            status = str(item.get("status") or "-")
+            meta = [part for part in (item.get("document_type"), item.get("current_office"), item.get("date_registered")) if part]
+            rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Container(
+                                content=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=widgets.accent(), size=20),
+                                width=40, height=40, border_radius=10,
+                                alignment=ft.Alignment(0, 0),
+                                bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.BLUE_700),
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text(item.get("tracking_number") or "-", size=13, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+                                    ft.Text(item.get("title") or "Untitled", size=13, color=widgets.body_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=item.get("title")),
+                                    widgets.hint(" · ".join(str(part) for part in meta)),
+                                ],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            *([widgets.chip(str(item["priority"]), ft.Colors.RED_700 if str(item["priority"]).lower() in {"high", "urgent"} else ft.Colors.BLUE_GREY_600)] if item.get("priority") else []),
+                            widgets.chip(status, status_color(status)),
+                        ],
+                        spacing=14,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=ft.Padding(10, 8, 12, 8),
+                    bgcolor=card_tint,
+                    border=ft.border.all(1, widgets.line_color()),
+                    border_radius=12,
+                )
+            )
+        recent_list.controls = rows or [widgets.empty_box("No documents registered yet.")]
+
+    def load_analytics(update=False):
+        try:
+            response = requests.get(f"{backend_url}/analytics", headers=headers, verify=False, timeout=10)
             if response.status_code != 200:
                 raise Exception(response.text)
             payload = response.json()
-
-            overview = payload.get("overview") or {}
-            processing = payload.get("processing") or {}
-            monthly_activity = payload.get("monthly_activity") or []
-            recent_documents = payload.get("recent_documents") or []
-
-            cards = [
-                ("Total Documents", overview.get("total_documents", 0), "All tracked records", ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.BLUE_700, "total"),
-                ("Active Documents", overview.get("active_documents", 0), "Currently active", ft.Icons.LIBRARY_ADD_CHECK_OUTLINED, ft.Colors.GREEN_700, "active"),
-                ("Pending Documents", overview.get("pending_documents", 0), "Awaiting action", ft.Icons.SCHEDULE_OUTLINED, ft.Colors.RED_700, "pending"),
-                ("Completed Documents", overview.get("completed_documents", 0), "Successfully completed", ft.Icons.CHECK_CIRCLE_OUTLINED, ft.Colors.TEAL_700, "completed"),
-                ("Archived Documents", overview.get("archived_documents", 0), "Closed / archived", ft.Icons.ARCHIVE_OUTLINED, ft.Colors.ORANGE_700, "archived"),
-                ("Documents Added This Month", overview.get("added_this_month", 0), "Registered during current month", ft.Icons.CALENDAR_MONTH_OUTLINED, ft.Colors.DEEP_PURPLE_700, "month"),
-            ]
-
-            metric_cards.controls.clear()
-            for title, value, detail, icon, color, card_type in cards:
-                card_on_click = None
-                if card_type == "total" and open_documents_view is not None:
-                    card_on_click = lambda e: open_documents_view()
-                elif card_type == "archived" and open_archived_view is not None:
-                    card_on_click = lambda e: open_archived_view()
-
-                metric_cards.controls.append(
-                    ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Row([
-                                    ft.Icon(icon, color=color, size=28),
-                                    ft.Text(
-                                        title,
-                                        size=13,
-                                        weight=ft.FontWeight.BOLD,
-                                        color=primary_text,
-                                        width=135,
-                                        max_lines=2,
-                                        overflow=ft.TextOverflow.ELLIPSIS,
-                                    ),
-                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                                ft.Text(str(value), size=26, weight=ft.FontWeight.BOLD, color=primary_text),
-                                ft.Text(detail, size=11, color=secondary_text),
-                            ],
-                            spacing=4,
-                        ),
-                        width=195,
-                        padding=12,
-                        bgcolor=panel_color,
-                        border_radius=12,
-                        border=ft.border.all(1, border_color),
-                        on_click=card_on_click,
-                    )
-                )
-
-            status_data = payload.get("status_breakdown") or {}
-            max_status = max(status_data.values()) if status_data else 0
-            status_chart.controls = [ft.Text("Document Status", size=14, weight=ft.FontWeight.BOLD)]
-            for label, count in status_data.items():
-                status_chart.controls.append(build_status_bar(max_status, count, str(label)))
-
-            type_data = payload.get("document_types") or {}
-            if type_data:
-                type_distribution.controls = [ft.Text("Documents by Document Type", size=13, weight=ft.FontWeight.BOLD)]
-                for label, count in type_data.items():
-                    type_distribution.controls.append(ft.Text(f"{label}: {count}", size=11))
-            else:
-                type_distribution.controls = [ft.Text("Documents by Document Type", size=13, weight=ft.FontWeight.BOLD), ft.Text("No document types found", size=11)]
-
-            category_data = payload.get("document_categories") or {}
-            if category_data:
-                category_distribution.controls = [ft.Text("Documents by Category", size=13, weight=ft.FontWeight.BOLD)]
-                for label, count in category_data.items():
-                    category_distribution.controls.append(ft.Text(f"{label}: {count}", size=11))
-            else:
-                category_distribution.controls = [ft.Text("Documents by Category", size=13, weight=ft.FontWeight.BOLD), ft.Text("No categories found", size=11)]
-
-            office_data = payload.get("offices") or {}
-            if office_data:
-                office_distribution.controls = [ft.Text("Documents by Current Office", size=13, weight=ft.FontWeight.BOLD)]
-                for label, count in office_data.items():
-                    office_distribution.controls.append(ft.Text(f"{label}: {count}", size=11))
-            else:
-                office_distribution.controls = [ft.Text("Documents by Current Office", size=13, weight=ft.FontWeight.BOLD), ft.Text("No office distribution found", size=11)]
-
-            longest = processing.get("longest_pending") or {}
-            longest_label = longest.get("tracking_number") or "N/A"
-            longest_days = longest.get("days") or "Insufficient data"
-
-            processing_controls = [
-                ft.Text("Document Processing Analytics", size=14, weight=ft.FontWeight.BOLD),
-                ft.Text(f"Average Processing Time: {processing.get('average_processing_days') if processing.get('average_processing_days') is not None else 'N/A'} days", size=11),
-                ft.Text(f"Documents Awaiting Action: {processing.get('awaiting_action', 'N/A')}", size=11),
-                ft.Text(f"Longest Pending: {longest_label} ({longest_days})", size=11),
-                ft.Text(f"Completed This Month: {processing.get('completed_this_month', 0)}", size=11),
-                ft.Text(f"Archived This Month: {processing.get('archived_this_month', 0)}", size=11),
-            ]
-            processing_panel.controls = processing_controls
-
-            monthly_bar_max = max((row.get("count") or 0) for row in monthly_activity) if monthly_activity else 0
-            monthly_panel.controls = [ft.Text("Monthly Document Activity", size=14, weight=ft.FontWeight.BOLD)]
-            for row in monthly_activity:
-                count = row.get("count") or 0
-                bar_width = 160 if monthly_bar_max == 0 else max(12, int((count / monthly_bar_max) * 160))
-                monthly_panel.controls.append(
-                    ft.Row([
-                        ft.Container(content=ft.Text(str(row.get("label") or "-"), size=11, width=60), width=60),
-                        ft.Container(content=ft.Container(bgcolor=ft.Colors.GREEN_400, width=bar_width, height=10, border_radius=4), width=bar_width + 20),
-                        ft.Text(str(count), size=11),
-                    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-                )
-
-            recent_rows = []
-            for item in recent_documents:
-                title_text = str(item.get("title") or "-")
-                title_cell = ft.Tooltip(
-                    message=title_text,
-                    content=ft.Container(
-                        content=ft.Text(
-                            title_text,
-                            size=11,
-                            max_lines=1,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                            no_wrap=True,
-                        ),
-                        width=240,
-                        alignment=ft.Alignment.CENTER_LEFT,
-                    ),
-                )
-                recent_rows.append(
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(ft.Text(str(item.get("tracking_number") or "-"))),
-                            ft.DataCell(title_cell),
-                            ft.DataCell(ft.Text(str(item.get("document_type") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("status") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("priority") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("current_office") or "-"))),
-                            ft.DataCell(ft.Text(str(item.get("date_registered") or "-"))),
-                        ]
-                    )
-                )
-            recent_table.rows = recent_rows
-
         except Exception as exc:
-            metric_cards.controls = []
-            status_chart.controls = [
-                ft.Text("Unable to load analytics", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_700),
-                ft.Text(str(exc), size=11, color=ft.Colors.RED_700),
-            ]
+            notice.content = widgets.empty_box(f"Unable to load analytics: {str(exc)[:200]}", icon=ft.Icons.ERROR_OUTLINE)
+            notice.visible = True
+            for target in (kpi_row, status_list, month_chart, breakdown_row, processing_row, recent_list):
+                target.controls = []
+        else:
+            notice.visible = False
+            render_kpis(payload.get("overview") or {})
+            render_status(payload.get("status_breakdown") or {})
+            render_months(payload.get("monthly_activity") or [])
+            render_breakdowns(payload)
+            render_processing(payload.get("processing") or {})
+            render_recent(payload.get("recent_documents") or [])
+        if update and page is not None:
+            page.update()
 
     load_analytics()
 
-    refresh_button = ft.Button("Refresh Analytics", on_click=lambda _: load_analytics())
-
     return ft.Column(
         controls=[
-            ft.Row([
-                ft.Column([
-                    ft.Text("ANALYTICS", size=24, weight=ft.FontWeight.BOLD, color=primary_text),
-                    ft.Text("Operational document insights", size=12, color=secondary_text),
-                ], spacing=2),
-                ft.Container(expand=True),
-                refresh_button,
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            ft.Container(height=4),
-            metric_cards,
-            ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Document Status", size=16, weight=ft.FontWeight.BOLD),
-                        status_chart,
-                    ],
-                    spacing=8,
-                ),
-                padding=12,
-                border_radius=12,
-                bgcolor=soft_panel_color,
+            widgets.banner(
+                "Analytics", "Document volume, status and processing across every office.", ft.Icons.INSIGHTS,
+                corner=ft.IconButton(ft.Icons.REFRESH, icon_color=ft.Colors.WHITE, tooltip="Refresh analytics", on_click=lambda _: load_analytics(update=True)),
             ),
-            ft.Container(
-                content=ft.Row([
+            notice,
+            kpi_row,
+            ft.ResponsiveRow(
+                [
                     ft.Container(
-                        content=ft.Column([type_distribution], spacing=8),
-                        expand=True,
-                        padding=12,
-                        border=ft.border.all(1, border_color),
-                        bgcolor=panel_color,
+                        card(ft.Column([widgets.card_title("Document Status", ft.Icons.DONUT_LARGE, subtitle="Every document by its current status.", trailing=status_total), status_list], spacing=18)),
+                        col={"xs": 12, "lg": 5},
                     ),
                     ft.Container(
-                        content=ft.Column([category_distribution], spacing=8),
-                        expand=True,
-                        padding=12,
-                        border=ft.border.all(1, border_color),
-                        bgcolor=panel_color,
+                        card(ft.Column([widgets.card_title("Monthly Activity", ft.Icons.BAR_CHART, subtitle="Documents registered each month; the latest month is highlighted.", trailing=month_total), ft.Container(month_chart, padding=ft.Padding(4, 8, 4, 0))], spacing=18)),
+                        col={"xs": 12, "lg": 7},
                     ),
-                    ft.Container(
-                        content=ft.Column([office_distribution], spacing=8),
-                        expand=True,
-                        padding=12,
-                        border=ft.border.all(1, border_color),
-                        bgcolor=panel_color,
-                    ),
-                ], spacing=12),
-                padding=0,
+                ],
+                spacing=16,
+                run_spacing=16,
+                vertical_alignment=ft.CrossAxisAlignment.START,
             ),
-            ft.Container(
-                content=ft.Column([processing_panel], spacing=8),
-                padding=12,
-                bgcolor=soft_panel_color,
-                border_radius=12,
-            ),
-            ft.Container(
-                content=ft.Column([monthly_panel], spacing=8),
-                padding=12,
-                bgcolor=soft_panel_color,
-                border_radius=12,
-            ),
-            ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Recent Documents", size=14, weight=ft.FontWeight.BOLD),
-                        ft.Container(
-                            content=recent_table,
-                            padding=8,
-                            border_radius=10,
-                            bgcolor=panel_color,
-                            border=ft.border.all(1, border_color),
-                        ),
-                    ],
-                    spacing=12,
-                ),
-                padding=12,
-                border_radius=12,
-                bgcolor=soft_panel_color,
-            ),
+            card(ft.Column([widgets.card_title("Processing", ft.Icons.SPEED, subtitle="How quickly documents move from registration to completion."), processing_row], spacing=18)),
+            breakdown_row,
+            card(ft.Column([widgets.card_title("Recently Registered", ft.Icons.HISTORY, subtitle="The latest documents added to the system."), recent_list], spacing=16)),
         ],
-        spacing=14,
-        expand=True,
+        spacing=16,
     )
