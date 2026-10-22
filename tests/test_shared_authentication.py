@@ -82,9 +82,9 @@ def test_upload_rejects_a_deactivated_user():
 def test_no_service_decodes_access_tokens_outside_the_shared_module():
     import Backends.SBmem_backend.main as sb_member_main
     from Backends.backend import core
-    from Backends.backend.routes import analytics, audit, documents, offices, reference_data
+    from Backends.backend.routes import analytics, audit, documents, offices
 
-    for module in (core, sb_member_main, analytics, audit, documents, offices, reference_data):
+    for module in (core, sb_member_main, analytics, audit, documents, offices):
         source = pyinspect.getsource(module)
         assert "decode_access_token(" not in source, module.__name__
         assert "jwt.decode(" not in source, module.__name__

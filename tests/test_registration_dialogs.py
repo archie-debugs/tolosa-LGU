@@ -3,6 +3,7 @@ from datetime import date
 import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
 import flet as ft
 
+from frontend.admin.definition_fields import OTHER
 from frontend.admin.registration import open_multiple_register_dialog, open_register_dialog
 
 TODAY = date(2026, 10, 20)
@@ -306,7 +307,7 @@ def test_several_files_share_one_due_date():
 
 
 MEASURE_OPTIONS = {"offices": [MAYOR], "default_office_id": 2, "office_locked": True, "categories": [],
-                   "document_types": ["Ordinance", "Memorandum"],
+                   "document_types": ["Ordinance", "Resolution"], "other_document_types": ["Memorandum"],
                    "measure_stages": {"ordinance": ["Filed", "First Reading", "Approved"], "resolution": ["Filed", "Adopted"]}}
 
 
@@ -326,7 +327,8 @@ def test_a_measure_is_registered_at_the_stage_chosen_and_other_documents_have_no
     assert api.posted("/documents/register")[0]["data"]["stage"] == "First Reading"
 
     page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS))
-    choose(field(dialog, "Document type"), "Memorandum")
+    choose(field(dialog, "Document type"), OTHER)
+    field(dialog, "Other document type").value = "Memorandum"
     field(dialog, "Title").value = "Office memo"
     press(dialog, "Register")
     assert "stage" not in api.posted("/documents/register")[0]["data"]
@@ -340,3 +342,22 @@ def test_a_measure_registered_with_its_file_sends_its_stage():
     files.on_progress("Parking.pdf", 1.0, None)
 
     assert api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["stage"] == "Filed"
+
+
+def test_a_typed_type_and_a_category_used_before_are_sent():
+    page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS | {"categories": ["Finance", "Health"]}))
+    other = field(dialog, "Other document type")
+    assert other.visible is False
+    choose(field(dialog, "Document type"), OTHER)
+    assert other.visible is True and field(dialog, "Stage").options == []
+
+    field(dialog, "Title").value = "Office memo"
+    press(dialog, "Register")
+    assert "Type the document type, or choose Ordinance or Resolution." in texts(dialog)
+    assert api.posted("/documents/register") == []
+
+    other.value = "  Executive  Order "
+    press(dialog, "Health")
+    press(dialog, "Register")
+    data = api.posted("/documents/register")[0]["data"]
+    assert (data["document_type"], data["category"]) == ("Executive Order", "Health")

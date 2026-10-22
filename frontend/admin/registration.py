@@ -6,13 +6,13 @@ from datetime import date, datetime
 
 import flet as ft
 
+from frontend.admin.definition_fields import CategoryField, DocumentTypeField
 from frontend.admin.todays_documents import picked_date
 from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date
 
 ALLOWED_EXTENSIONS = ("pdf", "doc", "docx")
 PRIORITIES = ("Low", "Medium", "High")
 OLDEST_YEAR = 1900
-NO_CATEGORY = "No category"
 FILED = "Filed"
 
 # Flet 0.28 labels a button with `text`; newer releases use `content`.
@@ -272,14 +272,9 @@ class _Form:
         offices = options["offices"]
         default_office = options["default_office_id"] or (offices[0]["id"] if len(offices) == 1 else None)
         # `data` names each field, since its name is drawn above it rather than as its label.
-        self.document_type = ft.Dropdown(
-            data="Document type", hint_text="Document type", options=[ft.dropdown.Option(name) for name in options["document_types"]],
-            value=options["document_types"][0] if options["document_types"] else None, **style,
-        )
-        self.category = ft.Dropdown(
-            data="Category", options=[ft.dropdown.Option(NO_CATEGORY)] + [ft.dropdown.Option(name) for name in options["categories"]],
-            value=NO_CATEGORY, **style,
-        )
+        self.document_type = DocumentTypeField(style, value=options["document_types"][0] if options.get("document_types") else None,
+                                               used_before=options.get("other_document_types") or [])
+        self.category = CategoryField(style, used_before=options.get("categories") or [])
         self.office = ft.Dropdown(
             data="Office", hint_text="Office", options=[ft.dropdown.Option(str(office["id"]), office["name"]) for office in offices],
             value=str(default_office) if default_office is not None else None,
@@ -336,8 +331,8 @@ class _Form:
 
     def shared_fields(self):
         return {
-            "document_type": self.document_type.value or None,
-            "category": self.category.value if self.category.value not in (None, "", NO_CATEGORY) else None,
+            "document_type": self.document_type.value,
+            "category": self.category.value,
             "office_id": int(self.office.value) if self.office.value else None,
             "priority": self.priority.value or "Medium",
             "due_date": (self.due_date.value or "").strip() or None,
@@ -347,8 +342,10 @@ class _Form:
         }
 
     def lock(self, locked):
-        for control in (self.document_type, self.category, self.priority, self.due_date, self.due_button, self.assigned_to, self.author, self.description):
+        for control in (self.priority, self.due_date, self.due_button, self.assigned_to, self.author, self.description):
             control.disabled = locked
+        self.document_type.lock(locked)
+        self.category.lock(locked)
         self.office.disabled = locked or self.options["office_locked"]
 
 
@@ -550,7 +547,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
             message.value = "Enter the document's title."
             page.update()
             return
-        problem = form.office_problem() or form.due_problem()
+        problem = form.office_problem() or form.document_type.problem() or form.due_problem()
         if problem:
             message.value = problem
             page.update()
@@ -691,7 +688,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     third = {"xs": 12, "sm": 4}
     half = {"xs": 12, "sm": 6}
     stage_box = _labelled(widgets, stage, "Stage", ft.Icons.TIMELINE, required=True, col=third)
-    on_dropdown_change(form.document_type, lambda _: show_stage())
+    form.document_type.on_change(lambda _: show_stage())
     show_stage(update=False)
     content = ft.Column([
         _section(widgets, ft.Icons.DESCRIPTION, "The document", [
@@ -699,10 +696,10 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
             ft.ResponsiveRow([
                 _labelled(widgets, number, "Number", ft.Icons.TAG, required=True, col=third),
                 _labelled(widgets, year, "Year", ft.Icons.CALENDAR_TODAY_OUTLINED, required=True, col=third),
-                _labelled(widgets, form.document_type, "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=third),
+                _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=third),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
-                _labelled(widgets, form.category, "Category", ft.Icons.LOCAL_OFFER_OUTLINED, required=True, col=third),
+                _labelled(widgets, form.category.control(), "Category", ft.Icons.LOCAL_OFFER_OUTLINED, col=third),
                 _labelled(widgets, form.priority, "Priority", ft.Icons.FLAG_OUTLINED, required=True, col=third),
                 _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=third),
                 stage_box,
@@ -939,7 +936,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
         if status["busy"]:
             return
         message.value = ""
-        problem = form.office_problem() or form.due_problem()
+        problem = form.office_problem() or form.document_type.problem() or form.due_problem()
         if problem:
             message.value = problem
             page.update()
@@ -1021,8 +1018,8 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
     content = ft.Column([
         _section(widgets, ft.Icons.DESCRIPTION, "Document details", [
             ft.ResponsiveRow([
-                _labelled(widgets, form.document_type, "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=half),
-                _labelled(widgets, form.category, "Category", ft.Icons.GRID_VIEW, required=True, col=half),
+                _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=half),
+                _labelled(widgets, form.category.control(), "Category", ft.Icons.GRID_VIEW, col=half),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
                 _labelled(widgets, form.office, "Office", ft.Icons.APARTMENT, required=True, col=third),

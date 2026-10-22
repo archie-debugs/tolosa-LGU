@@ -175,10 +175,10 @@ def test_registration_accepts_only_document_files_and_keeps_just_the_file_name(c
     assert accepted.json()["attachments"][0]["original_filename"] == "ordinance.pdf"
 
 
-def test_every_registration_path_links_the_category(client):
+def test_every_registration_path_saves_the_category(client):
     headers = headers_for(client, "admin")
     single = register(client, headers, category="Finance").json()
-    assert single["category_id"] is not None
+    assert single["category"] == "Finance"
 
     upload = client.post("/documents/uploads/create_tmp_uploads", json={"files": [{"filename": "Resolution No. 5.pdf"}]}, headers=headers).json()["files"][0]
     assert client.put(path_of(upload["upload_url"]), content=PDF + b"%tmp\n").status_code == 200
@@ -190,4 +190,3 @@ def test_every_registration_path_links_the_category(client):
     assert confirmed["registered"] == 1, confirmed
     bulk = client.get(f"/documents/{confirmed['documents'][0]['id']}", headers=headers).json()
     assert bulk["category"] == "Health"
-    assert bulk["category_id"] is not None

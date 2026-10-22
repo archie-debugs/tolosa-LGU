@@ -119,6 +119,8 @@ class PaginatedDocumentResponse(BaseModel):
     available_years: list[int] = Field(default_factory=list)
     available_statuses: list[str] = Field(default_factory=list)
     available_archivers: list[str] = Field(default_factory=list)
+    available_document_types: list[str] = Field(default_factory=list)
+    available_categories: list[str] = Field(default_factory=list)
     summary: Optional[dict] = None
 
 
