@@ -157,8 +157,8 @@ def test_the_form_offers_each_user_only_what_they_may_choose(client):
     assert [office["name"] for office in clerk["offices"]] == ["Office of the Mayor"]
     assert clerk["office_locked"] is True
     assert clerk["default_office_id"] == office_id("Office of the Mayor")
-    assert clerk["categories"] == ["Finance"]
     assert clerk["document_types"] == ["Ordinance", "Resolution"]
+    assert (clerk["other_document_types"], clerk["categories"]) == ([], [])
 
     admin = options("admin")
     assert [office["name"] for office in admin["offices"]] == ["Office of the Mayor", "Records Office"]
@@ -170,28 +170,42 @@ def test_the_form_offers_each_user_only_what_they_may_choose(client):
     assert (drifter["offices"], drifter["default_office_id"]) == ([], None)
 
 
-# Reference Data
+# Document type and category: typed freely
 
-@pytest.mark.parametrize("fields", [
-    {"category": "Made Up"},
-    {"category": "Retired Category"},
-    {"document_type": "Made Up"},
-    {"document_type": "Retired Type"},
-])
-def test_category_and_type_must_be_active_reference_data(client, fields):
-    response = register(client, headers_for(client, "admin"), **fields)
-    assert response.status_code == 400
+def test_a_typed_type_and_category_are_saved_tidied(client):
+    headers = headers_for(client, "admin")
+    body = register(client, headers, category="  Public   Works ", document_type="  executive  order").json()
+    assert (body["category"], body["document_type"]) == ("Public Works", "executive order")
+    assert body["category_id"] is None and body["document_type_id"] is None
+
+
+def test_ordinance_and_resolution_keep_their_standard_spelling(client):
+    body = register(client, headers_for(client, "admin"), document_type="ORDINANCE").json()
+    assert body["document_type"] == "Ordinance"
+
+
+def test_category_is_optional(client):
+    response = register(client, headers_for(client, "admin"), document_type="Resolution")
+    assert response.status_code == 200, response.text
+    assert response.json()["category"] is None
+
+
+def test_an_overlong_type_or_category_is_refused(client):
+    headers = headers_for(client, "admin")
+    assert register(client, headers, category="x" * 121).status_code == 400
+    assert register(client, headers, document_type="x" * 121).status_code == 400
     with SessionLocal() as db:
-        assert db.query(models.Category).count() == 2
-        assert db.query(models.DocumentType).count() == 3
         assert db.query(models.Document).count() == 0
 
 
-def test_known_category_and_type_are_linked(client):
-    response = register(client, headers_for(client, "admin"), category="Finance", document_type="Ordinance")
-    body = response.json()
-    assert (body["category"], body["document_type"]) == ("Finance", "Ordinance")
-    assert body["category_id"] is not None and body["document_type_id"] is not None
+def test_the_form_suggests_types_and_categories_already_used(client):
+    headers = headers_for(client, "admin")
+    for title, category, document_type in [("A", "Finance", "Memorandum"), ("B", "Finance", "Ordinance"), ("C", "Health", "Memorandum")]:
+        assert register(client, headers, title=title, category=category, document_type=document_type).status_code == 200
+    options = client.get("/documents/registration/options", headers=headers).json()
+    assert options["document_types"] == ["Ordinance", "Resolution"]
+    assert options["other_document_types"] == ["Memorandum"]
+    assert options["categories"] == ["Finance", "Health"]
 
 
 # Audit
@@ -236,12 +250,12 @@ def test_each_uploaded_file_keeps_its_own_title_and_number(client):
     assert {d.document_type for d in docs} == {"Ordinance"}
 
 
-def test_multiple_registration_applies_the_same_office_and_reference_data_rules(client):
+def test_multiple_registration_applies_the_same_office_and_naming_rules(client):
     clerk = headers_for(client, "clerk")
     tmp = upload(client, clerk, "a.pdf", PDF)
     spec = [{"tmp_name": tmp, "series_year": 2025}]
     assert confirm(client, clerk, spec, office_id=office_id("Records Office")).status_code == 403
-    assert confirm(client, clerk, spec, category="Made Up").status_code == 400
+    assert confirm(client, clerk, spec, category="x" * 121).status_code == 400
     assert confirm(client, clerk, spec, current_office="SB Secretariat").status_code == 403
 
     admin = headers_for(client, "admin")

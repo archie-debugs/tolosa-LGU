@@ -63,30 +63,29 @@ def counts():
         return db.query(models.Office).count(), db.query(models.Category).count(), db.query(models.DocumentType).count()
 
 
-def test_edit_links_existing_active_reference_data(client, document):
-    response = edit(client, document, category="health", document_type="Resolution")
+def test_edit_saves_a_typed_type_and_category(client, document):
+    before = counts()
+
+    response = edit(client, document, category="  Public  Works", document_type="memorandum")
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert (body["category"], body["document_type"]) == ("Health", "Resolution")
-    with SessionLocal() as db:
-        stored = db.get(models.Document, document["id"])
-        assert stored.category_rel.name == "Health"
-        assert stored.document_type_rel.name == "Resolution"
+    assert (body["category"], body["document_type"]) == ("Public Works", "memorandum")
+    assert counts() == before
 
 
-@pytest.mark.parametrize("payload, message", [
-    ({"category": "Made Up"}, "Category 'Made Up' is not an active entry in Reference Data."),
-    ({"document_type": "Retired Type"}, "Document type 'Retired Type' is not an active entry in Reference Data."),
-])
-def test_edit_never_creates_or_revives_reference_data(client, document, payload, message):
-    before = counts()
+def test_edit_keeps_the_standard_spelling_and_can_clear_a_category(client, document):
+    response = edit(client, document, category="", document_type="RESOLUTION")
 
-    response = edit(client, document, **payload)
+    assert response.status_code == 200, response.text
+    assert (response.json()["category"], response.json()["document_type"]) == (None, "Resolution")
+
+
+def test_edit_refuses_an_overlong_category(client, document):
+    response = edit(client, document, category="x" * 121)
 
     assert response.status_code == 400
-    assert response.json()["detail"] == message
-    assert counts() == before
+    assert "120" in response.json()["detail"]
 
 
 def test_edit_keeps_a_value_that_was_retired_after_registration(client, document):
@@ -134,12 +133,13 @@ def test_edit_refuses_system_managed_fields(client, document, field, value):
     assert response.json()["detail"] == "This field is managed by the system and cannot be edited."
 
 
-def test_edit_options_list_active_reference_data_for_editors(client):
+def test_edit_options_suggest_what_documents_already_use(client, document):
     response = client.get("/documents/edit-options", headers=headers_for(client))
 
     assert response.status_code == 200, response.text
     assert response.json() == {
-        "categories": ["Finance", "Health", "Old Category"],
         "document_types": ["Ordinance", "Resolution"],
+        "other_document_types": [],
+        "categories": ["Old Category"],
     }
     assert client.get("/documents/edit-options", headers=headers_for(client, "clerk")).status_code == 403
