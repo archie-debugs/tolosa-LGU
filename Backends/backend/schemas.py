@@ -18,6 +18,7 @@ class DocumentCreate(BaseModel):
     priority: Optional[str] = "Medium"
     is_public: bool = False
     remarks: Optional[str] = None
+    action_required: Optional[str] = None
     author: Optional[str] = None
     session: Optional[str] = None
     date_registered: Optional[str] = None
@@ -53,6 +54,7 @@ class DocumentUpdate(BaseModel):
     priority: Optional[str] = None
     is_public: Optional[bool] = None
     remarks: Optional[str] = None
+    action_required: Optional[str] = None
     author: Optional[str] = None
     session: Optional[str] = None
     date_registered: Optional[str] = None
@@ -81,6 +83,7 @@ class DocumentResponse(BaseModel):
     priority: Optional[str] = None
     is_public: bool = False
     remarks: Optional[str] = None
+    action_required: Optional[str] = None
     author: Optional[str] = None
     session: Optional[str] = None
     date_registered: Optional[str] = None

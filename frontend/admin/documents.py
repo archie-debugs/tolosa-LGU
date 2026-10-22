@@ -20,6 +20,12 @@ ARCHIVED_SORTS = {
     "Title A–Z": ("title", "asc"),
 }
 PRIORITY_COLORS = {"High": ft.Colors.RED_700, "Low": ft.Colors.BLUE_GREY_600}
+STATUS_COLORS = {"Approved": ft.Colors.AMBER_900, "Completed": ft.Colors.GREEN_700, "Posted": ft.Colors.TEAL_700}
+# Column widths, laid out like the SB's tracking sheet. Remarks takes whatever is left.
+COLUMN_WIDTHS = {"document": 210, "type": 105, "referred": 115, "action": 90, "status": 105, "where": 150, "registered": 95, "actions": 88}
+REMARKS_MIN_WIDTH = 150
+# Sidebar, page padding and the list card's padding: what the table can't use of the window.
+CHROME_WIDTH = 370
 ALL = "All"
 # Newer Flet versions renamed the dropdown's change event to on_select.
 DROPDOWN_EVENT = "on_select" if "on_select" in inspect.signature(ft.Dropdown.__init__).parameters else "on_change"
@@ -262,7 +268,7 @@ def build_documents_view(
                     widgets.hint(f"by {by}" if by and by != "-" else "Archiver not recorded"),
                 ],
                 spacing=3,
-                width=190,
+                width=COLUMN_WIDTHS["where"],
             )
         if doc.get("in_transit_to"):
             return ft.Column(
@@ -271,7 +277,7 @@ def build_documents_view(
                     widgets.chip(f"In transit · {format_elapsed(doc.get('in_transit_since'))}", ft.Colors.AMBER_800),
                 ],
                 spacing=3,
-                width=190,
+                width=COLUMN_WIDTHS["where"],
             )
         office = doc.get("current_office")
         return ft.Column(
@@ -280,7 +286,7 @@ def build_documents_view(
                 widgets.hint("Held here"),
             ],
             spacing=3,
-            width=190,
+            width=COLUMN_WIDTHS["where"],
         )
 
     def badges(doc):
@@ -293,9 +299,6 @@ def build_documents_view(
             chips.append(widgets.chip(f"{priority} priority", PRIORITY_COLORS[priority]))
         if not has_file(doc):
             chips.append(widgets.chip("No file", ft.Colors.RED_700))
-        status = doc.get("status")
-        if status and status != "Approved":
-            chips.append(widgets.chip(status, ft.Colors.INDIGO_600))
         return chips
 
     def has_file(doc):
@@ -395,10 +398,33 @@ def build_documents_view(
         cells = []
         if selectable:
             cells.append(ft.Checkbox(value=bool(ids) and ids.issubset(selection), tooltip="Select this page", on_change=lambda e: toggle_page(e.control.value)))
-        for text, width in (("Document", None), ("Archived" if archived else "Where it is", 190), ("Registered", 110), ("", 96)):
+        columns = (
+            ("Document", COLUMN_WIDTHS["document"]), ("Type", COLUMN_WIDTHS["type"]), ("Referred to", COLUMN_WIDTHS["referred"]),
+            ("Action", COLUMN_WIDTHS["action"]), ("Status", COLUMN_WIDTHS["status"]), ("Remarks", None),
+            ("Archived" if archived else "Where it is", COLUMN_WIDTHS["where"]), ("Registered", COLUMN_WIDTHS["registered"]), ("", COLUMN_WIDTHS["actions"]),
+        )
+        for text, width in columns:
             label = widgets.hint(text.upper())
             cells.append(ft.Container(label, expand=True) if width is None else ft.Container(label, width=width))
         return ft.Container(ft.Row(cells, spacing=12), padding=ft.Padding(4, 4, 4, 6), border=ft.Border(bottom=ft.BorderSide(1, widgets.line_color())))
+
+    def text_cell(value, width, lines=1):
+        """A sheet column: the value cut to fit, whole on hover; a dash when it is not set."""
+        text = str(value).strip() if value not in (None, "-") else ""
+        cell = ft.Text(text or "—", size=12, color=widgets.body_color() if text else widgets.muted_color(),
+                       max_lines=lines, overflow=ft.TextOverflow.ELLIPSIS, tooltip=text or None)
+        return ft.Container(cell, expand=True) if width is None else ft.Container(cell, width=width)
+
+    def status_cell(status):
+        if not status or status == "-":
+            return text_cell(None, COLUMN_WIDTHS["status"])
+        chip = widgets.chip(status, STATUS_COLORS.get(status, ft.Colors.INDIGO_600))
+        return ft.Container(ft.Row([chip], spacing=0), width=COLUMN_WIDTHS["status"])
+
+    def table_width():
+        """At least wide enough for every column; wider when the window allows, so Remarks gets the room."""
+        fixed = sum(COLUMN_WIDTHS.values()) + REMARKS_MIN_WIDTH + 12 * (len(COLUMN_WIDTHS) + (1 if selectable else 0)) + (40 if selectable else 0) + 8
+        return max(fixed, (page.width or 1280) - CHROME_WIDTH)
 
     def document_row(doc):
         doc_id = doc.get("id")
@@ -412,7 +438,8 @@ def build_documents_view(
                 spacing=8,
                 wrap=True,
             ),
-            ft.Text(doc.get("title") or "Untitled", size=13, color=widgets.heading_color(), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, tooltip=doc.get("title")),
+            # One line only; the whole title shows on hover and in the details.
+            ft.Text(doc.get("title") or "Untitled", size=13, color=widgets.heading_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=doc.get("title")),
         ]
         chips = badges(doc)
         if chips:
@@ -421,9 +448,14 @@ def build_documents_view(
         if selectable:
             controls.append(ft.Checkbox(value=doc_id in selection, on_change=lambda e, i=doc_id: toggle(i, e.control.value)))
         controls += [
-            ft.Column(details, spacing=4, expand=True),
+            ft.Column(details, spacing=4, width=COLUMN_WIDTHS["document"]),
+            text_cell(doc.get("document_type"), COLUMN_WIDTHS["type"]),
+            text_cell(doc.get("assigned_to"), COLUMN_WIDTHS["referred"]),
+            text_cell(doc.get("action_required"), COLUMN_WIDTHS["action"]),
+            status_cell(doc.get("status")),
+            text_cell(doc.get("remarks"), None, lines=2),
             location_cell(doc),
-            ft.Column([ft.Text(format_date(doc.get("date_registered") if doc.get("date_registered") not in (None, "-") else doc.get("date_received")), size=12, color=widgets.body_color()), widgets.hint(f"Updated {format_date(doc.get('last_updated'))}")], spacing=3, width=110),
+            ft.Column([ft.Text(format_date(doc.get("date_registered") if doc.get("date_registered") not in (None, "-") else doc.get("date_received")), size=12, color=widgets.body_color()), widgets.hint(f"Updated {format_date(doc.get('last_updated'))}")], spacing=3, width=COLUMN_WIDTHS["registered"]),
         ]
         actions = []
         if can_view_details and open_details:
@@ -431,7 +463,7 @@ def build_documents_view(
         more = menu_items(doc)
         if more:
             actions.append(ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="More actions", items=more))
-        controls.append(ft.Row(actions, spacing=0, width=96, alignment=ft.MainAxisAlignment.END))
+        controls.append(ft.Row(actions, spacing=0, width=COLUMN_WIDTHS["actions"], alignment=ft.MainAxisAlignment.END))
         return widgets.list_row(controls, on_click=(lambda _, d=doc: open_details(d)) if can_view_details and open_details else None)
 
     def render_pagination():
@@ -477,7 +509,9 @@ def build_documents_view(
         if loaded:
             first = (state["page"] - 1) * state["page_size"] + 1
             result_text.value = f"Showing {first}–{first + len(loaded) - 1} of {total} document{'s' if total != 1 else ''}"
-            rows_column.controls = [header_row()] + [document_row(doc) for doc in loaded]
+            # The sheet's columns don't fit a narrow window, so the table scrolls sideways there.
+            table = ft.Column([header_row()] + [document_row(doc) for doc in loaded], spacing=0, width=table_width())
+            rows_column.controls = [ft.Row([table], scroll=ft.ScrollMode.AUTO)]
         else:
             result_text.value = ""
             if filtering():

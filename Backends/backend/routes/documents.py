@@ -353,6 +353,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
     title = payload.get("title")
     description = payload.get("description")
     assigned_to = payload.get("assigned_to")
+    action_required = (payload.get("action_required") or "").strip() or None
     author = payload.get("author")
     priority = payload.get("priority") or "Medium"
     # The single-document form sends the stage it was registered at; bulk import leaves it out.
@@ -423,7 +424,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             doc = _new_registered_document(
                 db, current_user, placement,
                 title=doc_title, document_number=document_number, series_year=series_year, description=description,
-                assigned_to=assigned_to, author=author, priority=priority, **stage_fields,
+                assigned_to=assigned_to, action_required=action_required, author=author, priority=priority, **stage_fields,
             )
 
             # move file from tmp to uploads
@@ -534,6 +535,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
                           office_id: int | None = Form(None),
                           current_office: str | None = Form(None),
                           assigned_to: str | None = Form(None),
+                          action_required: str | None = Form(None),
                           author: str | None = Form(None),
                           priority: str | None = Form("Medium"),
                           due_date: str | None = Form(None),
@@ -586,7 +588,7 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             doc = _new_registered_document(
                 db, current_user, placement,
                 title=doc_title, document_number=document_number, series_year=series_year, description=description,
-                assigned_to=assigned_to, author=author, priority=priority,
+                assigned_to=assigned_to, action_required=(action_required or "").strip() or None, author=author, priority=priority,
             )
 
             # save file to uploads dir
@@ -837,6 +839,7 @@ def _new_registered_document(db: Session, current_user: models.User, placement: 
         originating_office=office.name if office else None,
         originating_office_id=office.id if office else None,
         assigned_to=(fields.get("assigned_to") or None),
+        action_required=(fields.get("action_required") or None),
         author=(fields.get("author") or None),
         status="Approved",
         priority=(fields.get("priority") or "Medium"),
@@ -958,6 +961,7 @@ def _serialize_document(doc: models.Document):
         "priority": doc.priority,
         "is_public": bool(doc.is_public),
         "remarks": doc.remarks,
+        "action_required": doc.action_required,
         "author": doc.author,
         "session": doc.session,
         "date_registered": doc.date_registered,
@@ -1954,6 +1958,7 @@ def register_document(
     office_id: Optional[int] = Form(None),
     current_office: Optional[str] = Form(None),
     assigned_to: Optional[str] = Form(None),
+    action_required: Optional[str] = Form(None),
     author: Optional[str] = Form(None),
     priority: Optional[str] = Form("Medium"),
     due_date: Optional[str] = Form(None),
@@ -2012,7 +2017,7 @@ def register_document(
         doc = _new_registered_document(
             db, current_user, placement,
             title=title, document_number=document_number, series_year=series_year, description=description,
-            assigned_to=assigned_to, author=author, priority=priority, stage=stage,
+            assigned_to=assigned_to, action_required=(action_required or "").strip() or None, author=author, priority=priority, stage=stage,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))

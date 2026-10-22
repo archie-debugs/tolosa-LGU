@@ -154,7 +154,7 @@ def test_an_employee_registers_a_record_into_their_own_office():
 
     data = api.posted("/documents/register")[0]["data"]
     assert data == {"title": "Market code", "document_number": "12", "series_year": "2026", "document_type": "Ordinance",
-                    "office_id": "2", "priority": "Medium"}
+                    "office_id": "2", "priority": "Medium", "action_required": "None"}
     assert "DOC-000001" in texts(dialog) and "Document registered" in texts(dialog)
     press(dialog, "QR label")
     assert page.launched == ["http://backend/labels.pdf"]

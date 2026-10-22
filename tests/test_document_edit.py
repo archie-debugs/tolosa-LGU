@@ -143,3 +143,22 @@ def test_edit_options_suggest_what_documents_already_use(client, document):
         "categories": ["Old Category"],
     }
     assert client.get("/documents/edit-options", headers=headers_for(client, "clerk")).status_code == 403
+
+
+def test_edit_sets_status_and_action_required(client, document):
+    assert (document["status"], document["action_required"]) == ("Approved", None)
+
+    response = edit(client, document, status="For information", action_required="For Agenda")
+
+    assert response.status_code == 200, response.text
+    assert (response.json()["status"], response.json()["action_required"]) == ("For information", "For Agenda")
+    assert edit(client, document, status="").status_code == 400
+
+
+def test_registration_records_the_action_required(client):
+    response = client.post("/documents/register", data={
+        "title": "Request letter", "series_year": "2026", "document_type": "Ordinance", "action_required": "Posting",
+    }, headers=headers_for(client))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["action_required"] == "Posting"

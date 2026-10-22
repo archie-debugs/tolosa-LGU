@@ -21,8 +21,16 @@ The transfer of a document's paper copy from one office to another, which the re
 _Avoid_: Transfer, routing, forwarding
 
 **Status**:
-A document's administrative state, such as Pending or Completed. It is separate from a measure's stage and from the office holding the document.
+A document's administrative state, such as For information, Approved, Completed or Posted. It is separate from a measure's stage and from the office holding the document.
 _Avoid_: Stage, state
+
+**Referred to**:
+The person or position a document is referred to, such as the SB Secretary or a council member. Stored as the document's `assigned_to`.
+_Avoid_: Assigned to, assignee
+
+**Action required**:
+What the SB has to do with a document: None, For Agenda, Approval or Posting.
+_Avoid_: Action (a recorded office action is a different thing)
 
 ## Legislation
 

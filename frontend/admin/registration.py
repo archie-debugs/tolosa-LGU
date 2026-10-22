@@ -12,6 +12,9 @@ from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due
 
 ALLOWED_EXTENSIONS = ("pdf", "doc", "docx")
 PRIORITIES = ("Low", "Medium", "High")
+# The choices the SB's tracking sheet uses.
+ACTIONS_REQUIRED = ("None", "For Agenda", "Approval", "Posting")
+STATUSES = ("For information", "Approved", "Completed", "Posted")
 OLDEST_YEAR = 1900
 FILED = "Filed"
 
@@ -282,7 +285,8 @@ class _Form:
         )
         self.priority = ft.Dropdown(data="Priority", options=[ft.dropdown.Option(name) for name in PRIORITIES], value="Medium", **style)
         self.due_date = ft.TextField(data="Due date", hint_text="YYYY-MM-DD", **{**style, "content_padding": ft.Padding(12, 12, 44, 12)})
-        self.assigned_to = ft.TextField(data="Assigned to", hint_text="Select or enter assignee...", **style)
+        self.assigned_to = ft.TextField(data="Referred to", hint_text="e.g. SB Secretary, Vice Mayor…", **style)
+        self.action_required = ft.Dropdown(data="Action required", options=[ft.dropdown.Option(name) for name in ACTIONS_REQUIRED], value="None", **style)
         self.author = ft.TextField(data="Author", hint_text="Enter author name...", **style)
         self.description = ft.TextField(data="Description", hint_text="What the document is about (optional)", multiline=True, min_lines=2, max_lines=3, **style)
         self.due_button = ft.IconButton(ft.Icons.CALENDAR_MONTH_OUTLINED, icon_size=18, icon_color=widgets.muted_color(), tooltip="Pick a date", on_click=lambda _: self.pick_due())
@@ -337,12 +341,13 @@ class _Form:
             "priority": self.priority.value or "Medium",
             "due_date": (self.due_date.value or "").strip() or None,
             "assigned_to": (self.assigned_to.value or "").strip() or None,
+            "action_required": self.action_required.value or None,
             "author": (self.author.value or "").strip() or None,
             "description": (self.description.value or "").strip() or None,
         }
 
     def lock(self, locked):
-        for control in (self.priority, self.due_date, self.due_button, self.assigned_to, self.author, self.description):
+        for control in (self.priority, self.due_date, self.due_button, self.assigned_to, self.action_required, self.author, self.description):
             control.disabled = locked
         self.document_type.lock(locked)
         self.category.lock(locked)
@@ -713,8 +718,9 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         _section(widgets, ft.Icons.ATTACH_FILE, "File", [_upload_box(widgets, file_name, file_hint, remove_file, choose_file)]),
         _section(widgets, ft.Icons.ADD_CIRCLE, "More details (optional)", [
             ft.ResponsiveRow([
-                _labelled(widgets, form.assigned_to, "Assigned to", ft.Icons.PERSON, col=half),
-                _labelled(widgets, form.author, "Author", ft.Icons.PERSON_OUTLINE, col=half),
+                _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON, col=third),
+                _labelled(widgets, form.action_required, "Action required", ft.Icons.TASK_ALT, col=third),
+                _labelled(widgets, form.author, "Author", ft.Icons.PERSON_OUTLINE, col=third),
             ], spacing=14, run_spacing=12),
             _labelled(widgets, form.description, "Description", ft.Icons.NOTES),
         ]),
@@ -1027,8 +1033,9 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=third),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
-                _labelled(widgets, form.assigned_to, "Assigned to", ft.Icons.PERSON_OUTLINE, col=half),
-                _labelled(widgets, form.author, "Author", ft.Icons.EDIT_OUTLINED, col=half),
+                _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON_OUTLINE, col=third),
+                _labelled(widgets, form.action_required, "Action required", ft.Icons.TASK_ALT, col=third),
+                _labelled(widgets, form.author, "Author", ft.Icons.EDIT_OUTLINED, col=third),
             ], spacing=14, run_spacing=12),
             widgets.hint("Employees register into their own office." if options["office_locked"] else "The office that holds the documents first."),
         ]),

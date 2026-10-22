@@ -187,3 +187,27 @@ def test_placeholder_dashes_from_the_details_screen_count_as_blank():
     press(dialog, "Save changes")
     payload = api.calls[-1][2]["json"]
     assert (payload["category"], payload["document_type"], payload["author"]) == (None, None, None)
+
+
+def test_status_and_action_required_are_chosen_and_saved():
+    api = FakeApi()
+    dialog = open_dialog(api)
+    assert field(dialog, "Referred To").value == ""
+    assert options(field(dialog, "Status")) == ["For information", "Approved", "Completed", "Posted"]
+    assert field(dialog, "Action Required").value is None
+
+    field(dialog, "Status").value = "Completed"
+    field(dialog, "Action Required").value = "For Agenda"
+    field(dialog, "Referred To").value = "Vice Mayor"
+    press(dialog, "Save changes")
+
+    payload = api.calls[-1][2]["json"]
+    assert (payload["status"], payload["action_required"], payload["assigned_to"]) == ("Completed", "For Agenda", "Vice Mayor")
+
+
+def test_a_status_outside_the_choices_is_kept():
+    dialog = ft.AlertDialog()
+    open_edit_document_dialog(DummyPage(), dialog, FakeApi(), {**DOCUMENT, "status": "Archived"})
+
+    assert field(dialog, "Status").value == "Archived"
+    assert "Archived" in options(field(dialog, "Status"))
