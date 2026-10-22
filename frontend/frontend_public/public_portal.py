@@ -6,6 +6,7 @@ import requests
 
 import flet as ft
 
+from frontend import theme
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
@@ -22,7 +23,7 @@ if hasattr(ft, "Alignment") and hasattr(ft, "alignment"):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-BUILDING_IMAGE = "sb_tolosa_homepage.jpg"
+BUILDING_IMAGE = theme.BUILDING_IMAGE
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 
 DOCUMENTS = [
@@ -120,28 +121,7 @@ def _option(label):
 
 
 def _brand() -> ft.Row:
-    return ft.Row(
-        [
-            ft.Container(
-                content=ft.Text("SB", size=18, weight=ft.FontWeight.W_800, color="#092f55"),
-                width=42,
-                height=42,
-                border_radius=21,
-                bgcolor="#f2eee4",
-                border=ft.border.all(2, "#d5b55d"),
-                alignment=ft.Alignment.CENTER,
-            ),
-            ft.Column(
-                [
-                    ft.Text("SANGGUNIAN BAYAN", size=11, weight=ft.FontWeight.W_700, color="#dce9f4"),
-                    ft.Text("OF TOLOSA", size=21, weight=ft.FontWeight.W_800, color="#ffffff"),
-                ],
-                spacing=0,
-            ),
-        ],
-        spacing=10,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-    )
+    return theme.brand(subtitle="Public Document Portal", on_blue=True)
 
 
 def _badge(label: str) -> ft.Container:
@@ -165,11 +145,11 @@ def _status() -> ft.Container:
 
 def _button(label: str, icon=None, outlined: bool = False):
     button_style = ft.ButtonStyle(
-        color="#24435d" if outlined else "#ffffff",
-        bgcolor=None if outlined else "#103f6d",
-        side=ft.BorderSide(1, "#c5d0d8") if outlined else None,
+        color=theme.PRIMARY if outlined else "#ffffff",
+        bgcolor=None if outlined else theme.PRIMARY,
+        side=ft.BorderSide(1, theme.BORDER) if outlined else None,
         padding=ft.Padding(18, 12, 18, 12),
-        shape=ft.RoundedRectangleBorder(radius=7),
+        shape=ft.RoundedRectangleBorder(radius=12),
     )
     if outlined:
         return ft.OutlinedButton(label, icon=icon, style=button_style)
@@ -177,11 +157,13 @@ def _button(label: str, icon=None, outlined: bool = False):
 
 
 def build_public_portal(page: ft.Page | None = None) -> ft.Column:
-    navy = "#103f6d"
-    ink = "#18344e"
-    muted = "#647887"
-    gold = "#d5ad50"
-    border = "#dce5ea"
+    # The login page's and admin workspace's colours (frontend/theme.py).
+    navy = theme.NAVY
+    ink = theme.INK
+    muted = theme.MUTED
+    gold = theme.ACCENT
+    border = theme.BORDER
+    card_shadow = ft.BoxShadow(blur_radius=10, offset=ft.Offset(0, 2), color=ft.Colors.with_opacity(0.08, ft.Colors.BLACK))
 
     def go_home(_=None):
         if page is None:
@@ -212,8 +194,8 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
             run_spacing=12,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        bgcolor=navy,
-        padding=ft.Padding(32, 16, 32, 16),
+        gradient=theme.blue_band_gradient(),
+        padding=ft.Padding(32, 14, 32, 14),
     )
 
     hero = ft.Container(
@@ -222,9 +204,9 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
                 ft.Container(
                     content=ft.Column(
                         [
-                            ft.Text("SANGGUNIAN BAYAN OF TOLOSA", size=12, weight=ft.FontWeight.W_700, color=navy),
-                            ft.Text("Public Document Portal", size=38, weight=ft.FontWeight.W_800, color=ink),
-                            ft.Container(width=68, height=4, bgcolor=gold),
+                            ft.Text("SANGGUNIANG BAYAN OF TOLOSA", size=12, weight=ft.FontWeight.W_700, color=theme.PRIMARY, style=ft.TextStyle(letter_spacing=2)),
+                            ft.Text("Public Document Portal", size=38, weight=ft.FontWeight.W_800, color=navy),
+                            theme.accent_bar(68),
                             ft.Text("Search and view legislative documents made available to the public by the Sangguniang Bayan of Tolosa.", size=16, color=muted, max_lines=3),
                         ],
                         spacing=14,
@@ -232,7 +214,17 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
                     col={"xs": 12, "md": 6},
                     padding=ft.Padding(8, 12, 24, 12),
                 ),
-                ft.Container(content=ft.Image(src=BUILDING_IMAGE, fit=ft.ImageFit.COVER), height=220, border_radius=10, clip_behavior=ft.ClipBehavior.HARD_EDGE, col={"xs": 12, "md": 6}),
+                ft.Container(
+                    content=ft.Stack([
+                        ft.Image(src=BUILDING_IMAGE, fit=ft.ImageFit.COVER, expand=True),
+                        # The login page's blue wash over the town hall.
+                        ft.Container(expand=True, gradient=ft.LinearGradient(
+                            begin=ft.Alignment(0, -1), end=ft.Alignment(0, 1),
+                            colors=[ft.Colors.with_opacity(0.15, "#044184"), ft.Colors.with_opacity(0.55, "#03346f")],
+                        )),
+                    ], expand=True),
+                    height=220, border_radius=18, clip_behavior=ft.ClipBehavior.ANTI_ALIAS, shadow=card_shadow, col={"xs": 12, "md": 6},
+                ),
             ],
             spacing=26,
             run_spacing=18,
@@ -247,9 +239,9 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
                 ft.Text("Search Documents", size=20, weight=ft.FontWeight.W_700, color=ink),
                 ft.ResponsiveRow(
                     [
-                        ft.Container(content=ft.Column([ft.Text("Search by ID, document number, year, or title", size=12, color=muted), ft.TextField(hint_text="Enter search terms...", prefix_icon=ft.Icons.SEARCH, border_color="#c9d5dd", bgcolor="#ffffff")], spacing=6), col={"xs": 12, "md": 5}),
-                        ft.Container(content=ft.Column([ft.Text("Document Type", size=12, color=muted), ft.Dropdown(value="All Types", options=[_option("All Types"), _option("Ordinance"), _option("Resolution")], border_color="#c9d5dd", bgcolor="#ffffff")], spacing=6), col={"xs": 12, "sm": 6, "md": 2}),
-                        ft.Container(content=ft.Column([ft.Text("Year", size=12, color=muted), ft.Dropdown(value="All Years", options=[_option("All Years"), _option("2026"), _option("2025")], border_color="#c9d5dd", bgcolor="#ffffff")], spacing=6), col={"xs": 12, "sm": 6, "md": 2}),
+                        ft.Container(content=ft.Column([ft.Text("Search by ID, document number, year, or title", size=12, color=muted), ft.TextField(hint_text="Enter search terms...", prefix_icon=ft.Icons.SEARCH, border_color=border, border_radius=12, bgcolor="#ffffff")], spacing=6), col={"xs": 12, "md": 5}),
+                        ft.Container(content=ft.Column([ft.Text("Document Type", size=12, color=muted), ft.Dropdown(value="All Types", options=[_option("All Types"), _option("Ordinance"), _option("Resolution")], border_color=border, border_radius=12, bgcolor="#ffffff")], spacing=6), col={"xs": 12, "sm": 6, "md": 2}),
+                        ft.Container(content=ft.Column([ft.Text("Year", size=12, color=muted), ft.Dropdown(value="All Years", options=[_option("All Years"), _option("2026"), _option("2025")], border_color=border, border_radius=12, bgcolor="#ffffff")], spacing=6), col={"xs": 12, "sm": 6, "md": 2}),
                         ft.Container(content=ft.Row([_button("Search", ft.Icons.SEARCH), _button("Clear Filters", ft.Icons.REFRESH, outlined=True)], spacing=8, wrap=True), col={"xs": 12, "md": 3}, padding=ft.Padding(0, 24, 0, 0)),
                     ],
                     spacing=14,
@@ -260,7 +252,8 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
         ),
         bgcolor="#ffffff",
         border=ft.border.all(1, border),
-        border_radius=10,
+        border_radius=18,
+        shadow=card_shadow,
         padding=ft.Padding(22, 18, 22, 20),
     )
 
@@ -375,7 +368,8 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
         ),
         bgcolor="#ffffff",
         border=ft.border.all(1, border),
-        border_radius=10,
+        border_radius=18,
+        shadow=card_shadow,
         padding=ft.Padding(22, 18, 22, 16),
     )
 
@@ -383,14 +377,14 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
         content=ft.ResponsiveRow(
             [
                 ft.Container(content=_brand(), col={"xs": 12, "md": 5}),
-                ft.Container(content=ft.Column([ft.Text("Official Public Portal", size=14, weight=ft.FontWeight.W_700, color="#ffffff"), ft.Text("Sangguniang Bayan of Tolosa", size=13, color="#d6e4ef"), ft.Text("Tolosa, Leyte, Philippines", size=13, color="#d6e4ef")], spacing=4), col={"xs": 12, "md": 4}),
-                ft.Container(content=ft.Text("© 2026", size=13, color="#d6e4ef"), col={"xs": 12, "md": 3}),
+                ft.Container(content=ft.Column([ft.Text("Official Public Portal", size=14, weight=ft.FontWeight.W_700, color=theme.ON_BLUE), ft.Text("Sangguniang Bayan of Tolosa", size=13, color=theme.ON_BLUE_MUTED), ft.Text("Tolosa, Leyte, Philippines", size=13, color=theme.ON_BLUE_MUTED)], spacing=4), col={"xs": 12, "md": 4}),
+                ft.Container(content=ft.Text("© 2026", size=13, color=theme.ON_BLUE_MUTED), col={"xs": 12, "md": 3}),
             ],
             spacing=18,
             run_spacing=16,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        bgcolor="#092f55",
+        gradient=theme.blue_band_gradient(),
         padding=ft.Padding(32, 24, 32, 24),
     )
 
@@ -399,7 +393,7 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
             header,
             ft.Container(
                 content=ft.Column([hero, search_card, table_card], spacing=20),
-                bgcolor="#f1f5f7",
+                bgcolor=theme.CANVAS,
                 padding=ft.Padding(24, 20, 24, 30),
             ),
             footer,

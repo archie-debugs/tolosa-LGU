@@ -130,8 +130,8 @@ class AppPage(DummyPage):
 
 
 def on_login_screen(page):
-    labels = [getattr(c, "label", None) for control in page.controls for c in walk(control) if isinstance(c, ft.TextField)]
-    return "Username" in labels and "Password" in labels
+    hints = [getattr(c, "hint_text", None) for control in page.controls for c in walk(control) if isinstance(c, ft.TextField)]
+    return "Enter your username" in hints and "Enter your password" in hints
 
 
 def sidebar_tile(page, label):
@@ -193,4 +193,4 @@ def test_a_revoked_sb_member_is_sent_back_to_the_homepage(monkeypatch):
 
     shown = [t for control in page.controls for t in texts(control)]
     assert "Member Workspace" not in shown
-    assert "SANGGUNIAN BAYAN" in shown
+    assert "SANGGUNIANG BAYAN" in shown

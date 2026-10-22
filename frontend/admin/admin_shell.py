@@ -51,8 +51,11 @@ def render_shell(
     initial_selected_index: int = 0,
     account=None,
     notifications=None,
+    panel_title="Admin Panel",
 ):
     """Draw the sidebar, the profile bar and `content_view`.
+
+    `panel_title` is the line under "SB Tolosa" in the sidebar header.
 
     `account` describes the signed-in user for the profile menu:
     {"name", "role", "office", "on_change_password"}; missing keys fall back to `current_user`.
@@ -358,7 +361,7 @@ def render_shell(
                         ft.Column(
                             [
                                 ft.Text("SB Tolosa", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                                ft.Text("Admin Panel", size=13, color=ft.Colors.with_opacity(0.85, ft.Colors.WHITE)),
+                                ft.Text(panel_title, size=13, color=ft.Colors.with_opacity(0.85, ft.Colors.WHITE)),
                             ],
                             spacing=0,
                             tight=True,

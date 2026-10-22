@@ -20,6 +20,9 @@ if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
 if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
     ft.Icons = ft.icons
 
+from frontend.admin.admin_shell import MENU_SECTION, render_shell
+from frontend.theme import CANVAS, PRIMARY
+
 API_URL = os.getenv("SBMEM_BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
 # How often Today's Documents re-checks for documents employees set while it is open.
 TODAYS_DOCUMENTS_REFRESH_SECONDS = int(os.getenv("TODAYS_DOCUMENTS_REFRESH_SECONDS", "30"))
@@ -29,19 +32,17 @@ MAIN_BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 def main(page: ft.Page, session=None):
     page.title = "SB Tolosa | Member Workspace"
     page.padding = 0
-    page.bgcolor = ft.Colors.GREY_50
-    page.theme_mode = ft.ThemeMode.LIGHT
+    page.bgcolor = CANVAS
     token = None
     user = None
     permissions = set()
-    dark = False
     current_page = "Today's Documents"
-    content = ft.Container(expand=True)
     # Bumped on every render, so a refresh loop stops once its view is no longer shown.
     render_generation = 0
 
     def color(name, light, night):
-        return night if dark else light
+        # The shell's Night mode sets the page theme before it rebuilds the screen.
+        return night if page.theme_mode == ft.ThemeMode.DARK else light
 
     def api(method, path, **kwargs):
         headers = kwargs.pop("headers", {})
@@ -83,18 +84,33 @@ def main(page: ft.Page, session=None):
         )
 
     def card(control, padding=18):
+        # The admin workspace's surface_card.
         return ft.Container(
             content=control,
-            bgcolor=color("surface", ft.Colors.WHITE, "#17232b"),
-            border=ft.border.all(1, color("border", "#e2e8f0", "#2d414d")),
-            border_radius=10,
+            bgcolor=color("surface", ft.Colors.WHITE, ft.Colors.GREY_900),
+            border=ft.border.all(1, color("border", ft.Colors.BLUE_GREY_100, ft.Colors.BLUE_GREY_700)),
+            border_radius=18,
             padding=padding,
+            shadow=ft.BoxShadow(blur_radius=10, offset=ft.Offset(0, 2), color=ft.Colors.with_opacity(color("shadow", 0.08, 0.24), ft.Colors.BLACK)),
         )
+
+    def page_header(title, subtitle, icon, trailing=None):
+        # The admin workspace's section_header: an icon badge beside the title.
+        row = [
+            ft.Container(content=ft.Icon(icon, color=PRIMARY, size=24), padding=10, bgcolor=ft.Colors.with_opacity(0.12, PRIMARY), border_radius=14),
+            ft.Column([
+                ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                ft.Text(subtitle, size=13, color=ft.Colors.BLUE_GREY_600),
+            ], spacing=2, expand=True),
+        ]
+        if trailing is not None:
+            row.append(trailing)
+        return card(ft.Row(row, spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.padding.symmetric(horizontal=20, vertical=16))
 
     def stat_card(label, value, icon, accent):
         return card(ft.Row([
-            ft.Container(content=ft.Icon(icon, color=accent, size=22), bgcolor=f"{accent}18", border_radius=8, padding=10),
-            ft.Column([ft.Text(label, size=11, color=color("muted", "#64748b", "#9fb1bd")), ft.Text(str(value), size=23, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9"))], spacing=2),
+            ft.Container(content=ft.Icon(icon, color=accent, size=22), bgcolor=ft.Colors.with_opacity(0.12, accent), border_radius=14, padding=10),
+            ft.Column([ft.Text(label, size=11, color=ft.Colors.BLUE_GREY_600), ft.Text(str(value), size=23, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900)], spacing=2),
         ], spacing=12), padding=14)
 
     def can(permission):
@@ -116,9 +132,9 @@ def main(page: ft.Page, session=None):
             actions = []
             if can("download_documents"):
                 actions.append(ft.OutlinedButton("Download", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=lambda _, d=document, a=attachment: download_document(d, a)))
-            attachment_controls.append(ft.Row([ft.Icon(ft.Icons.INSERT_DRIVE_FILE_OUTLINED, size=18, color="#2563eb"), ft.Text(attachment["filename"], expand=True), *actions], spacing=8))
+            attachment_controls.append(ft.Row([ft.Icon(ft.Icons.INSERT_DRIVE_FILE_OUTLINED, size=18, color=PRIMARY), ft.Text(attachment["filename"], expand=True), *actions], spacing=8))
         if not attachment_controls:
-            attachment_controls = [ft.Text("No attached file", size=12, color="#64748b")]
+            attachment_controls = [ft.Text("No attached file", size=12, color=ft.Colors.BLUE_GREY_600)]
         info = [
             ("System ID", document.get("tracking_number")),
             ("Document Number", document.get("document_number")),
@@ -128,7 +144,7 @@ def main(page: ft.Page, session=None):
             ("Originating Office", document.get("originating_office")),
             ("Status", document.get("status")),
         ]
-        rows = [ft.Row([ft.Text(label, width=145, size=12, weight=ft.FontWeight.W_600, color="#64748b"), ft.Text(value or "Not available", size=12, expand=True)], spacing=8) for label, value in info]
+        rows = [ft.Row([ft.Text(label, width=145, size=12, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_600), ft.Text(value or "Not available", size=12, expand=True)], spacing=8) for label, value in info]
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text(document.get("title", "Document"), weight=ft.FontWeight.BOLD),
@@ -146,20 +162,20 @@ def main(page: ft.Page, session=None):
 
     def documents_view():
         if not can("view_documents"):
-            return card(ft.Column([ft.Icon(ft.Icons.LOCK_OUTLINE, size=32, color="#64748b"), ft.Text("Documents are unavailable for this account.", size=14)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10))
+            return card(ft.Column([ft.Icon(ft.Icons.LOCK_OUTLINE, size=32, color=ft.Colors.BLUE_GREY_600), ft.Text("Documents are unavailable for this account.", size=14)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10))
 
         page_size = 10
         current_page_number = 1
         all_items = []
         total_items = 0
         total_page_count = 1
-        search = ft.TextField(hint_text="Search documents by title or number...", prefix_icon=ft.Icons.SEARCH, width=330, height=44, content_padding=ft.padding.symmetric(horizontal=12, vertical=4), disabled=not can("search_documents"), border_color="#dbe4ef", focused_border_color="#2563eb", bgcolor="#ffffff")
-        type_filter = ft.Dropdown(label="Document Type", width=195, height=44, options=[ft.dropdown.Option("All Types"), ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution")], value="All Types", content_padding=ft.padding.symmetric(horizontal=12, vertical=4), border_color="#dbe4ef", focused_border_color="#2563eb", bgcolor="#ffffff")
-        year_filter = ft.Dropdown(label="Year", width=195, height=44, options=[ft.dropdown.Option("All Years")], value="All Years", content_padding=ft.padding.symmetric(horizontal=12, vertical=4), border_color="#dbe4ef", focused_border_color="#2563eb", bgcolor="#ffffff")
-        status_value = ft.Text("Current / Active", size=12, color="#0f766e", weight=ft.FontWeight.W_600)
-        count_text = ft.Text(size=16, color="#0f2742", weight=ft.FontWeight.BOLD)
-        range_text = ft.Text(size=12, color="#64748b")
-        table_holder = ft.Column(controls=[ft.Container(ft.Row([ft.ProgressRing(width=20, height=20), ft.Text("Loading documents...", size=12, color="#64748b")], alignment=ft.MainAxisAlignment.CENTER), padding=28)], spacing=0, height=430, scroll=ft.ScrollMode.AUTO)
+        field_style = dict(height=44, content_padding=ft.padding.symmetric(horizontal=12, vertical=4), border_color=ft.Colors.BLUE_GREY_100, focused_border_color=PRIMARY, border_radius=12, bgcolor=ft.Colors.WHITE)
+        search = ft.TextField(hint_text="Search documents by title or number...", prefix_icon=ft.Icons.SEARCH, width=330, disabled=not can("search_documents"), **field_style)
+        type_filter = ft.Dropdown(label="Document Type", width=195, options=[ft.dropdown.Option("All Types"), ft.dropdown.Option("Ordinance"), ft.dropdown.Option("Resolution")], value="All Types", **field_style)
+        year_filter = ft.Dropdown(label="Year", width=195, options=[ft.dropdown.Option("All Years")], value="All Years", **field_style)
+        count_text = ft.Text(size=14, color=PRIMARY, weight=ft.FontWeight.BOLD)
+        range_text = ft.Text(size=12, color=ft.Colors.BLUE_GREY_600)
+        table_holder = ft.Column(controls=[ft.Container(ft.Row([ft.ProgressRing(width=20, height=20), ft.Text("Loading documents...", size=12, color=ft.Colors.BLUE_GREY_600)], alignment=ft.MainAxisAlignment.CENTER), padding=28)], spacing=0, height=430, scroll=ft.ScrollMode.AUTO)
         pagination_nav = ft.Row(spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         pagination_holder = ft.Container(
             content=ft.Row(
@@ -183,21 +199,21 @@ def main(page: ft.Page, session=None):
                 table_holder.controls = [ft.Container(ft.Column([
                     ft.Icon(ft.Icons.SEARCH_OFF, size=28, color="#94a3b8"),
                     ft.Text("No documents found", weight=ft.FontWeight.BOLD),
-                    ft.Text("Try adjusting your search or filters.", size=12, color="#64748b"),
+                    ft.Text("Try adjusting your search or filters.", size=12, color=ft.Colors.BLUE_GREY_600),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6), padding=30, alignment=ft.alignment.center)]
             else:
                 rows = []
                 for document in visible_items:
-                    actions = [ft.IconButton(ft.Icons.VISIBILITY_OUTLINED, tooltip="View document", icon_color="#2563eb", on_click=lambda _, d=document: document_dialog(d))]
+                    actions = [ft.IconButton(ft.Icons.VISIBILITY_OUTLINED, tooltip="View document", icon_color=PRIMARY, on_click=lambda _, d=document: document_dialog(d))]
                     if can("download_documents") and document.get("attachments"):
-                        actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color="#64748b", on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
+                        actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color=ft.Colors.BLUE_GREY_600, on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
                     rows.append(ft.DataRow(cells=[
                         ft.DataCell(ft.Column([
                             ft.Text(document.get("document_number") or "-", size=12, weight=ft.FontWeight.W_600),
                             ft.Text(
                                 f"{document.get('tracking_number') or '-'} / Series {document.get('series_year') or '-'}",
                                 size=10,
-                                color="#64748b",
+                                color=ft.Colors.BLUE_GREY_600,
                             ),
                         ], spacing=2)),
                         ft.DataCell(ft.Text(document.get("title") or "-", size=12, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)),
@@ -212,7 +228,7 @@ def main(page: ft.Page, session=None):
                     column_spacing=32,
                         heading_row_height=46,
                         data_row_min_height=52,
-                    heading_row_color="#f4f7fb",
+                    heading_row_color=color("table_heading", "#eef4fc", "#1b2a36"),
                         horizontal_lines=ft.BorderSide(1, "#e5edf6"),
                         divider_thickness=0,
                 )]
@@ -225,10 +241,10 @@ def main(page: ft.Page, session=None):
                 for number in range(start_page, end_page + 1):
                     selected = number == current_page_number
                     pagination_nav.controls.append(ft.Container(
-                        content=ft.TextButton(str(number), on_click=lambda _, n=number: go_to_page(n), style=ft.ButtonStyle(color="#ffffff" if selected else "#64748b", padding=ft.padding.all(0))),
+                        content=ft.TextButton(str(number), on_click=lambda _, n=number: go_to_page(n), style=ft.ButtonStyle(color="#ffffff" if selected else ft.Colors.BLUE_GREY_600, padding=ft.padding.all(0))),
                         width=38,
                         height=38,
-                        bgcolor="#155eef" if selected else None,
+                        bgcolor=PRIMARY if selected else None,
                         border_radius=6,
                         alignment=ft.alignment.center,
                     ))
@@ -252,14 +268,14 @@ def main(page: ft.Page, session=None):
             "Clear Filters",
             icon=ft.Icons.REFRESH,
             on_click=clear_filters,
-            style=ft.ButtonStyle(color="#2563eb", padding=ft.padding.symmetric(horizontal=4, vertical=1)),
+            style=ft.ButtonStyle(color=PRIMARY, padding=ft.padding.symmetric(horizontal=4, vertical=1)),
         )
 
         def load(_=None, update_page=True, reset_page=False):
             nonlocal all_items, current_page_number, total_items, total_page_count
             if reset_page:
                 current_page_number = 1
-            table_holder.controls = [ft.Container(ft.Row([ft.ProgressRing(width=22, height=22), ft.Text("Loading documents...", size=12, color="#64748b")], alignment=ft.MainAxisAlignment.CENTER), padding=30)]
+            table_holder.controls = [ft.Container(ft.Row([ft.ProgressRing(width=22, height=22), ft.Text("Loading documents...", size=12, color=ft.Colors.BLUE_GREY_600)], alignment=ft.MainAxisAlignment.CENTER), padding=30)]
             try:
                 query = {}
                 if search.value and can("search_documents"):
@@ -280,7 +296,7 @@ def main(page: ft.Page, session=None):
                 render_page()
             except Exception as exc:
                 print(f"SB Member documents load error: {exc!r}")
-                table_holder.controls = [card(ft.Column([ft.Text("Unable to load documents.", weight=ft.FontWeight.BOLD), ft.Text("Please try again.", size=12, color="#64748b"), ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=load)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8), padding=24)]
+                table_holder.controls = [card(ft.Column([ft.Text("Unable to load documents.", weight=ft.FontWeight.BOLD), ft.Text("Please try again.", size=12, color=ft.Colors.BLUE_GREY_600), ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=load)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8), padding=24)]
             if update_page:
                 page.update()
 
@@ -289,44 +305,20 @@ def main(page: ft.Page, session=None):
             ft.Container(search, width=330),
             type_filter,
             year_filter,
-            ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=lambda event: load(event, reset_page=True), width=120, height=40, style=ft.ButtonStyle(bgcolor="#155eef", color=ft.Colors.WHITE, padding=ft.padding.symmetric(horizontal=12), shape=ft.RoundedRectangleBorder(radius=7))),
+            ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=lambda event: load(event, reset_page=True), width=120, height=44, style=ft.ButtonStyle(bgcolor=PRIMARY, color=ft.Colors.WHITE, padding=ft.padding.symmetric(horizontal=12), shape=ft.RoundedRectangleBorder(radius=12))),
             clear_filters_button,
         ], spacing=12, run_spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-        filters = ft.Container(content=ft.Column([
-            filter_row,
-        ], spacing=8), bgcolor="#ffffff", border=ft.border.all(1, "#e2e8f0"), border_radius=10, padding=ft.padding.symmetric(horizontal=18, vertical=14))
-        count_card = ft.Container(
-            content=ft.Row([
-                ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color="#2563eb", size=19),
-                ft.Column([count_text], spacing=0),
-            ], spacing=10),
-            bgcolor="#ffffff",
-            border_radius=8,
-            padding=ft.padding.symmetric(horizontal=13, vertical=7),
-        )
-        header = ft.Container(
-            content=ft.Row([
-                ft.Column([
-                    ft.Text("Documents", size=25, weight=ft.FontWeight.BOLD, color="#0f2742"),
-                    ft.Text("Browse legislative documents available to you.", size=12, color="#64748b"),
-                ], spacing=3),
-                count_card,
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            bgcolor="#ffffff",
-            border=ft.border.all(1, "#e2e8f0"),
-            border_radius=10,
-            padding=ft.padding.symmetric(horizontal=16, vertical=11),
-        )
+        filters = card(filter_row, padding=ft.padding.symmetric(horizontal=18, vertical=14))
+        header = page_header("Documents", "Browse legislative documents available to you.", ft.Icons.FOLDER_OPEN_OUTLINED, trailing=count_text)
         view = ft.Column([header, filters, card(table_holder, padding=0), pagination_holder], spacing=12, tight=True)
         load(update_page=False)
         return view
 
     def todays_documents_view():
         if not can("view_documents"):
-            return card(ft.Column([ft.Icon(ft.Icons.LOCK_OUTLINE, size=32, color="#64748b"), ft.Text("Documents are unavailable for this account.", size=14)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10))
+            return card(ft.Column([ft.Icon(ft.Icons.LOCK_OUTLINE, size=32, color=ft.Colors.BLUE_GREY_600), ft.Text("Documents are unavailable for this account.", size=14)], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10))
 
-        heading = ft.Text("Today's Documents", size=25, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9"))
-        date_line = ft.Text(size=12, color="#64748b")
+        date_line = ft.Text(size=13, weight=ft.FontWeight.W_600, color=PRIMARY)
         list_holder = ft.Column(spacing=10)
         updated_line = ft.Text(size=11, color="#94a3b8")
         last_ids = None
@@ -334,15 +326,15 @@ def main(page: ft.Page, session=None):
         def document_row(index, document):
             actions = [ft.OutlinedButton("Open", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=document: document_dialog(d))]
             if can("download_documents") and document.get("attachments"):
-                actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color="#64748b", on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
+                actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color=ft.Colors.BLUE_GREY_600, on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
             details = [
-                ft.Text(document.get("title") or "Untitled", size=14, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9")),
-                ft.Text(f"{document.get('document_type') or 'Document'} · No. {document.get('document_number') or '-'} / {document.get('series_year') or '-'} · {document.get('tracking_number') or '-'}", size=11, color="#64748b"),
+                ft.Text(document.get("title") or "Untitled", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
+                ft.Text(f"{document.get('document_type') or 'Document'} · No. {document.get('document_number') or '-'} / {document.get('series_year') or '-'} · {document.get('tracking_number') or '-'}", size=11, color=ft.Colors.BLUE_GREY_600),
             ]
             if document.get("note"):
                 details.append(ft.Text(document["note"], size=12, italic=True, color="#1d4ed8"))
             return card(ft.Row([
-                ft.Container(ft.Text(str(index), size=14, weight=ft.FontWeight.BOLD, color="#ffffff"), bgcolor="#2563eb", border_radius=16, width=32, height=32, alignment=ft.alignment.center),
+                ft.Container(ft.Text(str(index), size=14, weight=ft.FontWeight.BOLD, color="#ffffff"), bgcolor=PRIMARY, border_radius=16, width=32, height=32, alignment=ft.alignment.center),
                 ft.Column(details, spacing=3, expand=True),
                 ft.Row(actions, spacing=4, tight=True),
             ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER), padding=14)
@@ -365,7 +357,7 @@ def main(page: ft.Page, session=None):
                     list_holder.controls = [card(ft.Column([
                         ft.Icon(ft.Icons.EVENT_AVAILABLE_OUTLINED, size=30, color="#94a3b8"),
                         ft.Text("No documents have been set for today yet.", weight=ft.FontWeight.BOLD),
-                        ft.Text("They appear here as soon as they are set. You can still search all documents.", size=12, color="#64748b"),
+                        ft.Text("They appear here as soon as they are set. You can still search all documents.", size=12, color=ft.Colors.BLUE_GREY_600),
                         ft.TextButton("Search documents", icon=ft.Icons.SEARCH, on_click=lambda _: navigate("Documents")),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6), padding=24)]
             updated_line.value = f"Updated {datetime.now().strftime('%I:%M %p').lstrip('0')} · refreshes automatically"
@@ -384,11 +376,12 @@ def main(page: ft.Page, session=None):
         load()
         threading.Thread(target=refresh_loop, args=(render_generation,), daemon=True).start()
         return ft.Column([
-            ft.Row([
-                ft.Column([heading, date_line], spacing=3),
-                ft.IconButton(ft.Icons.REFRESH, tooltip="Refresh now", on_click=lambda _: (load(), page.update())),
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            ft.Text("Documents set for you for today. Past documents remain searchable under Documents.", size=12, color="#64748b"),
+            page_header(
+                "Today's Documents",
+                "Documents set for you for today. Past documents remain searchable under Documents.",
+                ft.Icons.EVENT_NOTE_OUTLINED,
+                trailing=ft.Row([date_line, ft.IconButton(ft.Icons.REFRESH, tooltip="Refresh now", icon_color=PRIMARY, on_click=lambda _: (load(), page.update()))], spacing=4, tight=True),
+            ),
             list_holder,
             updated_line,
         ], spacing=10, tight=True)
@@ -399,11 +392,11 @@ def main(page: ft.Page, session=None):
         except Exception as exc:
             return card(ft.Text(str(exc)))
         recent = data.get("recent_documents", [])
-        recent_rows = [ft.ListTile(leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color="#2563eb"), title=ft.Text(item.get("title") or "Untitled", size=12), subtitle=ft.Text(f"{item.get('tracking_number', '-') } · No. {item.get('document_number') or '-'} / {item.get('series_year') or '-'} · {format_date(item.get('date'))}", size=11, color="#64748b"), on_click=lambda _, d=item: document_dialog(d)) for item in recent]
+        recent_rows = [ft.ListTile(leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=PRIMARY), title=ft.Text(item.get("title") or "Untitled", size=12), subtitle=ft.Text(f"{item.get('tracking_number', '-') } · No. {item.get('document_number') or '-'} / {item.get('series_year') or '-'} · {format_date(item.get('date'))}", size=11, color=ft.Colors.BLUE_GREY_600), on_click=lambda _, d=item: document_dialog(d)) for item in recent]
         return ft.Column([
-            ft.Row([ft.Column([ft.Text("Good day, " + (user.get("full_name") or user.get("username", "Member")), size=25, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9")), ft.Text("Your legislative document workspace", size=12, color="#64748b")], spacing=3)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            ft.Row([stat_card("Available Documents", data.get("total_documents", 0), ft.Icons.FOLDER_COPY_OUTLINED, "#2563eb")], spacing=12, wrap=True),
-            card(ft.Column([ft.Row([ft.Text("Recently Added", size=15, weight=ft.FontWeight.BOLD), ft.TextButton("View all", on_click=lambda _: navigate("Documents"))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Divider(height=1), *(recent_rows or [ft.Text("No recent documents.", size=12, color="#64748b")])], spacing=3)),
+            page_header("Good day, " + (user.get("full_name") or user.get("username", "Member")), "Your legislative document workspace", ft.Icons.DASHBOARD_OUTLINED),
+            ft.Row([stat_card("Available Documents", data.get("total_documents", 0), ft.Icons.FOLDER_COPY_OUTLINED, PRIMARY)], spacing=12, wrap=True),
+            card(ft.Column([ft.Row([ft.Text("Recently Added", size=15, weight=ft.FontWeight.BOLD), ft.TextButton("View all", on_click=lambda _: navigate("Documents"))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Divider(height=1), *(recent_rows or [ft.Text("No recent documents.", size=12, color=ft.Colors.BLUE_GREY_600)])], spacing=3)),
             ft.Row([ft.FilledButton("View Documents", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: navigate("Documents")), ft.OutlinedButton("Search Documents", icon=ft.Icons.SEARCH, on_click=lambda _: navigate("Documents"))], spacing=10),
         ], spacing=16, tight=True)
 
@@ -418,35 +411,24 @@ def main(page: ft.Page, session=None):
             ("Account Created", format_date(user.get("created_at"))),
         ]:
             profile_rows.append(ft.Row([
-                ft.Text(label, width=140, size=12, color="#64748b"),
+                ft.Text(label, width=140, size=12, color=ft.Colors.BLUE_GREY_600),
                 ft.Text(value or "Not available", size=12, weight=ft.FontWeight.W_500),
             ]))
         profile_card = card(ft.Column([
             ft.Row([
-                ft.CircleAvatar(content=ft.Text((user.get("full_name") or "M")[0].upper(), size=24, color="white"), bgcolor="#2563eb", radius=30),
+                ft.CircleAvatar(content=ft.Text((user.get("full_name") or "M")[0].upper(), size=24, color="white"), bgcolor=PRIMARY, radius=30),
                 ft.Column([
                     ft.Text(user.get("full_name") or user.get("username"), size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("SB Member", size=12, color="#2563eb"),
+                    ft.Text("SB Member", size=12, color=PRIMARY),
                 ], spacing=3),
             ], spacing=14),
             ft.Divider(),
             *profile_rows,
         ], spacing=13))
         return ft.Column([
-            ft.Text("My Account", size=25, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9")),
-            ft.Text("Your account information", size=12, color="#64748b"),
+            page_header("My Account", "Your account information", ft.Icons.ACCOUNT_CIRCLE_OUTLINED),
             profile_card,
         ], spacing=12, tight=True)
-
-    def settings_view():
-        night = ft.Switch(label="Night mode", value=dark, on_change=toggle_theme)
-        return ft.Column([ft.Text("Settings", size=25, weight=ft.FontWeight.BOLD, color=color("heading", "#0f2742", "#f1f5f9")), ft.Text("Personalize your workspace.", size=12, color="#64748b"), card(ft.Column([ft.Text("Appearance", size=16, weight=ft.FontWeight.BOLD), ft.Text("Choose how the workspace looks on this device.", size=12, color="#64748b"), night], spacing=12))], spacing=12, tight=True)
-
-    def toggle_theme(event):
-        nonlocal dark
-        dark = bool(event.control.value)
-        page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
-        render()
 
     def navigate(label):
         nonlocal current_page
@@ -456,6 +438,11 @@ def main(page: ft.Page, session=None):
     def logout(_=None):
         nonlocal token, user, permissions
         token, user, permissions = None, None, set()
+        # The shell redraws itself when the window is resized; the homepage must not be replaced by it.
+        if hasattr(type(page), "on_resized"):
+            page.on_resized = None
+        else:
+            page.on_resize = None
         try:
             for key in ("sb_access_token", "sb_refresh_token", "sb_current_user", "sb_current_user_role", "sb_current_user_permissions"):
                 page.client_storage.remove(key)
@@ -466,37 +453,36 @@ def main(page: ft.Page, session=None):
         page.add(build_homepage_view(page))
         page.update()
 
+    def screen(label, build):
+        # The shell builds a screen each time its sidebar entry is opened.
+        def show():
+            nonlocal current_page, render_generation
+            current_page = label
+            render_generation += 1
+            return build()
+        return show
+
     def render():
-        nonlocal render_generation
-        render_generation += 1
-        page.bgcolor = color("bg", "#f8fafc", "#0d171d")
-        workspace_items = []
+        # The admin workspace's shell: same sidebar, profile menu (My account, Night mode, Log out) and drawer.
+        nav_items = []
         if can("view_documents"):
-            workspace_items = [
-                (ft.Icons.EVENT_NOTE_OUTLINED, "Today's Documents"),
-                (ft.Icons.DASHBOARD_OUTLINED, "Dashboard"),
-                (ft.Icons.FOLDER_OPEN_OUTLINED, "Documents"),
+            nav_items = [
+                (ft.Icons.EVENT_NOTE_OUTLINED, "Today's Documents", screen("Today's Documents", todays_documents_view), "Workspace"),
+                (ft.Icons.DASHBOARD_OUTLINED, "Dashboard", screen("Dashboard", dashboard_view), "Workspace"),
+                (ft.Icons.FOLDER_OPEN_OUTLINED, "Documents", screen("Documents", documents_view), "Workspace"),
             ]
-        sections = [("Workspace", workspace_items), ("Personal", [(ft.Icons.ACCOUNT_CIRCLE_OUTLINED, "My Account"), (ft.Icons.SETTINGS_OUTLINED, "Settings")])]
-        nav = []
-        for group, items in sections:
-            nav.append(ft.Text(group.upper(), size=10, weight=ft.FontWeight.BOLD, color="#93c5fd"))
-            for icon, label in items:
-                is_selected = current_page == label
-                nav.append(ft.Container(content=ft.Row([ft.Icon(icon, size=18, color="#ffffff" if is_selected else "#93c5fd"), ft.Text(label, size=12, color="#ffffff" if is_selected else "#dbeafe")], spacing=12), bgcolor="#0754c7" if is_selected and not dark else ("#193d55" if is_selected else None), border_radius=7, padding=ft.padding.symmetric(horizontal=12, vertical=10), on_click=lambda _, item=label: navigate(item)))
-        nav.append(ft.Container(expand=True))
-        nav.append(ft.Container(content=ft.Row([ft.Icon(ft.Icons.LOGOUT, size=18, color="#dc2626"), ft.Text("Log Out", size=12, color="#dc2626")], spacing=12), padding=ft.padding.symmetric(horizontal=12, vertical=10), on_click=logout))
-        if current_page == "Today's Documents": body = todays_documents_view()
-        elif current_page == "Dashboard": body = dashboard_view()
-        elif current_page == "Documents": body = documents_view()
-        elif current_page == "My Account": body = account_view()
-        else: body = settings_view()
-        if token is None:
-            return  # the session ended while this view loaded; logout() already showed the homepage
-        shell = ft.Row([ft.Container(width=225, bgcolor="#06264b" if not dark else "#071827", padding=16, content=ft.Column([ft.Row([ft.Icon(ft.Icons.ACCOUNT_BALANCE, color="#60a5fa"), ft.Column([ft.Text("SB TOLOSA", size=14, weight=ft.FontWeight.BOLD, color="#ffffff"), ft.Text("Member Workspace", size=10, color="#bfdbfe")], spacing=0)], spacing=9), ft.Divider(height=20, color="#315279"), *nav], spacing=7)), ft.Container(expand=True, padding=ft.padding.symmetric(horizontal=28, vertical=8), content=ft.Column([ft.Row([ft.Row([ft.CircleAvatar(content=ft.Text((user.get("full_name") or "M")[0].upper(), size=12, color="white"), bgcolor="#2563eb", radius=16), ft.Text(user.get("full_name") or "SB Member", size=12, color=color("nav", "#334155", "#d6e2e8"))], spacing=8)], alignment=ft.MainAxisAlignment.END), body], spacing=8, scroll=ft.ScrollMode.AUTO, expand=True))], expand=True, spacing=0)
-        page.controls.clear()
-        page.add(shell)
-        page.update()
+        nav_items.append((ft.Icons.ACCOUNT_CIRCLE_OUTLINED, "My Account", screen("My Account", account_view), MENU_SECTION))
+        selected = next((index for index, item in enumerate(nav_items) if item[1] == current_page), 0)
+        render_shell(
+            page,
+            user.get("username"),
+            logout,
+            nav_items,
+            None,
+            initial_selected_index=selected,
+            account={"name": user.get("full_name") or user.get("username"), "role": "SB Member"},
+            panel_title="Member Workspace",
+        )
 
     if session and session.get("access_token"):
         token = session["access_token"]
@@ -528,8 +514,8 @@ def main(page: ft.Page, session=None):
         permissions = set(profile.get("permissions") or permissions)
         render()
     else:
-        page.bgcolor = "#f8fafc"
-        page.add(ft.Container(content=ft.Text("Please use Login for All on the main homepage.", color="#64748b"), alignment=ft.alignment.center, expand=True))
+        page.bgcolor = CANVAS
+        page.add(ft.Container(content=ft.Text("Please use Login for All on the main homepage.", color=ft.Colors.BLUE_GREY_600), alignment=ft.alignment.center, expand=True))
         page.update()
 
 

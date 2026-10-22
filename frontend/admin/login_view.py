@@ -10,17 +10,12 @@ if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
 if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
     ft.Icons = ft.icons
 
-SEAL_IMAGE = "login_seal.png"
-BUILDING_IMAGE = "login_municipal_building.png"
+from frontend.theme import ACCENT, BUILDING_IMAGE, MUTED, NAVY, PRIMARY as FIELD_FOCUS, seal as _seal
 
 PAGE_BG = "#edf5fc"
-NAVY = "#073a78"
 LABEL = "#365b88"
-MUTED = "#617493"
 FIELD_BORDER = "#c8d4e2"
-FIELD_FOCUS = "#0869d5"
 FIELD_ICON = "#0a498d"
-ACCENT = "#ffda31"
 
 
 def login_field(hint, icon, **text_field_kwargs):
@@ -66,18 +61,6 @@ def _label(text):
     return ft.Container(
         content=ft.Text(text, size=15, weight=ft.FontWeight.W_500, color=LABEL),
         padding=ft.padding.only(bottom=9),
-    )
-
-
-def _seal(size):
-    """The seal image has a white square background, so clip it to a circle around the round seal."""
-    return ft.Container(
-        content=ft.Image(src=SEAL_IMAGE, width=size, height=size, fit=ft.ImageFit.COVER, scale=1.1),
-        width=size,
-        height=size,
-        border_radius=size / 2,
-        bgcolor=ft.Colors.WHITE,
-        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
     )
 
 
