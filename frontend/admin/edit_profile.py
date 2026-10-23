@@ -2,7 +2,9 @@
 
 import flet as ft
 
-from frontend.admin.registration import error_detail
+from frontend.admin.registration import (
+    _Notice, _dialog_width, _field_style, _labelled, _primary_button, _section, _style_dialog, error_detail,
+)
 from frontend.admin.tracking_ui import TrackingWidgets
 
 
@@ -13,9 +15,10 @@ def open_edit_profile_dialog(page, dialog, api, profile, *, on_saved=None):
     `on_saved(account)` gets the updated account.
     """
     ui = TrackingWidgets(page)
-    name = ft.TextField(label="Full name", value=profile.get("full_name") or "", autofocus=True)
-    email = ft.TextField(label="Email", value=profile.get("email") or "")
-    message = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
+    field_style = _field_style(ui)
+    name = ft.TextField(hint_text="e.g. Juan Dela Cruz", value=profile.get("full_name") or "", autofocus=True, **field_style)
+    email = ft.TextField(hint_text="name@example.com", value=profile.get("email") or "", **field_style)
+    message = _Notice()
 
     def close():
         dialog.open = False
@@ -23,7 +26,6 @@ def open_edit_profile_dialog(page, dialog, api, profile, *, on_saved=None):
 
     def show_error(text):
         message.value = text
-        message.visible = True
         page.update()
 
     def save():
@@ -44,19 +46,29 @@ def open_edit_profile_dialog(page, dialog, api, profile, *, on_saved=None):
         if on_saved:
             on_saved(account)
 
-    dialog.modal = True
-    dialog.title = ft.Text("Edit profile")
-    dialog.content = ft.Column(
-        [ui.hint("Your username, role and office are managed by the Super Admin."), name, email, message],
+    content = ft.Column(
+        [
+            _section(ui, ft.Icons.PERSON_OUTLINE, "Your details", [
+                _labelled(ui, name, "Full name", ft.Icons.PERSON, required=True),
+                _labelled(ui, email, "Email", ft.Icons.EMAIL_OUTLINED, required=True),
+            ]),
+            ft.Row(
+                [ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=ui.muted_color()),
+                 ft.Text("Your username, role and office are managed by the Super Admin.", size=11, color=ui.muted_color(), expand=True)],
+                spacing=8,
+            ),
+            message.box,
+        ],
         tight=True,
-        spacing=10,
-        width=360,
+        spacing=14,
     )
-    dialog.actions = [
-        ft.TextButton("Cancel", on_click=lambda _: close()),
-        ft.Button("Save changes", icon=ft.Icons.SAVE_OUTLINED, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: save()),
-    ]
-    dialog.actions_alignment = ft.MainAxisAlignment.END
+    _style_dialog(
+        dialog, ui, "Edit profile", content,
+        [ft.TextButton("Cancel", on_click=lambda _: close()), _primary_button("Save changes", ft.Icons.SAVE_OUTLINED, lambda _: save())],
+        min(520, _dialog_width(page, False)),
+        subtitle=f"Signed in as {profile['username']}." if profile.get("username") else "Update your name and email.",
+        icon=ft.Icons.MANAGE_ACCOUNTS, on_close=close,
+    )
     if dialog not in page.overlay:
         page.overlay.append(dialog)
     dialog.open = True

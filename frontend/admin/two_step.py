@@ -5,7 +5,9 @@ import base64
 import flet as ft
 
 from frontend.admin.document_details import IMAGE_TAKES_BASE64
-from frontend.admin.registration import error_detail
+from frontend.admin.registration import (
+    _STATE, _Notice, _dialog_width, _field_style, _labelled, _primary_button, _section, _style_dialog, error_detail,
+)
 from frontend.admin.tracking_ui import TrackingWidgets
 
 
@@ -18,12 +20,14 @@ def _code(field):
     return "".join((field.value or "").split())
 
 
-def _open(page, dialog, title, body, actions):
-    dialog.modal = True
-    dialog.title = ft.Text(title)
-    dialog.content = ft.Column(body, tight=True, spacing=10, width=360, scroll=ft.ScrollMode.AUTO)
-    dialog.actions = actions
-    dialog.actions_alignment = ft.MainAxisAlignment.END
+def _open(page, dialog, title, body, actions, *, subtitle=None, icon=ft.Icons.SHIELD_OUTLINED, tall=False):
+    """`tall` bodies scroll inside a fixed height, so the QR step fits short windows."""
+    ui = TrackingWidgets(page)
+    content = ft.Column(body, tight=True, spacing=14, scroll=ft.ScrollMode.AUTO)
+    if tall:
+        content.height = min(560, (page.height or 800) - 200)
+    _style_dialog(dialog, ui, title, content, actions, min(520, _dialog_width(page, False)),
+                  subtitle=subtitle, icon=icon, on_close=lambda: _close(page, dialog))
     if dialog not in page.overlay:
         page.overlay.append(dialog)
     dialog.open = True
@@ -35,14 +39,33 @@ def _close(page, dialog):
     page.update()
 
 
-def _error_text():
-    return ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
-
-
 def _show(page, message, text):
     message.value = text
-    message.visible = True
     page.update()
+
+
+def _danger_button(text, icon, on_click):
+    """_primary_button in red, for turning protection off."""
+    button = _primary_button(text, icon, on_click)
+    button.style.bgcolor = {_STATE.DISABLED: ft.Colors.BLUE_GREY_200, _STATE.DEFAULT: ft.Colors.RED_700}
+    return button
+
+
+def _code_box(ui, values):
+    """The setup key or the recovery codes, in a tinted box that is easy to copy from."""
+    return ft.Container(
+        ft.Column(
+            [ft.Text(value, size=15, weight=ft.FontWeight.W_600, font_family="Consolas", selectable=True, color=ui.heading_color()) for value in values],
+            spacing=4,
+            tight=True,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        padding=12,
+        border_radius=8,
+        bgcolor=ui.tone("#E8F1FD", "#1E2B38"),
+        border=ft.border.all(1, ui.line_color()),
+        alignment=ft.Alignment(0, 0),
+    )
 
 
 def open_turn_on_dialog(page, dialog, api, *, on_done):
@@ -55,13 +78,15 @@ def open_turn_on_dialog(page, dialog, api, *, on_done):
     try:
         setup = api("POST", "/auth/two-step/setup")
     except Exception as exc:
-        _open(page, dialog, "Turn on two-step login", [ft.Text(error_detail(exc)[0], size=12, color=ft.Colors.RED_700)], [cancel])
+        problem = _Notice()
+        problem.value = error_detail(exc)[0]
+        _open(page, dialog, "Turn on two-step login", [problem.box], [cancel])
         return
 
     image = (ft.Image(src_base64=setup["qr_png_base64"], width=180, height=180) if IMAGE_TAKES_BASE64
              else ft.Image(src=base64.b64decode(setup["qr_png_base64"]), width=180, height=180))
-    code = ft.TextField(label="6-digit code", autofocus=True, max_length=6, keyboard_type=ft.KeyboardType.NUMBER)
-    message = _error_text()
+    code = ft.TextField(hint_text="123456", autofocus=True, max_length=6, keyboard_type=ft.KeyboardType.NUMBER, **_field_style(ui))
+    message = _Notice()
 
     def show_recovery_codes(codes):
         def finish():
@@ -69,15 +94,13 @@ def open_turn_on_dialog(page, dialog, api, *, on_done):
             on_done()
 
         _open(page, dialog, "Save your recovery codes", [
-            ui.hint("Each code works once, in place of the 6-digit code, if you lose your phone. "
-                    "Write them down or print them now: they will not be shown again."),
-            ft.Container(
-                ft.Column([ft.Text(value, size=15, weight=ft.FontWeight.W_600, font_family="Consolas", selectable=True) for value in codes], spacing=4, tight=True),
-                padding=12,
-                border_radius=8,
-                bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.BLUE_GREY_500),
-            ),
-        ], [ft.Button("I saved them", icon=ft.Icons.CHECK, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: finish())])
+            _section(ui, ft.Icons.VPN_KEY_OUTLINED, "Recovery codes", [
+                ui.hint("Each code works once, in place of the 6-digit code, if you lose your phone. "
+                        "Write them down or print them now: they will not be shown again."),
+                _code_box(ui, codes),
+            ]),
+        ], [_primary_button("I saved them", ft.Icons.CHECK, lambda _: finish())],
+            subtitle="Two-step login is now on.", icon=ft.Icons.VERIFIED_USER_OUTLINED)
 
     def turn_on():
         value = _code(code)
@@ -92,21 +115,27 @@ def open_turn_on_dialog(page, dialog, api, *, on_done):
         show_recovery_codes(body.get("recovery_codes") or [])
 
     _open(page, dialog, "Turn on two-step login", [
-        ui.hint("1. Scan this with an authenticator app such as Google Authenticator or Microsoft Authenticator."),
-        ft.Row([image], alignment=ft.MainAxisAlignment.CENTER),
-        ui.hint("Can't scan? Type this key into the app:"),
-        ft.Text(setup["secret"], size=13, weight=ft.FontWeight.W_600, font_family="Consolas", selectable=True),
-        ui.hint("2. Enter the 6-digit code the app shows."),
-        code,
-        message,
-    ], [cancel, ft.Button("Turn on", icon=ft.Icons.SHIELD_OUTLINED, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: turn_on())])
+        _section(ui, ft.Icons.QR_CODE_SCANNER, "1 · Scan the QR code", [
+            ui.hint("Scan this with an authenticator app such as Google Authenticator or Microsoft Authenticator."),
+            ft.Row([ft.Container(image, padding=8, bgcolor=ft.Colors.WHITE, border_radius=8)], alignment=ft.MainAxisAlignment.CENTER),
+            ui.hint("Can't scan? Type this key into the app:"),
+            _code_box(ui, [setup["secret"]]),
+        ]),
+        _section(ui, ft.Icons.PIN_OUTLINED, "2 · Enter the code", [
+            _labelled(ui, code, "6-digit code", ft.Icons.PIN_OUTLINED, required=True),
+            ui.hint("The code the app shows for this account."),
+        ]),
+        message.box,
+    ], [cancel, _primary_button("Turn on", ft.Icons.SHIELD_OUTLINED, lambda _: turn_on())],
+        subtitle="Ask for a code from your phone each time you log in.", tall=True)
 
 
 def open_turn_off_dialog(page, dialog, api, *, on_done):
     ui = TrackingWidgets(page)
-    password = ft.TextField(label="Password", password=True, can_reveal_password=True, autofocus=True)
-    code = ft.TextField(label="6-digit code or recovery code")
-    message = _error_text()
+    field_style = _field_style(ui)
+    password = ft.TextField(hint_text="Your password", password=True, can_reveal_password=True, autofocus=True, **field_style)
+    code = ft.TextField(hint_text="123456 or a recovery code", **field_style)
+    message = _Notice()
 
     def turn_off():
         if not password.value or not _code(code):
@@ -121,14 +150,15 @@ def open_turn_off_dialog(page, dialog, api, *, on_done):
         on_done()
 
     _open(page, dialog, "Turn off two-step login", [
-        ui.hint("You will log in with your password alone."),
-        password,
-        code,
-        message,
+        _section(ui, ft.Icons.LOCK_OUTLINE, "Confirm it's you", [
+            _labelled(ui, password, "Password", ft.Icons.KEY, required=True),
+            _labelled(ui, code, "6-digit code or recovery code", ft.Icons.PIN_OUTLINED, required=True),
+        ]),
+        message.box,
     ], [
         ft.TextButton("Cancel", on_click=lambda _: _close(page, dialog)),
-        ft.Button("Turn off", icon=ft.Icons.REMOVE_MODERATOR_OUTLINED, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE, on_click=lambda _: turn_off()),
-    ])
+        _danger_button("Turn off", ft.Icons.REMOVE_MODERATOR_OUTLINED, lambda _: turn_off()),
+    ], subtitle="You will log in with your password alone.", icon=ft.Icons.REMOVE_MODERATOR_OUTLINED)
 
 
 def two_step_row(page, dialog, api, account, *, on_changed, label_color=None):
