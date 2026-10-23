@@ -1,4 +1,6 @@
 import flet as ft
+import threading
+import time
 import traceback
 
 from frontend.admin.tracking_ui import format_time
@@ -16,6 +18,41 @@ NAV_LABEL_FITS = 20
 SIDEBAR_IMAGE = "sb_tolosa_homepage.jpg"
 # The Sangguniang Bayan seal; an icon stands in when it is missing.
 SEAL_IMAGE = "sb_tolosa_seal.png"
+# How often the bell checks for new notifications while a screen stays open.
+NOTIFICATION_POLL_SECONDS = 30
+
+# One background poll per browser page: {id(page): the latest shell's check}.
+_notification_polls = {}
+
+
+def _poll_notifications(page, check):
+    """Run `check` every NOTIFICATION_POLL_SECONDS until the page disconnects.
+
+    Every shell drawn on the page replaces the check, so a page never runs more than one poll."""
+    key = id(page)
+    started = key in _notification_polls
+    _notification_polls[key] = check
+    if started:
+        return
+
+    def stop(_=None):
+        _notification_polls.pop(key, None)
+
+    if hasattr(page, "on_disconnect"):
+        page.on_disconnect = stop
+
+    def loop():
+        while True:
+            time.sleep(NOTIFICATION_POLL_SECONDS)
+            current = _notification_polls.get(key)
+            if current is None:
+                return
+            try:
+                current()
+            except Exception:
+                traceback.print_exc()
+
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def shell_colors(is_dark):
@@ -429,6 +466,7 @@ def render_shell(
     NOTIFICATION_STYLES = {
         "incoming": (ft.Icons.MOVE_TO_INBOX_OUTLINED, ft.Colors.BLUE_700),
         "incoming_overdue": (ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_700),
+        "received": (ft.Icons.TASK_ALT, ft.Colors.GREEN_700),
         "outgoing_overdue": (ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_700),
         "handoff_overdue": (ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_700),
         "returned": (ft.Icons.UNDO, ft.Colors.DEEP_ORANGE_700),
@@ -735,5 +773,16 @@ def render_shell(
     # =========================================================
 
     switch_view(initial_selected_index)
+
+    # New handoffs and receipts reach the bell without the user changing screens.
+    def check_notifications():
+        before = (notification_state["unread"], notification_state["error"])
+        refresh_notifications()
+        if (notification_state["unread"], notification_state["error"]) != before:
+            build_profile_bar()
+            page.update()
+
+    if notifications:
+        _poll_notifications(page, check_notifications)
 
     return page
