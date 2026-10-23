@@ -154,6 +154,8 @@ from frontend.admin.users_roles import (
     build_users_roles_view,
 )
 from frontend.admin.registration import PickerFiles, open_multiple_register_dialog, open_register_dialog
+# The Register Document form's look, shared by the account and office forms.
+from frontend.admin.registration import _Notice, _dialog_width, _field_style, _labelled, _primary_button, _section, _style_dialog
 from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.announcements import build_announcements_view
@@ -2761,14 +2763,16 @@ def main(page: ft.Page, session=None):
 
     def open_office_form_dialog(office=None):
         editing = office is not None
-        office_name = ft.TextField(label="Office Name", value=(office or {}).get("name", ""), autofocus=True)
-        office_code = ft.TextField(label="Office Code", value=(office or {}).get("office_code", ""))
+        widgets = TrackingWidgets(page)
+        field_style = _field_style(widgets)
+        office_name = ft.TextField(hint_text="e.g. Office of the SB Secretary", value=(office or {}).get("name", ""), autofocus=True, **field_style)
+        office_code = ft.TextField(hint_text="e.g. SBSEC", value=(office or {}).get("office_code", ""), **field_style)
         office_status = ft.Dropdown(
-            label="Status",
             options=[ft.dropdown.Option("Active"), ft.dropdown.Option("Inactive")],
             value="Active" if not editing or office.get("is_active") else "Inactive",
+            **field_style,
         )
-        error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
+        error_message = _Notice()
 
         def save_office(_):
             if not office_name.value or not office_name.value.strip() or not office_code.value or not office_code.value.strip():
@@ -2806,19 +2810,28 @@ def main(page: ft.Page, session=None):
                 error_message.value = f"Unable to {'update' if editing else 'create'} office: {exc}"
                 page.update()
 
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Edit Office" if editing else "Add Office"),
-            content=ft.Column([office_name, office_code, office_status, error_message], tight=True, spacing=10),
-            actions=[
+        half = {"xs": 12, "sm": 6}
+        content = ft.Column([
+            _section(widgets, ft.Icons.APARTMENT, "Office details", [
+                _labelled(widgets, office_name, "Office name", ft.Icons.ACCOUNT_BALANCE, required=True),
+                ft.ResponsiveRow([
+                    _labelled(widgets, office_code, "Office code", ft.Icons.TAG, required=True, col=half),
+                    _labelled(widgets, office_status, "Status", ft.Icons.TOGGLE_ON_OUTLINED, col=half),
+                ], spacing=14, run_spacing=12),
+            ]),
+            error_message.box,
+        ], spacing=14, tight=True)
+        dialog = ft.AlertDialog()
+        _style_dialog(
+            dialog, widgets, "Edit Office" if editing else "Add Office", content,
+            [
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
-                ft.Button(
-                    "Save Changes" if editing else "Create Office",
-                    on_click=save_office,
-                    bgcolor=ft.Colors.BLUE_800,
-                    color=ft.Colors.WHITE,
-                ),
+                _primary_button("Save Changes" if editing else "Create Office", ft.Icons.SAVE, save_office),
             ],
+            _dialog_width(page, False) if (page.width or 1024) <= 600 else 560,
+            subtitle=f"Update the details of {office.get('name')}." if editing else "Add an office that documents can be routed to.",
+            icon=ft.Icons.EDIT_OUTLINED if editing else ft.Icons.ADD_BUSINESS,
+            on_close=lambda: close_dialog(dialog),
         )
         page.overlay.append(dialog)
         dialog.open = True
@@ -2884,29 +2897,33 @@ def main(page: ft.Page, session=None):
         page.update()
 
     def open_create_user_dialog(employee_only=False):
-        full_name = ft.TextField(label="Full Name")
-        username = ft.TextField(label="Username")
-        email = ft.TextField(label="Email")
-        password = ft.TextField(label="Temporary Password", password=True, can_reveal_password=True)
-        confirm_password = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True)
+        widgets = TrackingWidgets(page)
+        field_style = _field_style(widgets)
+        full_name = ft.TextField(hint_text="e.g. Juan Dela Cruz", autofocus=True, **field_style)
+        username = ft.TextField(hint_text="Used to sign in", **field_style)
+        email = ft.TextField(hint_text="name@example.com", **field_style)
+        password = ft.TextField(hint_text="Temporary password", password=True, can_reveal_password=True, **field_style)
+        confirm_password = ft.TextField(hint_text="Type it again", password=True, can_reveal_password=True, **field_style)
         role_choice = None if employee_only else ft.Dropdown(
-            label="Role",
             options=[
                 ft.dropdown.Option("Employee"),
                 ft.dropdown.Option("SB Member"),
             ],
             value="Employee",
+            **field_style,
         )
         office_placeholder = "Select an office" if employee_only else "Unassigned"
         office_choice = ft.Dropdown(
-            label="Department/Office",
             options=[ft.dropdown.Option(office_placeholder)] + [
                 ft.dropdown.Option(item["name"])
                 for item in office_options
                 if item.get("name")
             ],
             value=office_placeholder,
+            **field_style,
         )
+        half = {"xs": 12, "sm": 6}
+        office_block = _labelled(widgets, office_choice, "Department/Office", ft.Icons.APARTMENT, required=employee_only, col=None if employee_only else half)
 
         permission_area = ft.Column([], spacing=8)
         selected_create_permissions = set()
@@ -2947,38 +2964,32 @@ def main(page: ft.Page, session=None):
 
         def render_permission_section():
             permission_area.controls.clear()
-            office_choice.visible = employee_only or selected_role() == "Employee"
-            if not office_choice.visible:
+            office_block.visible = employee_only or selected_role() == "Employee"
+            if not office_block.visible:
                 office_choice.value = office_placeholder
             if employee_only:
                 has_office = office_choice.value != office_placeholder
-                permission_area.controls.extend([
-                    ft.Text("Office Access", weight=ft.FontWeight.BOLD, size=14, color=ft.Colors.BLUE_GREY_800),
-                    ft.Text(
-                        "This employee will automatically receive access to:" if has_office else "Select an office to automatically assign the standard office permissions.",
-                        size=12,
-                        color=ft.Colors.BLUE_GREY_600,
-                    ),
-                ])
+                permission_area.controls.append(widgets.hint(
+                    "This employee will automatically receive access to:" if has_office else "Select an office to automatically assign the standard office permissions.",
+                ))
                 if has_office:
                     permission_area.controls.append(ft.Column([
                         ft.Row([
-                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.GREEN_700),
-                            ft.Text(label, size=12, color=ft.Colors.BLUE_GREY_800),
+                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.GREEN_600),
+                            ft.Text(label, size=12, color=widgets.body_color()),
                         ], spacing=8)
                         for label in office_permission_labels
                     ], spacing=4))
             elif selected_role() == "Employee":
                 permission_groups = create_permission_groups()
                 permission_count = sum(len(items) for items in permission_groups.values())
-                permission_area.controls.append(ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=16, color=ft.Colors.BLUE_GREY_800))
-                permission_area.controls.append(ft.Text("Control access to the features available to this employee.", size=12, color=ft.Colors.BLUE_GREY_600))
+                permission_area.controls.append(widgets.hint("Control access to the features available to this employee."))
                 selected_count = sum(
                     create_permission_key(label) in selected_create_permissions
                     for labels in permission_groups.values()
                     for label in labels
                 )
-                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{selected_count} of {permission_count} permissions selected", size=12)], spacing=12))
+                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{selected_count} of {permission_count} permissions selected", size=12, color=widgets.muted_color())], spacing=12))
                 for section_name, perms in permission_groups.items():
                     group_key = section_name
                     group_count = sum(create_permission_key(perm) in selected_create_permissions for perm in perms)
@@ -2992,15 +3003,16 @@ def main(page: ft.Page, session=None):
                                 controls=[ft.Column([ft.Row([ft.Checkbox(label=perm, value=create_permission_key(perm) in selected_create_permissions, scale=0.9, on_change=lambda event, key=create_permission_key(perm): update_create_permission(key, event)),], spacing=0) for perm in perms], spacing=2), ft.Row([group_check], spacing=8)],
                                 initially_expanded=False,
                                 maintain_state=True,
-                                bgcolor=ft.Colors.BLUE_GREY_50,
-                                collapsed_bgcolor=ft.Colors.WHITE,
+                                bgcolor=widgets.tone("#E8F1FD", "#1E2B38"),
+                                collapsed_bgcolor=widgets.card_color(),
                             ),
-                            border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                            border=ft.border.all(1, widgets.line_color()),
                             border_radius=10,
+                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         )
                     )
             else:
-                permission_area.controls.append(ft.Text("SB Member Access", weight=ft.FontWeight.BOLD, size=13, color=ft.Colors.BLUE_GREY_800))
+                permission_area.controls.append(widgets.hint("SB Members get read-only access:"))
                 permission_area.controls.append(ft.Column([
                     ft.Checkbox(label="View Documents", value=True, disabled=True),
                     ft.Checkbox(label="Search Documents", value=True, disabled=True),
@@ -3009,7 +3021,7 @@ def main(page: ft.Page, session=None):
                     ft.Checkbox(label="Download Documents", value=True, disabled=True),
                     ft.Checkbox(label="Print Documents", value=True, disabled=True),
                 ], spacing=6))
-                permission_area.controls.append(ft.Text("SB Members do not have QR Tracking, registration, editing, or user-management access.", size=11, color=ft.Colors.BLUE_GREY_600))
+                permission_area.controls.append(widgets.hint("SB Members do not have QR Tracking, registration, editing, or user-management access."))
             page.update()
 
         def update_create_permission(key, event):
@@ -3124,30 +3136,44 @@ def main(page: ft.Page, session=None):
                 page.update()
                 return
 
-        error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
+        error_message = _Notice()
 
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Create Employee Account" if employee_only else "Create User Account"),
-            content=ft.Container(
-                content=ft.Column([
-                    full_name,
-                    username,
-                    email,
-                    password,
-                    confirm_password,
-                    *([role_choice] if role_choice is not None else []),
-                    office_choice,
-                    permission_area,
-                    error_message,
-                ], width=560, scroll=ft.ScrollMode.ALWAYS, spacing=10),
-                width=580,
-                height=640,
-            ),
-            actions=[
+        role_row = [office_block] if employee_only else [
+            _labelled(widgets, role_choice, "Role", ft.Icons.BADGE_OUTLINED, required=True, col=half),
+            office_block,
+        ]
+        content = ft.Column([
+            _section(widgets, ft.Icons.PERSON_OUTLINE, "Account details", [
+                _labelled(widgets, full_name, "Full name", ft.Icons.PERSON, required=True),
+                ft.ResponsiveRow([
+                    _labelled(widgets, username, "Username", ft.Icons.ALTERNATE_EMAIL, required=True, col=half),
+                    _labelled(widgets, email, "Email", ft.Icons.EMAIL_OUTLINED, required=True, col=half),
+                ], spacing=14, run_spacing=12),
+            ]),
+            _section(widgets, ft.Icons.LOCK_OUTLINE, "Password", [
+                ft.ResponsiveRow([
+                    _labelled(widgets, password, "Temporary password", ft.Icons.KEY, required=True, col=half),
+                    _labelled(widgets, confirm_password, "Confirm password", ft.Icons.KEY, required=True, col=half),
+                ], spacing=14, run_spacing=12),
+            ]),
+            _section(widgets, ft.Icons.SHIELD_OUTLINED, "Office access" if employee_only else "Role and access", [
+                ft.ResponsiveRow(role_row, spacing=14, run_spacing=12),
+                permission_area,
+            ]),
+            error_message.box,
+        ], spacing=14, scroll=ft.ScrollMode.AUTO, height=min(600, (page.height or 800) - 200))
+
+        dialog = ft.AlertDialog()
+        _style_dialog(
+            dialog, widgets, "Create Employee Account" if employee_only else "Create User Account", content,
+            [
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
-                ft.Button("Create Account", on_click=create_account, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
+                _primary_button("Create Account", ft.Icons.PERSON_ADD, create_account),
             ],
+            _dialog_width(page, False),
+            subtitle="Add an employee and give them their office's standard access." if employee_only else "Add an employee or SB Member and choose what they can access.",
+            icon=ft.Icons.BADGE_OUTLINED if employee_only else ft.Icons.PERSON_ADD,
+            on_close=lambda: close_dialog(dialog),
         )
         page.overlay.append(dialog)
         dialog.open = True
