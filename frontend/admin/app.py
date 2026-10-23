@@ -3841,7 +3841,8 @@ def main(page: ft.Page, session=None):
                 "on_change_password": open_change_password,
             },
             notifications={
-                "load": lambda: backend_api("GET", "/notifications"),
+                # The bell keeps checking every 30s; once signed out it has nothing to ask for.
+                "load": lambda: backend_api("GET", "/notifications") if runtime_token or AUTH_TOKEN else {"unread": 0, "items": []},
                 "seen": lambda: backend_api("POST", "/notifications/seen"),
                 "open": lambda item: show_document_details({"id": item.get("document_id")}),
             },
