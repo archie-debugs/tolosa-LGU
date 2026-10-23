@@ -1,7 +1,9 @@
+import os
 import re
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
@@ -19,6 +21,25 @@ def _as_lgu(value):
 router = APIRouter(prefix="/public/documents", tags=["public"])
 # Public figures that are not about one document, such as the homepage counts.
 stats_router = APIRouter(prefix="/public", tags=["public"])
+
+
+def _public_pdf(db: Session, document_id: int) -> models.Attachment | None:
+    """The newest PDF attachment of a public, unarchived document whose file is on disk."""
+    attachments = (
+        db.query(models.Attachment)
+        .join(models.Document, models.Document.id == models.Attachment.document_id)
+        .filter(
+            models.Attachment.document_id == document_id,
+            models.Document.is_public.is_(True),
+            models.Document.archived.is_(False),
+        )
+        .order_by(models.Attachment.id.desc())
+    )
+    for attachment in attachments:
+        is_pdf = (attachment.mime_type or "").lower() == "application/pdf" or (attachment.original_filename or "").lower().endswith(".pdf")
+        if is_pdf and attachment.stored_path and os.path.isabs(attachment.stored_path) and os.path.exists(attachment.stored_path):
+            return attachment
+    return None
 
 
 def _tracking_value(value: str | None) -> str | None:
@@ -101,6 +122,7 @@ def list_public_documents(
             "category": document.category,
             "description": document.description,
             "stage": stage_summary(db, document),
+            "has_pdf": _public_pdf(db, document.id) is not None,
         }
         for document in documents
         ],
@@ -109,6 +131,21 @@ def list_public_documents(
         "page_size": page_size,
         "total_pages": total_pages,
     }
+
+
+@router.get("/{document_id:int}/pdf")
+def public_document_pdf(document_id: int, db: Session = Depends(get_db)):
+    """A public document's PDF, opened in the viewer's browser. Private, archived and
+    file-less documents are all "not found", so nothing about them is revealed."""
+    attachment = _public_pdf(db, document_id)
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="No public PDF for this document")
+    return FileResponse(
+        attachment.stored_path,
+        filename=attachment.original_filename,
+        media_type="application/pdf",
+        content_disposition_type="inline",
+    )
 
 
 @stats_router.get("/stats")

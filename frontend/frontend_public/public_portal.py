@@ -26,6 +26,12 @@ if hasattr(ft, "Alignment") and hasattr(ft, "alignment"):
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 
+
+def public_pdf_url(document_id):
+    """The backend address the visitor's browser reaches (read at call time: the LAN IP is detected at startup)."""
+    base = (os.getenv("PUBLIC_BASE_URL") or BACKEND_URL).strip().rstrip("/")
+    return f"{base}/public/documents/{document_id}/pdf"
+
 DOCUMENTS = [
     {"number": "DOC-22-2026", "title": "An Ordinance Providing for the Establishment of a Public Service and Infrastructure Development Fund", "type": "Ordinance", "date": "August 10, 2026"},
     {"number": "DOC-21-2026", "title": "A Resolution Adopting the Local Development Plan", "type": "Resolution", "date": "August 05, 2026"},
@@ -249,6 +255,16 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
             ),
         )
 
+    def view_button(document):
+        """Opens the document's PDF straight in the browser; nothing to open without one."""
+        if not (document.get("has_pdf") and document.get("id")):
+            return ft.Text("No PDF", size=12, color=muted)
+        return outlined_button(
+            "View", ft.Icons.PICTURE_AS_PDF_OUTLINED,
+            lambda _, document_id=document["id"]: page.launch_url(public_pdf_url(document_id)) if page is not None else None,
+            height=36,
+        )
+
     def card(content):
         return ft.Container(
             content=content,
@@ -465,7 +481,7 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
                     )
                 ),
                 ft.DataCell(_badge(document["type"])), ft.DataCell(ft.Text(document["date"], size=13, color=muted)),
-                ft.DataCell(_status(document)), ft.DataCell(outlined_button("View", ft.Icons.VISIBILITY_OUTLINED, None, height=36)),
+                ft.DataCell(_status(document)), ft.DataCell(view_button(document)),
             ]) for document in visible_documents
         ]
         last_document = min(first_document + len(visible_documents) - 1, total_documents) if total_documents else 0
