@@ -62,7 +62,7 @@ def route(client, offices):
         assert response.status_code == 200, response.text
 
     def receive(headers, number):
-        response = client.post(f"/documents/qr/DOC-00000{number}/receipt", json={}, headers=headers)
+        response = client.post(f"/documents/qr/office-queue-{number}/receipt", json={}, headers=headers)
         assert response.status_code == 200, response.text
 
     for number in (1, 2, 5):
@@ -107,6 +107,20 @@ def test_queue_splits_an_office_s_work_into_incoming_holding_and_outgoing():
     assert numbers(office_a["holding"]["items"]) == ["DOC-000003"]
     assert numbers(office_a["outgoing"]) == ["DOC-000001"]
     assert office_a["incoming"] == []
+
+
+def test_an_office_keeps_tracking_what_it_passed_on():
+    offices = setup_offices()
+    client = TestClient(main.app)
+    route(client, offices)
+
+    office_a = client.get("/documents/office/queue", headers=headers_for(client, "emp_a")).json()
+    assert [(item["tracking_number"], item["to_office"], item["now_at"]) for item in office_a["passed_on"]] == [
+        ("DOC-000005", "Office B", "Office B"),
+        ("DOC-000002", "Office B", "In transit → Office C"),
+    ]
+    # Document 2 is still on its way to C, so B has nothing passed on that was received yet.
+    assert client.get("/documents/office/queue", headers=headers_for(client, "emp_b")).json()["passed_on"] == []
 
 
 def test_queue_holding_list_can_be_searched():

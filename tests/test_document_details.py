@@ -168,3 +168,47 @@ def test_overview_requires_document_access():
         db.commit()
     assert client.get(f"/documents/{ids['doc']}/overview", headers=headers_for(client, "nobody")).status_code == 403
     assert client.get("/documents/999999/overview", headers=headers_for(client, "admin")).status_code == 404
+
+
+def test_receiving_needs_the_scanned_qr_code_not_the_tracking_number():
+    ids = setup_offices()
+    client = TestClient(main.app)
+    a, b = headers_for(client, "emp_a"), headers_for(client, "emp_b")
+    send(client, a, ids, "B")
+
+    typed = client.post("/documents/qr/DOC-000001/receipt", json={}, headers=b)
+    assert typed.status_code == 400
+    assert typed.json()["detail"] == "Scan the document's QR code to receive it"
+    receive(client, b)
+
+
+def test_an_office_only_tracks_what_it_has_not_received_or_has_passed_on():
+    ids = setup_offices()
+    client = TestClient(main.app)
+    a, b, c = (headers_for(client, name) for name in ("emp_a", "emp_b", "emp_c"))
+    tracking = {"id", "tracking_number", "title", "document_number", "series_year", "tracking_only"}
+
+    assert "description" in overview(client, a, ids)["document"]
+    send(client, a, ids, "B")
+
+    for office in (a, b):  # passed on by A, not yet received by B
+        seen = overview(client, office, ids)
+        assert set(seen["document"]) == tracking
+        assert seen["location"]["state"] == "in_transit"
+        assert [event["type"] for event in seen["events"]] == ["sent", "registered"]
+    assert set(client.get(f"/documents/office/{ids['doc']}", headers=b).json()) == tracking | {"office_receipt_status", "office_receipt_confirmed_at"}
+
+    receive(client, b)
+    held = overview(client, b, ids)
+    assert "description" in held["document"] and "tracking_only" not in held["document"]
+
+    send(client, b, ids, "C")
+    receive(client, c)
+    for office in (a, b):  # both still track it to the end
+        seen = overview(client, office, ids)
+        assert set(seen["document"]) == tracking
+        assert seen["location"] == {**seen["location"], "state": "held", "office": "Office C"}
+        assert seen["can"] == {"receive": False, "pass": False, "record_action": False}
+    listed = client.get("/documents/office", headers=a).json()["items"]
+    assert [item.get("tracking_only") for item in listed] == [True]
+    assert "remarks" in overview(client, headers_for(client, "admin"), ids)["document"]

@@ -106,6 +106,8 @@ class DocumentResponse(BaseModel):
     office_receipt_confirmed_at: Optional[datetime] = None
     in_transit_to: Optional[str] = None
     in_transit_since: Optional[datetime] = None
+    # Set on an office's view of a document it does not hold: only enough to track it.
+    tracking_only: Optional[bool] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

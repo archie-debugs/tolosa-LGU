@@ -1350,6 +1350,19 @@ def _serialize_office_document(doc: models.Document):
     }
 
 
+def _office_tracking_document(doc: models.Document):
+    """What an office sees of a document it does not hold (not yet received, or passed on):
+    enough to track it, none of its contents."""
+    return {
+        "id": doc.id,
+        "tracking_number": doc.tracking_number,
+        "title": doc.title,
+        "document_number": doc.document_number,
+        "series_year": doc.series_year,
+        "tracking_only": True,
+    }
+
+
 def _resolve_office_monitoring_id(db: Session, current_user: models.User, requested_office_id: int | None) -> int:
     assigned_office_id = getattr(current_user, "office_id", None)
     # A Super Administrator may monitor any active office, whether or not they have one of their own.
@@ -1455,8 +1468,12 @@ def list_office_documents(
     ).all() if document_ids else []
     receipts_by_document_id = {receipt.document_id: receipt for receipt in receipts}
     items = []
+    super_admin = normalize_user_role(getattr(current_user, "role", None)) == "Super Administrator"
     for doc in docs:
-        item = _serialize_office_document(doc)
+        holds = super_admin or _office_holds_document(db, doc, monitoring_office_id)
+        item = _serialize_office_document(doc) if holds else {
+            **_office_tracking_document(doc), "archived": bool(doc.archived), "created_at": doc.created_at,
+        }
         receipt = receipts_by_document_id.get(doc.id)
         item["office_receipt_status"] = receipt.status if receipt else "Not Yet Received"
         item["office_receipt_confirmed_at"] = receipt.confirmed_at if receipt else None
@@ -1532,7 +1549,8 @@ def get_office_document(document_id: int, db: Session = Depends(get_db), current
     ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found or not associated with your office")
-    payload = _serialize_office_document(doc)
+    holds = _office_holds_document(db, doc, current_user.office_id)
+    payload = _serialize_office_document(doc) if holds else _office_tracking_document(doc)
     receipt = db.query(models.DocumentReceipt).filter(
         models.DocumentReceipt.document_id == document_id,
         models.DocumentReceipt.office_id == current_user.office_id,
@@ -1636,6 +1654,32 @@ def office_queue(
         for doc in held_docs
     ]
 
+    # Documents this office passed on and another office received: tracked, not opened, to the end.
+    passed_on, tracked_ids = [], set()
+    delivered = (
+        db.query(models.DocumentHandoff)
+        .filter(models.DocumentHandoff.sending_office_id == monitoring_office_id, models.DocumentHandoff.status == "Received")
+        .order_by(models.DocumentHandoff.sent_at.desc(), models.DocumentHandoff.id.desc())
+    )
+    for row in delivered:
+        doc = row.document
+        if doc is None or doc.id in tracked_ids or _office_holds_document(db, doc, monitoring_office_id):
+            continue
+        tracked_ids.add(doc.id)
+        in_transit = db.query(models.DocumentHandoff).filter(
+            models.DocumentHandoff.document_id == doc.id, models.DocumentHandoff.status == "Pending Receipt",
+        ).first()
+        passed_on.append({
+            **_document_brief(doc),
+            "to_office": row.receiving_office.name if row.receiving_office else None,
+            "sent_at": _utc_iso(row.sent_at),
+            "now_at": "Archived" if doc.archived else (
+                f"In transit → {in_transit.receiving_office.name}" if in_transit and in_transit.receiving_office else doc.current_office
+            ),
+        })
+        if len(passed_on) >= PASSED_ON_LIMIT:
+            break
+
     feed_size = 15
     events = _handoff_events(db.query(models.DocumentHandoff).filter(
         or_(models.DocumentHandoff.sending_office_id == monitoring_office_id, models.DocumentHandoff.receiving_office_id == monitoring_office_id)
@@ -1650,6 +1694,7 @@ def office_queue(
     events.sort(key=lambda event: event["at"] or "", reverse=True)
 
     return {
+        "passed_on": passed_on,
         "office": {"id": monitoring_office_id, "name": office.name if office else None},
         "own_office": monitoring_office_id == getattr(current_user, "office_id", None),
         "overdue_hours": QR_TRACKING_OVERDUE_HOURS,
@@ -2140,6 +2185,8 @@ def get_document_qr_image(document_id: int, db: Session = Depends(get_db), curre
     return FileResponse(image_path, media_type="image/png")
 
 
+# The most passed-on documents the Office Dashboard lists for tracking.
+PASSED_ON_LIMIT = 20
 # A pending handoff older than this is flagged as overdue on the QR Tracking screen.
 QR_TRACKING_OVERDUE_HOURS = 24
 # A pending handoff that ended without receipt; custody never moved, so the sender still holds the document.
@@ -2807,8 +2854,13 @@ def confirm_document_receipt(qr_value: str, db: Session = Depends(get_db), curre
     if getattr(current_user, "office_id", None) is None:
         raise HTTPException(status_code=403, detail="Office assignment required for receipt confirmation")
 
-    doc = _find_document_by_qr_or_tracking(db, qr_value)
+    # Receiving takes the document's QR token, which only the printed QR code carries, so an
+    # office can receive a document only once the paper is in hand. Tracking numbers are refused.
+    token_value = _extract_qr_token_from_value(qr_value)
+    doc = db.query(models.Document).filter(models.Document.qr_token == token_value).first() if token_value else None
     if not doc:
+        if _find_document_by_qr_or_tracking(db, qr_value):
+            raise HTTPException(status_code=400, detail="Scan the document's QR code to receive it")
         raise HTTPException(status_code=404, detail="QR code not recognized")
 
     handoff = (
@@ -3243,8 +3295,12 @@ def document_overview(document_id: int, db: Session = Depends(get_db), current_u
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    holds = _office_holds_document(db, doc, office_id)
     if full_access:
         document = _serialize_document(doc)
+    elif not holds:
+        # Not received yet, or passed on: the office may track it but not open it.
+        document = _office_tracking_document(doc)
     else:
         document = _serialize_office_document(doc)
         document["attachments"] = [
@@ -3253,7 +3309,6 @@ def document_overview(document_id: int, db: Session = Depends(get_db), current_u
         ]
     events, location = _document_trail(db, doc, actions_of_office=None if full_access else office_id)
 
-    holds = _office_holds_document(db, doc, office_id)
     sent_here = office_id is not None and not doc.archived and db.query(models.DocumentHandoff.id).filter(
         models.DocumentHandoff.document_id == doc.id,
         models.DocumentHandoff.receiving_office_id == office_id,

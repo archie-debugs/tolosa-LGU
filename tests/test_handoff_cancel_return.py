@@ -96,7 +96,7 @@ def test_the_receiver_returns_a_handoff_with_a_reason(setup):
     assert "DOCUMENT_HANDOFF_RETURNED" in audit_actions()
     assert [item["tracking_number"] for item in queue(client, headers["emp_a"])["holding"]["items"]] == ["DOC-000001"]
     # The receiver can no longer receive it.
-    receipt = client.post("/documents/qr/DOC-000001/receipt", json={}, headers=headers["emp_b"])
+    receipt = client.post("/documents/qr/cancel-return-1/receipt", json={}, headers=headers["emp_b"])
     assert receipt.status_code == 403, receipt.text
 
 
@@ -130,7 +130,7 @@ def test_only_the_right_office_can_cancel_or_return(setup):
 
 def test_a_handoff_that_is_no_longer_pending_cannot_be_cancelled_or_returned(setup):
     client, headers, _, handoff_id = setup
-    assert client.post("/documents/qr/DOC-000001/receipt", json={}, headers=headers["emp_b"]).status_code == 200
+    assert client.post("/documents/qr/cancel-return-1/receipt", json={}, headers=headers["emp_b"]).status_code == 200
 
     cancel = client.post(f"/documents/handoffs/{handoff_id}/cancel", json={}, headers=headers["emp_a"])
     returned = client.post(f"/documents/handoffs/{handoff_id}/return", json={"reason": "late"}, headers=headers["emp_b"])

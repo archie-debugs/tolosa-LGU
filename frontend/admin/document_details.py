@@ -69,6 +69,7 @@ def open_document_details(
     document_id,
     *,
     normalize,
+    qr_token=None,
     load_qr_image=None,
     can_edit=False,
     can_download=False,
@@ -85,16 +86,23 @@ def open_document_details(
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     The backend decides what the user's office can do now (receive, pass on, record an
     action); the `can_*` flags only cover what the user's permissions allow.
+    `qr_token` is set when the document was opened by scanning its QR code; receiving needs it.
+    A document the office does not hold comes back `tracking_only`: where it is and its trail.
     `load_qr_image(document_id)` returns the QR code as base64 PNG, or None when the
     user may not see it. `on_change()` runs after a receipt, action or stage change is recorded.
     A measure's stage section comes from frontend/admin/stage_panel.py.
     """
     widgets = TrackingWidgets(page)
-    state = {"payload": None, "confirming": False, "action": None, "notice": ("", False)}
-    qr_base64 = load_qr_image(document_id) if load_qr_image else None
+    # "extras" are the QR image and stage section, loaded once the office may open the document.
+    state = {"payload": None, "confirming": False, "action": None, "notice": ("", False), "extras": None}
 
     def fetch():
         state["payload"] = api("GET", f"/documents/{document_id}/overview")
+        if state["extras"] is None and not (state["payload"].get("document") or {}).get("tracking_only"):
+            state["extras"] = (
+                load_qr_image(document_id) if load_qr_image else None,
+                build_stage_section(page, api, document_id, can_change=can_change_stage, on_saved=stage_saved),
+            )
 
     def notify(message, error=False):
         state["notice"] = (message, error)
@@ -127,7 +135,7 @@ def open_document_details(
         tracking_number = (state["payload"].get("document") or {}).get("tracking_number") or ""
         state["confirming"] = False
         try:
-            api("POST", f"/documents/qr/{quote(tracking_number, safe='')}/receipt", json={})
+            api("POST", f"/documents/qr/{quote(qr_token, safe='')}/receipt", json={})
             notify(f"Received {tracking_number}. Your office holds it now.")
             changed()
         except Exception as exc:
@@ -221,7 +229,7 @@ def open_document_details(
             for item in attachments
         )
         buttons = []
-        if can.get("receive"):
+        if can.get("receive") and qr_token:
             if state["confirming"]:
                 buttons += [
                     ft.FilledButton("Confirm receipt", icon=ft.Icons.CHECK, on_click=receive),
@@ -305,7 +313,7 @@ def open_document_details(
     def text_block(label, text):
         return ft.Column([widgets.hint(label), ft.Text(text, size=13, color=widgets.body_color(), selectable=True)], spacing=2)
 
-    def qr_block(document):
+    def qr_block(qr_base64):
         image = ft.Image(src_base64=qr_base64, width=180, height=180) if IMAGE_TAKES_BASE64 else ft.Image(src=base64.b64decode(qr_base64), width=180, height=180)
         return ft.Column(
             [
@@ -324,12 +332,36 @@ def open_document_details(
         can = payload.get("can") or {}
         message, error = state["notice"]
         buttons = action_buttons(document, can)
+        trail = [
+            ft.Divider(height=1, color=widgets.line_color()),
+            widgets.title(f"Trail ({len(events)})"),
+            ft.Column([widgets.event_row(event, show_document=False) for event in events] or [widgets.empty("No movement recorded yet.")], spacing=0),
+        ]
+        if document.get("tracking_only"):
+            if can.get("receive"):
+                note = (
+                    "Scanned. Confirm receipt to open this document; your office holds it from then on."
+                    if qr_token
+                    else "Sent to your office. Scan the QR code on the document with your phone to receive it."
+                )
+            else:
+                note = "Your office does not hold this document. You can track where it goes, but not open it."
+            render_sections([
+                header(document),
+                location_banner(payload.get("location") or {}, events),
+                widgets.hint(note),
+                *([ft.Text(message, size=12, color=ft.Colors.RED_700 if error else ft.Colors.GREEN_700)] if message else []),
+                *([buttons] if buttons else []),
+                *trail,
+            ])
+            return
+        qr_base64, stage_section = state["extras"] or (None, None)
         grid = details_grid(document)
         body = (
             ft.ResponsiveRow(
                 [
                     ft.Container(grid, col={"xs": 12, "md": 8}),
-                    ft.Container(qr_block(document), col={"xs": 12, "md": 4}),
+                    ft.Container(qr_block(qr_base64), col={"xs": 12, "md": 4}),
                 ],
                 spacing=16,
                 run_spacing=16,
@@ -348,10 +380,11 @@ def open_document_details(
             *([text_block("Description", document["description"])] if document.get("description") else []),
             *([text_block("Remarks", document["remarks"])] if document.get("remarks") else []),
             *([ft.Divider(height=1, color=widgets.line_color()), stage_section] if stage_section else []),
-            ft.Divider(height=1, color=widgets.line_color()),
-            widgets.title(f"Trail ({len(events)})"),
-            ft.Column([widgets.event_row(event, show_document=False) for event in events] or [widgets.empty("No movement recorded yet.")], spacing=0),
+            *trail,
         ]
+        render_sections(sections)
+
+    def render_sections(sections):
         mobile = (page.width or 1024) <= 600
         width = max(280, (page.width or 360) - 32) if mobile else 680
         dialog.title = ft.Text("Document details", color=widgets.heading_color())
@@ -366,7 +399,6 @@ def open_document_details(
         reload()
 
     fetch()
-    stage_section = build_stage_section(page, api, document_id, can_change=can_change_stage, on_saved=stage_saved)
     render()
     dialog.open = True
     page.update()

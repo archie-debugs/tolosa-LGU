@@ -1,7 +1,6 @@
 """Office Dashboard: an office's work queue, and the Super Administrator's overview of every office."""
 
 from datetime import datetime
-from urllib.parse import quote
 
 import flet as ft
 
@@ -18,6 +17,7 @@ def build_office_queue_view(
     can_receive=False,
     can_pass=False,
     can_view_details=False,
+    can_open_in_transit=False,
     can_search=False,
     open_details=None,
     open_pass=None,
@@ -27,10 +27,14 @@ def build_office_queue_view(
 
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     `office_id` is set when a Super Administrator monitors another office; that view is read-only.
+    An office opens only what it holds. Documents still to receive, sent and not yet received, or
+    passed on get a Track button instead: where the document is and its trail, not its contents.
+    `can_open_in_transit` (Super Administrators) opens them in full. Receiving is done by scanning
+    the document's QR code, not from here.
     Returns `(view, refresh)` so dialogs that change the queue can reload it.
     """
     widgets = TrackingWidgets(page)
-    # "confirming" is the open inline step: ("receive", handoff_id), ("return", ...) or ("cancel", ...).
+    # "confirming" is the open inline step: ("return", handoff_id) or ("cancel", handoff_id).
     state = {"page": 1, "confirming": None, "own_office": office_id is None}
 
     header_holder = ft.Container()
@@ -38,7 +42,8 @@ def build_office_queue_view(
     notice_text = ft.Text("", size=12, visible=False)
     kpi_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
     incoming_title, holding_title, outgoing_title = widgets.title("To receive"), widgets.title("Holding"), widgets.title("Sent, awaiting receipt")
-    incoming_list, holding_list, outgoing_list, activity_list = (ft.Column(spacing=0) for _ in range(4))
+    passed_title = widgets.title("Passed on")
+    incoming_list, holding_list, outgoing_list, passed_list, activity_list = (ft.Column(spacing=0) for _ in range(5))
     page_label = widgets.hint("")
     previous_button = ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous page", on_click=lambda _: change_page(-1))
     next_button = ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next page", on_click=lambda _: change_page(1))
@@ -60,9 +65,12 @@ def build_office_queue_view(
     def summary_of(document):
         return {"id": document.get("document_id"), "tracking_number": document.get("tracking_number"), "title": document.get("title")}
 
-    def view_button(document):
+    def view_button(document, in_transit=False):
         if not (can_view_details and open_details and document.get("document_id")):
             return None
+        if in_transit and not can_open_in_transit:
+            # The details screen shows the office only where it is and its trail.
+            return ft.IconButton(ft.Icons.TRAVEL_EXPLORE, tooltip="Track", on_click=lambda _, d=summary_of(document): open_details(d))
         return ft.IconButton(ft.Icons.VISIBILITY_OUTLINED, tooltip="View details", on_click=lambda _, d=summary_of(document): open_details(d))
 
     return_reason = ft.TextField(
@@ -78,15 +86,9 @@ def build_office_queue_view(
         if not (can_receive and state["own_office"]):
             return []
         handoff_id = item.get("handoff_id")
-        if state["confirming"] == ("receive", handoff_id):
-            return [
-                ft.FilledButton("Confirm receipt", icon=ft.Icons.CHECK, on_click=lambda _, i=item: receive(i)),
-                ft.TextButton("Cancel", on_click=lambda _: set_confirming(None)),
-            ]
         if state["confirming"] == ("return", handoff_id):
             return []
         return [
-            ft.OutlinedButton("Receive", icon=ft.Icons.MOVE_TO_INBOX_OUTLINED, on_click=lambda _, h=handoff_id: set_confirming(("receive", h))),
             ft.TextButton("Return", icon=ft.Icons.UNDO, tooltip="Send it back without receiving it", on_click=lambda _, h=handoff_id: set_confirming(("return", h))),
         ]
 
@@ -153,16 +155,6 @@ def build_office_queue_view(
             show_notice(f"Unable to cancel the handoff of {tracking_number}: {exc}", error=True)
         load(keep_notice=True)
 
-    def receive(item):
-        tracking_number = item.get("tracking_number") or ""
-        state["confirming"] = None
-        try:
-            api("POST", f"/documents/qr/{quote(tracking_number, safe='')}/receipt", json={})
-            show_notice(f"Received {tracking_number}. It is now held by your office.")
-        except Exception as exc:
-            show_notice(f"Unable to receive {tracking_number}: {exc}", error=True)
-        load(keep_notice=True)
-
     def render_incoming(items):
         incoming_title.value = f"To receive ({len(items)})"
         rows = []
@@ -180,11 +172,13 @@ def build_office_queue_view(
                 widgets.waiting_chip(item),
                 *receive_controls(item),
             ]
-            button = view_button(item)
+            button = view_button(item, in_transit=True)
             rows.append(widgets.list_row(controls + ([button] if button else [])))
             if state["confirming"] == ("return", item.get("handoff_id")):
                 rows.append(return_step())
-        incoming_list.controls = rows or [widgets.empty("Nothing waiting. Documents passed to this office appear here until you receive them.")]
+        if rows and can_receive and state["own_office"]:
+            rows.insert(0, widgets.hint("Scan the QR code on each document with your phone to receive it and open it."))
+        incoming_list.controls = rows or [widgets.empty("Nothing waiting. Documents passed to this office appear here until you scan them to receive them.")]
 
     def render_holding(holding):
         items = holding.get("items") or []
@@ -236,9 +230,28 @@ def build_office_queue_view(
                 widgets.waiting_chip(item),
                 *cancel_controls(item),
             ]
-            button = view_button(item)
+            button = view_button(item, in_transit=True)
             rows.append(widgets.list_row(controls + ([button] if button else [])))
         outgoing_list.controls = rows or [widgets.empty("Everything this office sent has been received.")]
+
+    def render_passed_on(items):
+        passed_title.value = f"Passed on ({len(items)})"
+        rows = []
+        for item in items:
+            controls = [
+                widgets.document_cell(item),
+                ft.Column(
+                    [
+                        ft.Text(f"Now: {item.get('now_at') or '-'}", size=12, color=widgets.body_color()),
+                        widgets.hint(f"Sent to {item.get('to_office') or '-'} {format_time(item.get('sent_at'))}"),
+                    ],
+                    spacing=1,
+                    expand=True,
+                ),
+            ]
+            button = view_button(item, in_transit=True)
+            rows.append(widgets.list_row(controls + ([button] if button else [])))
+        passed_list.controls = rows or [widgets.empty("Nothing passed on yet.")]
 
     def render(payload):
         office = payload.get("office") or {}
@@ -265,6 +278,7 @@ def build_office_queue_view(
         render_holding(payload.get("holding") or {})
         state["outgoing"] = payload.get("outgoing") or []
         render_outgoing(state["outgoing"])
+        render_passed_on(payload.get("passed_on") or [])
         events = payload.get("recent_activity") or []
         activity_list.controls = [widgets.event_row(event, show_document=True) for event in events] or [widgets.empty("No activity for this office yet.")]
 
@@ -303,7 +317,7 @@ def build_office_queue_view(
             ft.Row(header_controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             notice_text,
             kpi_row,
-            surface_card(ft.Column([incoming_title, widgets.hint("Oldest first. Receive a document once it is physically in your office, or return it if it was not meant for you."), incoming_list], spacing=6), padding=18),
+            surface_card(ft.Column([incoming_title, widgets.hint("Oldest first. Scan a document's QR code once it is physically in your office to receive it, or return it if it was not meant for you."), incoming_list], spacing=6), padding=18),
             surface_card(
                 ft.Column(
                     [
@@ -320,6 +334,7 @@ def build_office_queue_view(
             ft.ResponsiveRow(
                 [
                     ft.Container(surface_card(ft.Column([outgoing_title, widgets.hint("Oldest first, so the longest waits are on top. Cancel a handoff that went to the wrong office."), outgoing_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
+                    ft.Container(surface_card(ft.Column([passed_title, widgets.hint("Received by another office. Track where each one goes next."), passed_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
                     ft.Container(surface_card(ft.Column([widgets.title("Recent activity"), activity_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
                 ],
                 spacing=16,
