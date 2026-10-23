@@ -163,7 +163,7 @@ def build_homepage_view(page=None):
                         wrap=True,
                     ),
                     col={"xs": 12, "lg": 6},
-                    # On a phone the hero's buttons and quick access cards reach the same places.
+                    # On a phone the hero's buttons reach the same places.
                     visible=not narrow,
                 ),
                 ft.Container(
@@ -222,9 +222,7 @@ def build_homepage_view(page=None):
     stat_row = ft.Row(
         [
             stat_card(ft.Icons.DESCRIPTION_OUTLINED, stats.get("public_documents"), "Public Documents"),
-            stat_card(ft.Icons.GROUPS_OUTLINED, stats.get("active_committees"), "Committees"),
             stat_card(ft.Icons.EVENT_AVAILABLE_OUTLINED, stats.get("sessions_held_this_year"), f"Sessions Held in {stats.get('year') or 'this year'}"),
-            stat_card(ft.Icons.NEW_RELEASES_OUTLINED, stats.get("public_documents_this_month"), "New This Month"),
         ],
         spacing=14,
         run_spacing=14,
@@ -303,69 +301,6 @@ def build_homepage_view(page=None):
     hero_layers.append(ft.Container(hero_text, width=width, padding=ft.Padding(24, 32, 24, 32) if narrow else ft.Padding(56, 52, 56, 48)))
     hero = ft.Container(content=ft.Stack(hero_layers), gradient=hero_background)
 
-    # Quick access: a search that opens the public portal, and shortcuts.
-    search_field = ft.TextField(
-        hint_text="Search documents, tracking number, or title…",
-        prefix_icon=ft.Icons.SEARCH,
-        border_radius=14,
-        border_color=line,
-        focused_border_color=label_blue,
-        bgcolor=surface,
-        filled=True,
-        content_padding=ft.Padding(16, 14, 16, 14),
-        expand=True,
-        on_submit=lambda _: open_public_documents(search=(search_field.value or "").strip()),
-    )
-
-    def quick_card(icon, title, on_click):
-        return ft.Container(
-            content=ft.Row(
-                [
-                    ft.Icon(icon, color=label_blue, size=24),
-                    ft.Text(title, size=13, weight=ft.FontWeight.W_600, color=ink, expand=True),
-                    ft.Icon(ft.Icons.ARROW_FORWARD, color=label_blue, size=18),
-                ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            padding=ft.Padding(18, 20, 16, 20),
-            bgcolor=surface,
-            border=ft.border.all(1, line),
-            border_radius=14,
-            shadow=soft_shadow,
-            on_click=on_click,
-            ink=True,
-            col={"xs": 12, "sm": 6, "xl": 3},
-        )
-
-    quick_access = ft.Column(
-        [
-            eyebrow("QUICK ACCESS"),
-            ft.Text("Get the Information You Need", size=24, weight=ft.FontWeight.BOLD, color=navy),
-            ft.Text("Browse public records, legislative documents and other resources of the Sangguniang Bayan.", size=14, color=muted),
-            ft.Container(height=4),
-            ft.Row(
-                [
-                    search_field,
-                    theme.primary_button("Search", on_click=lambda _: open_public_documents(search=(search_field.value or "").strip()), icon=ft.Icons.SEARCH, height=50),
-                ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            ft.ResponsiveRow(
-                [
-                    quick_card(ft.Icons.DESCRIPTION_OUTLINED, "Public Documents", lambda _: open_public_documents()),
-                    quick_card(ft.Icons.QR_CODE_SCANNER, "Track a Document", lambda _: search_field.focus()),
-                    quick_card(ft.Icons.CAMPAIGN_OUTLINED, "Announcements", scroll_to("announcements-section")),
-                    quick_card(ft.Icons.ACCOUNT_BALANCE_OUTLINED, "About Us", scroll_to("about-section")),
-                ],
-                spacing=14,
-                run_spacing=14,
-            ),
-        ],
-        spacing=8,
-    )
-
     def announcement_row(item):
         icon, color = announcement_style(item.get("category"))
         lines = [
@@ -420,15 +355,7 @@ def build_homepage_view(page=None):
     )
 
     information = ft.Container(
-        content=ft.ResponsiveRow(
-            [
-                ft.Container(quick_access, col={"xs": 12, "lg": 7}),
-                ft.Container(announcements, col={"xs": 12, "lg": 5}),
-            ],
-            spacing=48,
-            run_spacing=36,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-        ),
+        content=announcements,
         bgcolor=canvas,
         padding=ft.Padding(56, 44, 56, 48),
     )
