@@ -1,12 +1,12 @@
 import re
-from datetime import timezone
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..core import LGU_TIMEZONE
+from ..core import LGU_TIMEZONE, lgu_today
 from ..database import get_db
 from .measure_stages import stage_summary
 
@@ -17,6 +17,8 @@ def _as_lgu(value):
 
 
 router = APIRouter(prefix="/public/documents", tags=["public"])
+# Public figures that are not about one document, such as the homepage counts.
+stats_router = APIRouter(prefix="/public", tags=["public"])
 
 
 def _tracking_value(value: str | None) -> str | None:
@@ -106,4 +108,27 @@ def list_public_documents(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+    }
+
+
+@stats_router.get("/stats")
+def public_stats(db: Session = Depends(get_db)):
+    """The homepage counts. Only what the public can already see: public, unarchived documents,
+    active committees, and sessions held (not drafts or scheduled ones) this year in LGU time."""
+    today = lgu_today()
+    month_start = datetime(today.year, today.month, 1, tzinfo=LGU_TIMEZONE)
+    public_documents = db.query(models.Document).filter(
+        models.Document.archived.is_(False),
+        models.Document.is_public.is_(True),
+    )
+    return {
+        "public_documents": public_documents.count(),
+        "public_documents_this_month": public_documents.filter(models.Document.created_at >= month_start).count(),
+        "active_committees": db.query(models.Committee).filter(models.Committee.is_active.is_(True)).count(),
+        "sessions_held_this_year": db.query(models.CouncilSession).filter(
+            models.CouncilSession.status == "Held",
+            models.CouncilSession.held_on >= date(today.year, 1, 1),
+            models.CouncilSession.held_on <= today,
+        ).count(),
+        "year": today.year,
     }

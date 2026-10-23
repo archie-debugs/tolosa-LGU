@@ -20,7 +20,7 @@ from .routes.status import router as status_router
 from .routes.audit import router as audit_router
 from .routes.documents import router as documents_router, public_qr_router
 from .routes.analytics import _storage_information, router as analytics_router
-from .routes.public_documents import router as public_documents_router
+from .routes.public_documents import router as public_documents_router, stats_router as public_stats_router
 from .routes.settings import router as settings_router
 from .routes.storage import router as storage_router
 from .routes.offices import router as offices_router
@@ -92,6 +92,7 @@ app.include_router(documents_router)
 app.include_router(public_qr_router)
 app.include_router(analytics_router)
 app.include_router(public_documents_router)
+app.include_router(public_stats_router)
 app.include_router(settings_router)
 app.include_router(storage_router)
 app.include_router(offices_router)
