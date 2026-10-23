@@ -405,7 +405,7 @@ def main(page: ft.Page, session=None):
         page_state["qr_authorization"] = qr_state
         page.data = page_state
         _render_qr_authorization_state(qr_state)
-        if not show_document_details({"id": document_id}):
+        if not show_document_details({"id": document_id, "qr_token": qr_state.get("token")}):
             qr_state["details_opened"] = False
             page_state["qr_authorization"] = qr_state
             page.data = page_state
@@ -1792,6 +1792,7 @@ def main(page: ft.Page, session=None):
                 details_api,
                 doc.get("id"),
                 normalize=normalize_document,
+                qr_token=doc.get("qr_token"),
                 load_qr_image=load_document_qr_image,
                 can_edit=has_permission("edit_documents"),
                 can_download=has_permission("download_documents"),
@@ -4343,6 +4344,7 @@ def main(page: ft.Page, session=None):
             ),
             can_pass=can_pass_office_document(),
             can_view_details=has_permission("view_office_document_details"),
+            can_open_in_transit=(current_user_role or "").strip().lower() == "super administrator",
             can_search=has_permission("search_office_documents"),
             open_details=show_document_details,
             open_pass=open_pass_document_dialog,
