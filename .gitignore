@@ -155,3 +155,8 @@ uploads/
 
 # Local runtime logs
 backend_log.txt
+
+# Personal Claude Code settings, the UI preview hook and playwright-cli output
+.claude/settings.local.json
+.claude/hooks/
+.playwright-cli/

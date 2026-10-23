@@ -13,6 +13,9 @@ DEFAULT_ANNOUNCEMENTS = [
     {"category": "LEGISLATIVE UPDATE", "title": "Official records and updates", "date": "", "details": ""},
 ]
 
+# Below this width the town hall photo is dropped from the hero, so the heading has room.
+NARROW_WIDTH = 900
+
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
 if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
@@ -40,6 +43,31 @@ def load_homepage_announcements():
     return DEFAULT_ANNOUNCEMENTS
 
 
+def load_homepage_stats():
+    """GET /public/stats, or None if the backend is unreachable (the hero then shows no counts)."""
+    try:
+        response = requests.get(f"{BACKEND_URL}/public/stats", timeout=5)
+        response.raise_for_status()
+        stats = response.json()
+        if isinstance(stats, dict):
+            return stats
+    except (requests.RequestException, ValueError):
+        pass
+    return None
+
+
+def announcement_style(category):
+    """(icon, colour) for an announcement, from words in its category."""
+    text = (category or "").lower()
+    if "session" in text:
+        return ft.Icons.EVENT_OUTLINED, ft.Colors.DEEP_PURPLE_400
+    if "document" in text or "update" in text or "record" in text:
+        return ft.Icons.DESCRIPTION_OUTLINED, ft.Colors.GREEN_600
+    if "notice" in text:
+        return ft.Icons.CAMPAIGN_OUTLINED, ft.Colors.BLUE_600
+    return ft.Icons.INFO_OUTLINE, ft.Colors.BLUE_GREY_400
+
+
 def build_homepage_view(page=None):
     is_dark = False
     if page is not None:
@@ -48,36 +76,49 @@ def build_homepage_view(page=None):
             page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
         except Exception:
             pass
+    width = getattr(page, "width", None) or 1400
+    narrow = width < NARROW_WIDTH
 
     # The login page's and admin workspace's colours (frontend/theme.py).
-    navy = theme.NAVY
+    navy = theme.NAVY if not is_dark else theme.NIGHT_INK
     label_blue = theme.PRIMARY if not is_dark else "#8cb8f0"
     ink = theme.INK if not is_dark else theme.NIGHT_INK
     muted = theme.MUTED if not is_dark else theme.NIGHT_MUTED
     line = theme.BORDER if not is_dark else theme.NIGHT_BORDER
     surface = "#ffffff" if not is_dark else theme.NIGHT_SURFACE
     canvas = theme.CANVAS if not is_dark else theme.NIGHT_CANVAS
+    soft_shadow = ft.BoxShadow(blur_radius=18, offset=ft.Offset(0, 6), color=ft.Colors.with_opacity(0.08 if not is_dark else 0.3, "#0c4279"))
     hero_photo = "sb_tolosa_homepage.jpg"
 
-    night_mode_button = None
-
-    def visual_link(label, color=ink, on_click=None):
-        return ft.TextButton(
+    def visual_link(label, color=ink, on_click=None, active=False):
+        button = ft.TextButton(
             text=label,
             on_click=on_click,
-            style=ft.ButtonStyle(color=color, padding=ft.Padding(8, 8, 8, 8)),
+            style=ft.ButtonStyle(color=color, padding=ft.Padding(12, 8, 12, 8)),
         )
+        return ft.Column(
+            [button, ft.Container(width=22, height=3, border_radius=2, bgcolor=label_blue if active else None)],
+            spacing=0,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            tight=True,
+        )
+
+    def eyebrow(text, color=label_blue):
+        return ft.Text(text, size=11, color=color, weight=ft.FontWeight.BOLD, style=ft.TextStyle(letter_spacing=1.5))
+
+    def scroll_to(key):
+        return lambda _: content_scroll.scroll_to(key=key, duration=400)
 
     def open_login(_):
         if page is not None:
             admin_main(page)
 
-    def open_public_documents(_):
+    def open_public_documents(_=None, search=""):
         if page is not None:
             try:
                 from frontend.frontend_public.public_portal import build_public_portal
                 page.clean()
-                page.add(build_public_portal(page))
+                page.add(build_public_portal(page, search=search))
                 page.update()
             except Exception:
                 pass
@@ -98,72 +139,43 @@ def build_homepage_view(page=None):
 
     night_mode_button = ft.IconButton(
         icon=(ft.Icons.LIGHT_MODE if is_dark else ft.Icons.DARK_MODE),
+        icon_color=navy,
         tooltip=("Switch to light mode" if is_dark else "Switch to night mode"),
         on_click=toggle_night_mode,
     )
 
-    utility_bar = ft.Container(
-        content=ft.ResponsiveRow(
-            [
-                ft.Container(
-                    content=ft.Text(
-                        "Republic of the Philippines  •  Province of Leyte  •  Municipality of Tolosa",
-                        size=11,
-                        color=theme.ON_BLUE_MUTED,
-                    ),
-                    col={"xs": 12, "md": 8},
-                ),
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Text("Accessibility", size=11, color=theme.ON_BLUE_MUTED),
-                            ft.Text("Contact", size=11, color=theme.ON_BLUE_MUTED),
-                            ft.Text("Help", size=11, color=theme.ON_BLUE_MUTED),
-                        ],
-                        alignment=ft.MainAxisAlignment.END,
-                        spacing=18,
-                        wrap=True,
-                    ),
-                    col={"xs": 12, "md": 4},
-                ),
-            ],
-            alignment=ft.MainAxisAlignment.CENTER,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        bgcolor=navy,
-        padding=ft.Padding(28, 9, 28, 9),
-    )
-
-    brand = theme.brand(on_blue=is_dark)
-
     navigation = ft.Container(
         content=ft.ResponsiveRow(
             [
-                ft.Container(content=brand, col={"xs": 12, "lg": 4}),
+                ft.Container(content=theme.brand(on_blue=is_dark), col={"xs": 12, "lg": 3}),
                 ft.Container(
                     content=ft.Row(
                         [
-                            visual_link("Home", on_click=lambda _: content_scroll.scroll_to(offset=0, duration=300)),
-                            visual_link("About", on_click=lambda _: content_scroll.scroll_to(key="about-section", duration=300)),
-                            visual_link("Public Records", on_click=lambda _: content_scroll.scroll_to(key="records-section", duration=300)),
-                            visual_link("Announcements", on_click=lambda _: content_scroll.scroll_to(key="announcements-section", duration=300)),
-                            visual_link("Contact", on_click=lambda _: content_scroll.scroll_to(key="contact-section", duration=300)),
+                            visual_link("Home", navy, on_click=lambda _: content_scroll.scroll_to(offset=0, duration=400), active=True),
+                            visual_link("About", on_click=scroll_to("about-section")),
+                            visual_link("Public Records", on_click=lambda _: open_public_documents()),
+                            visual_link("Announcements", on_click=scroll_to("announcements-section")),
+                            visual_link("Contact", on_click=scroll_to("contact-section")),
                         ],
                         alignment=ft.MainAxisAlignment.CENTER,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=2,
                         wrap=True,
                     ),
-                    col={"xs": 12, "lg": 5},
+                    col={"xs": 12, "lg": 6},
+                    # On a phone the hero's buttons and quick access cards reach the same places.
+                    visible=not narrow,
                 ),
                 ft.Container(
                     content=ft.Row(
                         [
                             night_mode_button,
-                            visual_link("Login", label_blue, on_click=open_login),
-                            theme.primary_button("Public Documents", on_click=open_public_documents, height=42),
+                            ft.TextButton("Login", on_click=open_login, style=ft.ButtonStyle(color=label_blue, padding=ft.Padding(12, 8, 12, 8))),
+                            theme.primary_button("Public Documents", on_click=open_public_documents, icon=ft.Icons.DESCRIPTION_OUTLINED, height=42),
                         ],
                         alignment=ft.MainAxisAlignment.END,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=8,
                         wrap=True,
                     ),
                     col={"xs": 12, "lg": 3},
@@ -173,255 +185,311 @@ def build_homepage_view(page=None):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         bgcolor=surface,
-        padding=ft.Padding(28, 12, 28, 12),
+        padding=ft.Padding(40, 10, 40, 10),
         shadow=ft.BoxShadow(blur_radius=12, color=ft.Colors.with_opacity(0.08, "#0c4279"), offset=ft.Offset(0, 3)),
     )
 
-    hero_content = ft.Container(
-        content=ft.Column(
-            [
-                ft.Text("SANGGUNIANG BAYAN OF TOLOSA", size=12, color=label_blue, weight=ft.FontWeight.BOLD, style=ft.TextStyle(letter_spacing=2)),
-                theme.accent_bar(),
+    def stat_card(icon, value, label):
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Icon(icon, color=label_blue, size=24),
+                        width=48, height=48, border_radius=24,
+                        alignment=ft.Alignment(0, 0),
+                        bgcolor=ft.Colors.with_opacity(0.12, theme.PRIMARY),
+                    ),
+                    ft.Column(
+                        [
+                            ft.Text(f"{int(value or 0):,}", size=22, weight=ft.FontWeight.BOLD, color=navy),
+                            ft.Text(label, size=12, color=muted),
+                        ],
+                        spacing=0,
+                        tight=True,
+                    ),
+                ],
+                spacing=14,
+                tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(16, 14, 22, 14),
+            bgcolor=ft.Colors.with_opacity(0.96, surface),
+            border_radius=14,
+            shadow=soft_shadow,
+        )
+
+    stats = load_homepage_stats()
+    stat_row = ft.Row(
+        [
+            stat_card(ft.Icons.DESCRIPTION_OUTLINED, stats.get("public_documents"), "Public Documents"),
+            stat_card(ft.Icons.GROUPS_OUTLINED, stats.get("active_committees"), "Committees"),
+            stat_card(ft.Icons.EVENT_AVAILABLE_OUTLINED, stats.get("sessions_held_this_year"), f"Sessions Held in {stats.get('year') or 'this year'}"),
+            stat_card(ft.Icons.NEW_RELEASES_OUTLINED, stats.get("public_documents_this_month"), "New This Month"),
+        ],
+        spacing=14,
+        run_spacing=14,
+        wrap=True,
+    ) if stats else None
+
+    hero_text = ft.Column(
+        [
+            eyebrow("REPUBLIC OF THE PHILIPPINES  •  PROVINCE OF LEYTE  •  MUNICIPALITY OF TOLOSA"),
+            ft.Column(
+                [
+                    ft.Text("Welcome to the", size=40, color=navy, weight=ft.FontWeight.BOLD),
+                    ft.Text("Sangguniang Bayan of Tolosa", size=40, color=label_blue, weight=ft.FontWeight.BOLD),
+                ],
+                spacing=0,
+            ),
+            ft.Container(
                 ft.Text(
-                    "Legislative Documents, Made Accessible.",
-                    size=34,
-                    color=navy if not is_dark else ink,
-                    weight=ft.FontWeight.BOLD,
-                ),
-                ft.Text(
-                    "Access legislative information, official documents, and public records of the Sangguniang Bayan of Tolosa through one centralized digital platform.",
-                    size=15,
+                    "Your one-stop platform for accessing legislative documents, public records, and important updates "
+                    "from the Municipal Government of Tolosa, Leyte.",
+                    size=16,
                     color=muted,
                 ),
-                ft.Row(
-                    [theme.primary_button("Explore Public Documents", on_click=open_public_documents, icon=ft.Icons.ARROW_FORWARD)],
-                    spacing=8,
-                    wrap=True,
-                ),
-            ],
-            spacing=18,
-        ),
-        bgcolor=surface,
-        border_radius=24,
-        padding=ft.Padding(32, 34, 32, 34),
-        shadow=ft.BoxShadow(blur_radius=40, offset=ft.Offset(0, 16), color=ft.Colors.with_opacity(0.12, "#0c4279")),
-        col={"xs": 12, "md": 5},
-    )
-
-    # The town hall under the login page's blue wash.
-    hero_image = ft.Container(
-        content=ft.Stack(
-            [
-                ft.Image(src=hero_photo, fit=ft.ImageFit.COVER, expand=True),
-                ft.Container(
-                    expand=True,
-                    gradient=ft.LinearGradient(
-                        begin=ft.Alignment(0, -1),
-                        end=ft.Alignment(0, 1),
-                        colors=[ft.Colors.with_opacity(0.15, "#044184"), ft.Colors.with_opacity(0.55, "#03346f")],
+                width=560,
+            ),
+            ft.Row(
+                [
+                    theme.primary_button("Explore Public Documents", on_click=open_public_documents, icon=ft.Icons.ARROW_FORWARD, height=50),
+                    ft.OutlinedButton(
+                        "Learn More About Us",
+                        icon=ft.Icons.INFO_OUTLINE,
+                        on_click=scroll_to("about-section"),
+                        height=50,
+                        style=ft.ButtonStyle(
+                            color=label_blue,
+                            bgcolor=surface,
+                            side=ft.BorderSide(1, line),
+                            shape=ft.RoundedRectangleBorder(radius=13),
+                            padding=ft.Padding(22, 0, 22, 0),
+                        ),
                     ),
+                ],
+                spacing=14,
+                wrap=True,
+            ),
+            *([ft.Container(stat_row, padding=ft.Padding(0, 18, 0, 0))] if stat_row else []),
+        ],
+        spacing=20,
+    )
+
+    hero_background = ft.LinearGradient(
+        begin=ft.Alignment(-1, -1),
+        end=ft.Alignment(1, 1),
+        colors=["#F8FBFF", "#E4EEFB"] if not is_dark else [theme.NIGHT_CANVAS, theme.NIGHT_BLUE],
+    )
+    hero_layers = []
+    if not narrow:
+        photo_width = int(width * 0.6)
+        hero_layers += [
+            ft.Container(
+                content=ft.Image(src=hero_photo, fit=ft.ImageFit.COVER, error_content=ft.Container()),
+                right=0, top=0, bottom=0, width=photo_width,
+            ),
+            # Fades the photo into the hero's background, so the heading sits on a plain colour.
+            ft.Container(
+                gradient=ft.LinearGradient(
+                    begin=ft.Alignment(-1, 0),
+                    end=ft.Alignment(1, 0),
+                    colors=[canvas, ft.Colors.with_opacity(0.7, canvas), ft.Colors.with_opacity(0.0, canvas)],
+                    stops=[0.0, 0.3, 0.65],
                 ),
-            ],
-            expand=True,
-        ),
-        aspect_ratio=1.55,
-        col={"xs": 12, "md": 7},
-        border_radius=24,
-        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-        shadow=ft.BoxShadow(blur_radius=40, offset=ft.Offset(0, 16), color=ft.Colors.with_opacity(0.12, "#0c4279")),
+                right=0, top=0, bottom=0, width=photo_width,
+            ),
+        ]
+    # The text is the one unpositioned layer, so it sets the hero's height and the photo fills in behind it.
+    hero_layers.append(ft.Container(hero_text, width=width, padding=ft.Padding(24, 32, 24, 32) if narrow else ft.Padding(56, 52, 56, 48)))
+    hero = ft.Container(content=ft.Stack(hero_layers), gradient=hero_background)
+
+    # Quick access: a search that opens the public portal, and shortcuts.
+    search_field = ft.TextField(
+        hint_text="Search documents, tracking number, or title…",
+        prefix_icon=ft.Icons.SEARCH,
+        border_radius=14,
+        border_color=line,
+        focused_border_color=label_blue,
+        bgcolor=surface,
+        filled=True,
+        content_padding=ft.Padding(16, 14, 16, 14),
+        expand=True,
+        on_submit=lambda _: open_public_documents(search=(search_field.value or "").strip()),
     )
 
-    hero = ft.Container(
-        content=ft.ResponsiveRow([hero_content, hero_image], spacing=34, run_spacing=24, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        bgcolor=canvas,
-        padding=ft.Padding(34, 46, 34, 54),
-    )
-
-    def access_item(icon, title, description):
+    def quick_card(icon, title, on_click):
         return ft.Container(
             content=ft.Row(
                 [
                     ft.Icon(icon, color=label_blue, size=24),
-                    ft.Column(
-                        [
-                            ft.Text(title, size=12, color=navy, weight=ft.FontWeight.BOLD),
-                            ft.Text(description, size=12, color=muted),
-                        ],
-                        spacing=5,
-                        expand=True,
-                    ),
+                    ft.Text(title, size=13, weight=ft.FontWeight.W_600, color=ink, expand=True),
+                    ft.Icon(ft.Icons.ARROW_FORWARD, color=label_blue, size=18),
                 ],
                 spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.START,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.Padding(4, 6, 4, 6),
-            col={"xs": 12, "md": 4},
+            padding=ft.Padding(18, 20, 16, 20),
+            bgcolor=surface,
+            border=ft.border.all(1, line),
+            border_radius=14,
+            shadow=soft_shadow,
+            on_click=on_click,
+            ink=True,
+            col={"xs": 12, "sm": 6, "xl": 3},
         )
 
-    quick_access = ft.Container(
-        content=ft.ResponsiveRow(
-            [
-                access_item(ft.Icons.DESCRIPTION_OUTLINED, "PUBLIC DOCUMENTS", "Browse available legislative records and documents."),
-                access_item(ft.Icons.CAMPAIGN_OUTLINED, "ANNOUNCEMENTS", "View public notices and legislative updates."),
-                access_item(ft.Icons.INFO_OUTLINED, "ABOUT THE SYSTEM", "Learn how the digital tracking system supports transparency."),
-            ],
-            spacing=26,
-            run_spacing=14,
-        ),
-        bgcolor=surface,
-        padding=ft.Padding(30, 22, 30, 22),
-        border=ft.Border(top=ft.BorderSide(1, line), bottom=ft.BorderSide(1, line)),
+    quick_access = ft.Column(
+        [
+            eyebrow("QUICK ACCESS"),
+            ft.Text("Get the Information You Need", size=24, weight=ft.FontWeight.BOLD, color=navy),
+            ft.Text("Browse public records, legislative documents and other resources of the Sangguniang Bayan.", size=14, color=muted),
+            ft.Container(height=4),
+            ft.Row(
+                [
+                    search_field,
+                    theme.primary_button("Search", on_click=lambda _: open_public_documents(search=(search_field.value or "").strip()), icon=ft.Icons.SEARCH, height=50),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.ResponsiveRow(
+                [
+                    quick_card(ft.Icons.DESCRIPTION_OUTLINED, "Public Documents", lambda _: open_public_documents()),
+                    quick_card(ft.Icons.QR_CODE_SCANNER, "Track a Document", lambda _: search_field.focus()),
+                    quick_card(ft.Icons.CAMPAIGN_OUTLINED, "Announcements", scroll_to("announcements-section")),
+                    quick_card(ft.Icons.ACCOUNT_BALANCE_OUTLINED, "About Us", scroll_to("about-section")),
+                ],
+                spacing=14,
+                run_spacing=14,
+            ),
+        ],
+        spacing=8,
     )
 
-    system_intro = ft.Container(
-        content=ft.ResponsiveRow(
-            [
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("ABOUT THE SYSTEM", size=12, color=label_blue, weight=ft.FontWeight.BOLD, style=ft.TextStyle(letter_spacing=2)),
-                            ft.Text("A clearer way to follow local legislation", size=28, color=ink, weight=ft.FontWeight.BOLD),
-                            theme.accent_bar(),
-                        ],
-                        spacing=12,
-                    ),
-                    col={"xs": 12, "md": 5},
-                ),
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("The Legislative Document Tracking Management System brings the records of the Sangguniang Bayan of Tolosa into one organized digital space.", size=15, color=ink),
-                            ft.Text("It helps the public find available ordinances, resolutions, and legislative information with greater convenience and confidence.", size=14, color=muted),
-                            ft.Row(
-                                [
-                                    ft.Icon(ft.Icons.VERIFIED_OUTLINED, color=label_blue, size=20),
-                                    ft.Text("Designed to support transparent public service", size=13, color=label_blue, weight=ft.FontWeight.BOLD),
-                                ],
-                                spacing=9,
-                            ),
-                        ],
-                        spacing=14,
-                    ),
-                    col={"xs": 12, "md": 7},
-                ),
-            ],
-            spacing=34,
-            run_spacing=22,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        bgcolor=surface,
-        border=ft.Border(top=ft.BorderSide(1, line), bottom=ft.BorderSide(1, line)),
-        padding=ft.Padding(44, 42, 44, 42),
-        key="about-section",
-    )
-
-    records_promo = ft.Container(
-        content=ft.ResponsiveRow(
-            [
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("PUBLIC RECORDS", size=12, color=theme.ACCENT, weight=ft.FontWeight.BOLD, style=ft.TextStyle(letter_spacing=2)),
-                            ft.Text("Explore Public Legislative Records", size=27, color=theme.ON_BLUE, weight=ft.FontWeight.BOLD),
-                            ft.Text("Find publicly available ordinances, resolutions, and other legislative documents of the Sangguniang Bayan of Tolosa.", size=14, color=theme.ON_BLUE_MUTED),
-                        ],
-                        spacing=12,
-                    ),
-                    col={"xs": 12, "md": 8},
-                ),
-                ft.Container(
-                    content=ft.ElevatedButton(
-                        "View Public Documents",
-                        icon=ft.Icons.ARROW_FORWARD,
-                        color=navy,
-                        bgcolor=ft.Colors.WHITE,
-                        style=ft.ButtonStyle(padding=ft.Padding(22, 16, 22, 16), shape=ft.RoundedRectangleBorder(radius=13)),
-                        on_click=open_public_documents,
-                    ),
-                    alignment=ft.Alignment.CENTER_RIGHT,
-                    col={"xs": 12, "md": 4},
-                ),
-            ],
-            spacing=20,
-            run_spacing=18,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        gradient=theme.blue_band_gradient(),
-        padding=ft.Padding(42, 34, 42, 34),
-        key="records-section",
-    )
-
-    def announcement_row(item, first, last):
-        heading = [
-            ft.Text((item.get("category") or "").upper(), size=11, color=label_blue, weight=ft.FontWeight.BOLD),
+    def announcement_row(item):
+        icon, color = announcement_style(item.get("category"))
+        lines = [
+            ft.Text((item.get("category") or "").upper(), size=10, color=label_blue, weight=ft.FontWeight.BOLD, style=ft.TextStyle(letter_spacing=1)),
             ft.Text(item.get("title") or "", size=14, color=ink, weight=ft.FontWeight.BOLD),
         ]
         if item.get("details"):
-            heading.append(ft.Text(item["details"], size=12, color=muted))
+            lines.append(ft.Text(item["details"], size=12, color=muted))
+        if item.get("date"):
+            lines.append(ft.Text(item["date"], size=12, color=muted))
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Column(heading, spacing=5, expand=True),
-                    ft.Text(item.get("date") or "", size=10, color=muted),
+                    ft.Container(
+                        content=ft.Icon(icon, color=color, size=22),
+                        width=44, height=44, border_radius=22,
+                        alignment=ft.Alignment(0, 0),
+                        bgcolor=ft.Colors.with_opacity(0.14, color),
+                    ),
+                    ft.Column(lines, spacing=3, expand=True),
                 ],
-                vertical_alignment=ft.CrossAxisAlignment.START,
+                spacing=14,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.Padding(0, 0 if first else 14, 0, 0 if last else 14),
-            border=None if last else ft.Border(bottom=ft.BorderSide(1, line)),
+            padding=ft.Padding(16, 14, 14, 14),
+            bgcolor=surface,
+            border=ft.border.all(1, line),
+            border_radius=14,
+            shadow=soft_shadow,
         )
 
     announcement_items = load_homepage_announcements()
-    announcement_rows = [
-        announcement_row(item, index == 0, index == len(announcement_items) - 1)
-        for index, item in enumerate(announcement_items)
-    ] or [ft.Text("There are no announcements right now.", size=14, color=muted)]
+    announcement_rows = [announcement_row(item) for item in announcement_items] or [
+        ft.Container(
+            ft.Text("There are no announcements right now.", size=14, color=muted),
+            padding=20,
+            bgcolor=surface,
+            border=ft.border.all(1, line),
+            border_radius=14,
+        )
+    ]
 
-    announcements = ft.Container(
-        content=ft.ResponsiveRow(
-            [
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("ANNOUNCEMENTS", size=12, color=label_blue, weight=ft.FontWeight.BOLD, style=ft.TextStyle(letter_spacing=2)),
-                            ft.Text("What is happening in Tolosa", size=27, color=ink, weight=ft.FontWeight.BOLD),
-                            theme.accent_bar(),
-                            ft.Text("Public notices and legislative updates from the Sangguniang Bayan.", size=14, color=muted),
-                        ],
-                        spacing=12,
-                    ),
-                    col={"xs": 12, "md": 4},
-                ),
-                ft.Container(
-                    content=ft.Column(announcement_rows, spacing=0),
-                    bgcolor=surface,
-                    border=ft.border.all(1, line),
-                    border_radius=18,
-                    padding=24,
-                    shadow=ft.BoxShadow(blur_radius=10, offset=ft.Offset(0, 2), color=ft.Colors.with_opacity(0.08, ft.Colors.BLACK)),
-                    col={"xs": 12, "md": 8},
-                ),
-            ],
-            spacing=36,
-            run_spacing=24,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        bgcolor=canvas,
-        padding=ft.Padding(44, 46, 44, 46),
+    announcements = ft.Column(
+        [
+            eyebrow("LATEST UPDATES"),
+            ft.Text("Announcements", size=24, weight=ft.FontWeight.BOLD, color=navy),
+            ft.Container(height=4),
+            ft.Column(announcement_rows, spacing=10),
+        ],
+        spacing=8,
         key="announcements-section",
     )
 
-    civic_message = ft.Container(
+    information = ft.Container(
+        content=ft.ResponsiveRow(
+            [
+                ft.Container(quick_access, col={"xs": 12, "lg": 7}),
+                ft.Container(announcements, col={"xs": 12, "lg": 5}),
+            ],
+            spacing=48,
+            run_spacing=36,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        ),
+        bgcolor=canvas,
+        padding=ft.Padding(56, 44, 56, 48),
+    )
+
+    def about_point(icon, title, description):
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Icon(icon, color=label_blue, size=22),
+                        width=44, height=44, border_radius=12,
+                        alignment=ft.Alignment(0, 0),
+                        bgcolor=ft.Colors.with_opacity(0.12, theme.PRIMARY),
+                    ),
+                    ft.Column(
+                        [
+                            ft.Text(title, size=14, weight=ft.FontWeight.BOLD, color=ink),
+                            ft.Text(description, size=13, color=muted),
+                        ],
+                        spacing=3,
+                        expand=True,
+                    ),
+                ],
+                spacing=14,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            col={"xs": 12, "md": 4},
+        )
+
+    about = ft.Container(
         content=ft.Column(
             [
-                ft.Text("Information for the Community", size=24, color=ink, weight=ft.FontWeight.BOLD),
-                ft.Text("Providing accessible legislative information helps promote transparency, accountability, and informed participation in the community.", size=14, color=muted, text_align=ft.TextAlign.CENTER),
+                eyebrow("ABOUT THE SYSTEM"),
+                ft.Text("A clearer way to follow local legislation", size=24, weight=ft.FontWeight.BOLD, color=navy),
+                ft.Text(
+                    "The Legislative Document Tracking Management System brings the records of the Sangguniang Bayan of Tolosa "
+                    "into one organized digital space.",
+                    size=14,
+                    color=muted,
+                ),
+                ft.Container(height=8),
+                ft.ResponsiveRow(
+                    [
+                        about_point(ft.Icons.SEARCH, "Find records", "Look up ordinances, resolutions and other public documents by title, number or year."),
+                        about_point(ft.Icons.TIMELINE, "Follow their progress", "See each measure's stage as it moves through the Sangguniang Bayan."),
+                        about_point(ft.Icons.VERIFIED_OUTLINED, "Transparent public service", "Accessible legislative information supports informed participation."),
+                    ],
+                    spacing=28,
+                    run_spacing=20,
+                ),
             ],
-            spacing=12,
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=8,
         ),
         bgcolor=surface,
-        padding=ft.Padding(40, 44, 40, 44),
+        border=ft.Border(top=ft.BorderSide(1, line), bottom=ft.BorderSide(1, line)),
+        padding=ft.Padding(56, 40, 56, 44),
+        key="about-section",
     )
+
+    def footer_link(label, on_click):
+        return ft.TextButton(label, on_click=on_click, style=ft.ButtonStyle(color=theme.ON_BLUE, padding=ft.Padding(6, 4, 6, 4)))
 
     footer = ft.Container(
         content=ft.ResponsiveRow(
@@ -429,63 +497,60 @@ def build_homepage_view(page=None):
                 ft.Container(
                     content=ft.Column(
                         [
-                            theme.brand(subtitle="Municipality of Tolosa", on_blue=True),
+                            theme.brand(subtitle="Municipality of Tolosa", on_blue=True, seal_size=40),
                             ft.Text("Legislative Document Tracking Management System", size=12, color=theme.ON_BLUE_MUTED),
                         ],
                         spacing=10,
-                    ),
-                    col={"xs": 12, "md": 5},
-                ),
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("CONTACT", size=11, color=theme.ACCENT, weight=ft.FontWeight.BOLD),
-                            ft.Text("Municipal Hall, Tolosa, Leyte", size=12, color=theme.ON_BLUE),
-                            ft.Text("For public information and legislative concerns, visit the Municipal Hall.", size=12, color=theme.ON_BLUE_MUTED),
-                        ],
-                        spacing=8,
                     ),
                     col={"xs": 12, "md": 4},
                 ),
                 ft.Container(
                     content=ft.Column(
                         [
-                            ft.Text("EXPLORE", size=11, color=theme.ACCENT, weight=ft.FontWeight.BOLD),
-                            ft.Text("Home  ·  About  ·  Public Documents", size=12, color=theme.ON_BLUE),
-                            ft.Text("Announcements  ·  Contact", size=12, color=theme.ON_BLUE),
+                            ft.Row(
+                                [ft.Icon(ft.Icons.PLACE_OUTLINED, size=16, color=theme.ACCENT), ft.Text("Municipal Hall, Tolosa, Leyte", size=13, color=theme.ON_BLUE, weight=ft.FontWeight.W_600)],
+                                spacing=6,
+                            ),
+                            ft.Text("For public information and legislative concerns, visit the Municipal Hall.", size=12, color=theme.ON_BLUE_MUTED),
                         ],
-                        spacing=8,
+                        spacing=6,
                     ),
-                    col={"xs": 12, "md": 3},
+                    col={"xs": 12, "md": 4},
                 ),
                 ft.Container(
-                    content=ft.Text("© Municipality of Tolosa. All rights reserved.", size=11, color=theme.ON_BLUE_MUTED),
-                    padding=ft.Padding(0, 16, 0, 0),
-                    border=ft.Border(top=ft.BorderSide(1, ft.Colors.with_opacity(0.2, ft.Colors.WHITE))),
-                    col={"xs": 12, "md": 12},
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    footer_link("Home", lambda _: content_scroll.scroll_to(offset=0, duration=400)),
+                                    footer_link("About", scroll_to("about-section")),
+                                    footer_link("Public Documents", lambda _: open_public_documents()),
+                                    footer_link("Announcements", scroll_to("announcements-section")),
+                                ],
+                                spacing=0,
+                                wrap=True,
+                                alignment=ft.MainAxisAlignment.END,
+                            ),
+                            ft.Text("© Municipality of Tolosa. All rights reserved.", size=11, color=theme.ON_BLUE_MUTED, text_align=ft.TextAlign.RIGHT),
+                        ],
+                        spacing=6,
+                        horizontal_alignment=ft.CrossAxisAlignment.END,
+                    ),
+                    col={"xs": 12, "md": 4},
                 ),
             ],
             spacing=28,
-            run_spacing=24,
+            run_spacing=20,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         gradient=theme.blue_band_gradient(),
-        padding=ft.Padding(38, 38, 30, 24),
+        padding=ft.Padding(56, 28, 56, 28),
         key="contact-section",
     )
 
-    homepage_content = ft.Column(
-        [
-            hero,
-            system_intro,
-            records_promo,
-            announcements,
-            footer,
-        ],
-        spacing=0,
-    )
-
     content_scroll = ft.Column(
-        [utility_bar, homepage_content],
+        [hero, information, about, footer],
+        spacing=0,
         expand=True,
         scroll=ft.ScrollMode.AUTO,
     )

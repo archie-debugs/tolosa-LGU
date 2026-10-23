@@ -174,7 +174,8 @@ def _button(label: str, icon=None, outlined: bool = False):
     return ft.ElevatedButton(label, icon=icon, style=button_style)
 
 
-def build_public_portal(page: ft.Page | None = None) -> ft.Column:
+def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Column:
+    """`search` fills the search box, for a search started on the homepage."""
     # The login page's and admin workspace's colours (frontend/theme.py).
     navy = theme.NAVY
     ink = theme.INK
@@ -373,6 +374,7 @@ def build_public_portal(page: ft.Page | None = None) -> ft.Column:
         render_documents(None, reset_page=True)
 
     search_card.content.controls[1].controls[3].content.controls[1].on_click = clear_filters
+    search_field.value = search
     render_documents(None, reset_page=True)
 
     table_card = ft.Container(
