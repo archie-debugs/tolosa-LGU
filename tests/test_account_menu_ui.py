@@ -483,3 +483,17 @@ def test_large_counts_are_capped():
     feed = Notifications(unread=42)
     shell = Shell(notifications=feed.config())
     assert badge_texts(shell) == ["9+"]
+
+
+def test_the_bell_picks_up_new_notifications_without_a_screen_change():
+    from frontend.admin.admin_shell import _notification_polls
+
+    feed = Notifications(unread=0)
+    shell = Shell(notifications=feed.config())
+    assert badge_texts(shell) == []
+
+    feed.unread = 1
+    _notification_polls[id(shell.page)]()
+
+    assert badge_texts(shell) == ["1"]
+    _notification_polls.pop(id(shell.page), None)

@@ -177,3 +177,23 @@ def test_a_super_admin_without_an_office_sees_system_wide_problems(client):
 def test_notifications_require_a_signed_in_user(client):
     assert client.get("/notifications").status_code == 401
     assert client.post("/notifications/seen").status_code == 401
+
+
+def test_the_sending_office_hears_when_its_document_is_received(client):
+    doc = add_document("DOC-000030", "Records Office", created_at=NOW - timedelta(days=30))
+    old = add_document("DOC-000031", "Records Office", created_at=NOW - timedelta(days=30))
+    add_handoff(doc, "Records Office", "Office of the Mayor", hours_ago=3, status="Received")
+    add_handoff(old, "Records Office", "Office of the Mayor", hours_ago=24 * 10, status="Received")
+    offices, users = ids()
+    with SessionLocal() as db:
+        for handoff, confirmed_at in ((doc, NOW - timedelta(hours=1)), (old, NOW - timedelta(days=9))):
+            handoff_id = db.query(models.DocumentHandoff.id).filter(models.DocumentHandoff.document_id == handoff).scalar()
+            db.add(models.DocumentReceipt(document_id=handoff, office_id=offices["Office of the Mayor"], handoff_id=handoff_id,
+                                          confirmed_by_user_id=users["mayor"], status="Received", confirmed_at=confirmed_at))
+        db.commit()
+
+    body = notifications(client, "rec")
+
+    assert kinds(body) == [("received", "DOC-000030")]
+    assert body["items"][0]["message"] == "Received by Office of the Mayor (mayor)."
+    assert ("received", "DOC-000030") not in kinds(notifications(client, "mayor"))

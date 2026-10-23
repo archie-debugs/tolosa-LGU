@@ -19,7 +19,7 @@ router = APIRouter()
 
 DUE_SOON_DAYS = 3
 RECENT_REGISTRATION_DAYS = 7
-# How long a cancelled or returned handoff stays in the other office's notifications.
+# How long a received, cancelled or returned handoff stays in the other office's notifications.
 RECENT_CLOSED_HANDOFF_DAYS = 7
 MAX_ITEMS = 30
 
@@ -100,6 +100,14 @@ def _office_items(db, user, now, today):
             items.append(_item("outgoing_overdue", handoff.document, at,
                                f"Not yet received by {receiver} after {hours} hours.", handoff.id))
     closed_since = now - timedelta(days=RECENT_CLOSED_HANDOFF_DAYS)
+    for receipt in db.query(models.DocumentReceipt).join(models.DocumentHandoff, models.DocumentReceipt.handoff_id == models.DocumentHandoff.id).filter(
+        models.DocumentHandoff.sending_office_id == office_id,
+        models.DocumentReceipt.confirmed_at >= closed_since,
+    ):
+        receiver = receipt.office.name if receipt.office else "the other office"
+        by = f" ({receipt.confirmed_by.username})" if receipt.confirmed_by else ""
+        items.append(_item("received", receipt.document, _aware(receipt.confirmed_at),
+                           f"Received by {receiver}{by}.", receipt.id))
     for handoff in db.query(models.DocumentHandoff).filter(
         models.DocumentHandoff.closed_at >= closed_since,
         ((models.DocumentHandoff.status == "Returned") & (models.DocumentHandoff.sending_office_id == office_id))
