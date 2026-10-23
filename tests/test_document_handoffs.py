@@ -272,6 +272,61 @@ def test_super_admin_can_monitor_selected_office_without_changing_assignment():
         assert admin.office_id != monitored_office_id
 
 
+def test_super_admin_without_an_office_can_monitor_any_office_and_open_any_scanned_document():
+    reset_db()
+    client = TestClient(main.app)
+
+    with SessionLocal() as db:
+        office = models.Office(name="Monitored Office", office_code="MONI")
+        db.add(office)
+        db.commit()
+        db.refresh(office)
+        doc = models.Document(
+            tracking_number="DOC-500012",
+            title="Scanned Anywhere",
+            status="Approved",
+            priority="Medium",
+            current_office="Monitored Office",
+            current_office_id=office.id,
+            qr_token="super-admin-anywhere-token-012",
+            qr_code_value="https://example.test/qr/super-admin-anywhere-token-012",
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        db.add(models.DocumentOffice(document_id=doc.id, office_id=office.id))
+        db.add(models.User(
+            username="officeless-super-admin",
+            hashed_password=get_password_hash("pw123"),
+            role="Super Administrator",
+            office_id=None,
+            permissions="['*']",
+            status="Active",
+            is_active=True,
+        ))
+        db.commit()
+        office_id = office.id
+        document_id = doc.id
+
+    headers = bearer_headers(client, "officeless-super-admin", "pw123")
+    for path in ("/documents/office", "/documents/office/queue", "/documents/office/history", "/documents/office/received-count"):
+        response = client.get(path, params={"office_id": office_id}, headers=headers)
+        assert response.status_code == 200, f"{path}: {response.text}"
+    listed = client.get("/documents/office", params={"office_id": office_id}, headers=headers)
+    assert [item["id"] for item in listed.json()["items"]] == [document_id]
+
+    # Without a chosen office there is no "own office" to show.
+    own = client.get("/documents/office", headers=headers)
+    assert own.status_code == 403
+    assert own.json()["detail"] == "Office assignment required"
+
+    scanned = client.get("/documents/qr/super-admin-anywhere-token-012/office", headers=headers)
+    assert scanned.status_code == 200, scanned.text
+    assert scanned.json()["document_id"] == document_id
+    assert scanned.json()["office_name"] == "Monitored Office"
+    assert scanned.json()["handoff_status"] is None
+
+
 def test_handoff_lists_are_office_scoped_and_history_is_ordered():
     reset_db()
     client = TestClient(main.app)

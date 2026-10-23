@@ -1352,11 +1352,10 @@ def _serialize_office_document(doc: models.Document):
 
 def _resolve_office_monitoring_id(db: Session, current_user: models.User, requested_office_id: int | None) -> int:
     assigned_office_id = getattr(current_user, "office_id", None)
-    if assigned_office_id is None:
-        raise HTTPException(status_code=403, detail="Office assignment required")
-    if requested_office_id is None:
-        return assigned_office_id
-    if normalize_user_role(getattr(current_user, "role", None)) != "Super Administrator":
+    # A Super Administrator may monitor any active office, whether or not they have one of their own.
+    if requested_office_id is None or normalize_user_role(getattr(current_user, "role", None)) != "Super Administrator":
+        if assigned_office_id is None:
+            raise HTTPException(status_code=403, detail="Office assignment required")
         return assigned_office_id
     office = db.query(models.Office).filter(
         models.Office.id == requested_office_id,
@@ -2381,7 +2380,9 @@ def public_lookup_qr_by_value(qr_value: str, request: Request, db: Session = Dep
 
 
 def _resolve_office_qr_access(db: Session, current_user: models.User, qr_value: str):
-    if getattr(current_user, "office_id", None) is None:
+    # A Super Administrator may open any scanned document, whatever office it is at or they belong to.
+    super_admin = normalize_user_role(getattr(current_user, "role", None)) == "Super Administrator"
+    if not super_admin and getattr(current_user, "office_id", None) is None:
         raise HTTPException(status_code=403, detail="Office assignment required for QR access")
 
     require_permission(current_user, "scan_qr")
@@ -2398,6 +2399,36 @@ def _resolve_office_qr_access(db: Session, current_user: models.User, qr_value: 
             details="QR identifier was not matched to a document",
         )
         raise HTTPException(status_code=404, detail="QR code not recognized")
+
+    if super_admin:
+        latest_handoff = db.query(models.DocumentHandoff).filter(
+            models.DocumentHandoff.document_id == doc.id,
+        ).order_by(models.DocumentHandoff.id.desc()).first()
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="OFFICE_QR_ACCESS",
+            target_type="document",
+            target_id=str(doc.id),
+            details=f"Super Administrator QR access granted for {doc.tracking_number}",
+        )
+        return {
+            "document_id": doc.id,
+            "tracking_number": doc.tracking_number,
+            "title": doc.title,
+            "document_type": doc.document_type,
+            "document_number": doc.document_number,
+            "series_year": doc.series_year,
+            "status": doc.status,
+            "description": doc.description,
+            "office_name": doc.current_office,
+            "office_id": doc.current_office_id,
+            "handoff_status": latest_handoff.status if latest_handoff else None,
+            "assigned_to": doc.assigned_to,
+            "author": doc.author,
+            "qr_token": doc.qr_token,
+            "qr_payload": doc.qr_code_value or _compute_qr_payload(doc),
+        }
 
     office_handoff = db.query(models.DocumentHandoff).filter(
         models.DocumentHandoff.document_id == doc.id,
