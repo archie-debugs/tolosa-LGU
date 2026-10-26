@@ -9,6 +9,7 @@ from datetime import date
 
 import flet as ft
 
+from frontend.admin.council import date_field
 from frontend.admin.documents import DROPDOWN_EVENT
 from frontend.admin.order_of_business import build_business_card
 from frontend.admin.tracking_ui import TrackingWidgets
@@ -329,7 +330,7 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
                            **{DROPDOWN_EVENT: lambda _: suggest_number()})
         number = ft.TextField(label="Number in the term", width=180,
                               value=str((session or {}).get("number") or state["next_numbers"].get("Regular", 1)))
-        held_on = ft.TextField(label="Date", hint_text="YYYY-MM-DD", width=200, value=(session or {}).get("held_on") or "")
+        held_on, held_on_box = date_field(page, "Date", (session or {}).get("held_on"))
 
         def suggest_number():
             if session is None:
@@ -342,7 +343,7 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
             try:
                 day = date.fromisoformat((held_on.value or "").strip()).isoformat()
             except ValueError:
-                raise ValueError("The date must look like 2026-10-22.")
+                raise ValueError("Pick the session date.")
             payload = {"kind": kind.value, "number": int(number.value), "held_on": day}
             if session:
                 state["session"] = dialog_call("PUT", f"/council/sessions/{session['id']}", json=payload)
@@ -352,7 +353,7 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
                 state["business"] = dialog_call("GET", f"/council/sessions/{state['session']['id']}/business")
                 show(f"Added the {state['session']['title']} as a draft.")
         open_dialog("Edit session" if session else "Add session",
-                    [ft.Row([kind, number], spacing=12, wrap=True), held_on,
+                    [ft.Row([kind, number], spacing=12, wrap=True), held_on_box,
                      ui.hint("A new session starts as a draft. Schedule it when the date is set, and mark it held afterwards.")],
                     "Save", on_save)
 
