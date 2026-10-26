@@ -87,6 +87,7 @@ def test_adding_a_session_suggests_the_next_number_and_opens_the_new_draft():
     form = dialog(page)
     number, held_on = [item for item in walk(form.content) if isinstance(item, ft.TextField)]
     assert number.value == "3"
+    assert held_on.read_only is True  # picked from a calendar
     held_on.value = "2026-10-27"
     save(form)
 

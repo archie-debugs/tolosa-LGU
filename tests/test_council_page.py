@@ -1,5 +1,7 @@
 import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
 import flet as ft
+from datetime import datetime
+from types import SimpleNamespace
 
 from frontend.admin.council import build_members_committees_view
 from tests.test_account_menu_ui import DummyPage, walk as walk_controls
@@ -171,3 +173,57 @@ def test_picking_an_sb_member_account_fills_in_the_name_position_and_login():
     save(form)
     assert ("POST", "/council/members",
             {"full_name": "Hon. Jose Cruz", "position": "SK Federation President", "user_id": 8, "term_id": 2}) in api.calls
+
+
+def handler(event):
+    """Older Flet wraps some controls' handlers in an EventHandler."""
+    handlers = getattr(event, "_EventHandler__handlers", None)
+    return next(iter(handlers)) if handlers is not None else event
+
+
+def test_term_dates_are_picked_from_a_calendar_not_typed(monkeypatch):
+    opened = []
+    monkeypatch.setattr(ft.DatePicker, "pick_date", lambda self: opened.append(self), raising=False)
+    page = DummyPage()
+    page.open = lambda control: opened.append(control)
+    api = FakeApi()
+    view = build_members_committees_view(page, surface_card, api, can_manage=True)
+
+    button(view, "Add term").on_click(None)
+    form = dialog(page)
+    name, starts, ends = [item for item in walk(form.content) if isinstance(item, ft.TextField)]
+    assert starts.read_only and ends.read_only
+    covers = [item for item in walk(form.content) if isinstance(item, ft.Container) and item.on_click]
+    name.value = "14th Sangguniang Bayan"
+    for cover, day in zip(covers, (datetime(2028, 7, 1), datetime(2031, 6, 30))):
+        handler(cover.on_click)(None)
+        handler(opened[-1].on_change)(SimpleNamespace(control=SimpleNamespace(value=day)))
+
+    assert (starts.value, ends.value) == ("2028-07-01", "2031-06-30")
+    save(form)
+    assert ("POST", "/council/terms", {"name": "14th Sangguniang Bayan", "starts_on": "2028-07-01", "ends_on": "2031-06-30"}) in api.calls
+
+
+def test_a_term_without_dates_asks_for_them():
+    page, view = build(FakeApi())
+    button(view, "Add term").on_click(None)
+    form = dialog(page)
+    field(form, "Name").value = "14th Sangguniang Bayan"
+    save(form)
+    assert form.open is True and "Pick the starts on date." in texts(form.content)
+
+
+def test_left_on_is_picked_and_can_be_cleared():
+    api = FakeApi()
+    page, view = build(api)
+
+    next(item for item in walk(view) if isinstance(item, ft.IconButton) and item.tooltip == "Edit").on_click(None)
+    form = dialog(page)
+    left = field(form, "Left on")
+    assert left.read_only is True
+    left.value = "2026-09-30"
+    next(item for item in walk(form.content) if isinstance(item, ft.IconButton) and item.tooltip == "Clear the date").on_click(None)
+    save(form)
+
+    assert ("PUT", "/council/members/10",
+            {"full_name": "Hon. Maria Santos", "position": "Vice Mayor", "user_id": 7, "left_on": None}) in api.calls

@@ -5,11 +5,12 @@ permission, which the backend checks on every call. Nothing is deleted: members 
 and committees are deactivated (docs/adr/0002).
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import flet as ft
 
 from frontend.admin.documents import DROPDOWN_EVENT
+from frontend.admin.todays_documents import picked_date
 from frontend.admin.tracking_ui import TrackingWidgets
 
 POSITIONS = ["Vice Mayor", "Regular Member", "Liga ng mga Barangay President", "SK Federation President", "IPMR"]
@@ -18,10 +19,56 @@ NO_LOGIN = "none"  # dropdown key for "no login" / "no chair" / "type it in"
 
 def _parse_date(value, label):
     text = (value or "").strip()
+    if not text:
+        raise ValueError(f"Pick the {label.lower()} date.")
     try:
         return date.fromisoformat(text).isoformat()
     except ValueError:
         raise ValueError(f"{label} must be a date like 2025-07-01.")
+
+
+def date_field(page, label, value, width=200, clearable=False):
+    """A date box that can't be typed in: clicking it opens a calendar. Returns (field, control to show).
+
+    `clearable` adds a button to empty it, for optional dates.
+    """
+    field = ft.TextField(label=label, hint_text="Pick a date", value=value or "", width=width, read_only=True,
+                         suffix_icon=ft.Icons.CALENDAR_MONTH_OUTLINED)
+
+    def picked(e):
+        day = picked_date(e.control.value)
+        if day:
+            field.value = day.isoformat()
+            page.update()
+
+    def pick(_):
+        # One picker per page, shared by every date box; it fills whichever box opened it last.
+        picker = getattr(page, "_council_date_picker", None)
+        if picker is None:
+            picker = page._council_date_picker = ft.DatePicker(first_date=datetime(2000, 1, 1), last_date=datetime(2100, 12, 31))
+        picker.on_change = picked
+        try:
+            current = date.fromisoformat(field.value)
+        except ValueError:
+            current = None
+        picker.value = datetime.combine(current, datetime.min.time()) if current else None
+        if hasattr(picker, "pick_date"):  # older Flet: the picker lives in the overlay
+            if picker not in page.overlay:
+                page.overlay.append(picker)
+                page.update()
+            picker.pick_date()
+        else:
+            page.open(picker)
+
+    def clear(_):
+        field.value = ""
+        page.update()
+
+    # A see-through layer over the box takes the click, since a read-only text field keeps it.
+    box = ft.Stack([field, ft.Container(left=0, top=0, right=0, bottom=0, on_click=pick)], width=width)
+    if clearable:
+        box = ft.Row([box, ft.IconButton(ft.Icons.CLOSE, tooltip="Clear the date", on_click=clear)], spacing=4)
+    return field, box
 
 
 def build_members_committees_view(page, surface_card, api, *, can_manage):
@@ -121,7 +168,6 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
     dialog_error = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
     dialog = ft.AlertDialog(modal=True, title=ft.Text(""), content=ft.Column([], tight=True, spacing=12, width=440), actions=[])
     page.overlay.append(dialog)
-
     def open_dialog(title, fields, on_save):
         def save(_):
             try:
@@ -158,8 +204,8 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
 
     def open_term(item=None):
         name = ft.TextField(label="Name", hint_text="e.g. 13th Sangguniang Bayan", value=(item or {}).get("name", ""))
-        starts = ft.TextField(label="Starts on", hint_text="YYYY-MM-DD", value=(item or {}).get("starts_on", ""), width=200)
-        ends = ft.TextField(label="Ends on", hint_text="YYYY-MM-DD", value=(item or {}).get("ends_on", ""), width=200)
+        starts, starts_box = date_field(page, "Starts on", (item or {}).get("starts_on"))
+        ends, ends_box = date_field(page, "Ends on", (item or {}).get("ends_on"))
 
         def on_save():
             payload = {"name": (name.value or "").strip(), "starts_on": _parse_date(starts.value, "Starts on"),
@@ -171,7 +217,7 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
             result = saved(dialog_call("POST", "/council/terms", json=payload), "Term added.")
             state["term_id"] = result["id"]
             return result
-        open_dialog("Edit term" if item else "Add term", [name, ft.Row([starts, ends], spacing=12)], on_save)
+        open_dialog("Edit term" if item else "Add term", [name, ft.Row([starts_box, ends_box], spacing=12)], on_save)
 
     def open_member(item=None):
         name = ft.TextField(label="Full name", hint_text="e.g. Hon. Maria Santos", value=(item or {}).get("full_name", ""))
@@ -183,8 +229,10 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
                             + [ft.dropdown.Option(key=str(user["id"]), text=f"{user['username']} ({user.get('role') or '-'})") for user in users],
                             visible=bool(users))
         login_hint = ui.hint("Linking a login needs the View Users permission.") if not users else None
-        left = ft.TextField(label="Left on (only if they left before the term ends)", hint_text="YYYY-MM-DD",
-                            value=(item or {}).get("left_on") or "", visible=item is not None)
+        left, left_box = date_field(page, "Left on", (item or {}).get("left_on"), clearable=True)
+        left_box.visible = item is not None
+        left_hint = ui.hint("Left on: only if they left before the term ends.")
+        left_hint.visible = item is not None
         # Adding: pick an SB Member account to fill in the name, position and login from it.
         taken = {member.get("user_id") for member in state["members"] if member.get("is_active")}
         accounts = {str(account["id"]): account for account in state["accounts"] if account["id"] not in taken}
@@ -219,7 +267,7 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
             if not state["term_id"]:
                 raise ValueError("Add a term first.")
             return saved(dialog_call("POST", "/council/members", json={**payload, "term_id": state["term_id"]}), "Member added.")
-        fields = [picker, name, position, login] + ([login_hint] if login_hint else []) + [left]
+        fields = [picker, name, position, login] + ([login_hint] if login_hint else []) + [left_hint, left_box]
         open_dialog("Edit member" if item else f"Add member to the {(term() or {}).get('name', 'term')}", fields, on_save)
 
     def chair_options(current_id=None):
