@@ -21,9 +21,10 @@ COMMITTEES = [{"id": 5, "name": "Committee on Health", "chair_member_id": 10, "c
 
 
 class FakeApi:
-    def __init__(self, users=None):
+    def __init__(self, users=None, accounts=()):
         self.calls = []
         self.users = users
+        self.accounts = list(accounts)
 
     def __call__(self, method, path, **kwargs):
         self.calls.append((method, path, kwargs.get("json")))
@@ -33,6 +34,8 @@ class FakeApi:
             return MEMBERS[int(path.rsplit("=", 1)[1])]
         if path == "/council/committees" and method == "GET":
             return COMMITTEES
+        if path == "/council/member-accounts":
+            return self.accounts
         if path == "/auth/users":
             if self.users is None:
                 raise Exception("Permission denied")
@@ -67,6 +70,14 @@ def dialog(page):
     return next(item for item in page.overlay if isinstance(item, ft.AlertDialog))
 
 
+def field(form, label):
+    return next(item for item in walk(form.content) if isinstance(item, (ft.TextField, ft.Dropdown)) and item.label == label)
+
+
+def save(form):
+    next(action for action in form.actions if getattr(action, "text", None) == "Save" or getattr(action, "content", None) == "Save").on_click(None)
+
+
 def test_it_opens_on_the_current_term_with_members_and_committees():
     page, view = build(FakeApi())
     shown = texts(view)
@@ -91,8 +102,8 @@ def test_adding_a_member_posts_to_the_selected_term_with_the_chosen_login():
 
     button(view, "Add member").on_click(None)
     form = dialog(page)
-    fields = [item for item in walk(form.content) if isinstance(item, (ft.TextField, ft.Dropdown))]
-    name, position, login = fields[0], fields[1], fields[2]
+    name, position, login = field(form, "Full name"), field(form, "Position"), field(form, "Login (optional)")
+    assert field(form, "SB Member").visible is False  # no SB Member accounts to pick from
     name.value, position.value, login.value = "Hon. Jose Cruz", "Regular Member", "7"
     next(action for action in form.actions if getattr(action, "text", None) == "Save" or getattr(action, "content", None) == "Save").on_click(None)
 
@@ -107,7 +118,7 @@ def test_without_view_users_the_login_is_hidden_and_an_edit_keeps_the_linked_log
     edit = next(item for item in walk(view) if isinstance(item, ft.IconButton) and item.tooltip == "Edit")
     edit.on_click(None)
     form = dialog(page)
-    login = [item for item in walk(form.content) if isinstance(item, ft.Dropdown)][1]
+    login = field(form, "Login (optional)")
     assert login.visible is False
     assert "Linking a login needs the View Users permission." in texts(form.content)
     next(action for action in form.actions if getattr(action, "text", None) == "Save" or getattr(action, "content", None) == "Save").on_click(None)
@@ -138,3 +149,25 @@ def test_deactivating_a_committee_keeps_its_name_and_chair():
     next(item for item in walk(view) if isinstance(item, ft.IconButton) and item.tooltip == "Deactivate").on_click(None)
 
     assert ("PUT", "/council/committees/5", {"name": "Committee on Health", "chair_member_id": 10, "is_active": False}) in api.calls
+
+
+def test_picking_an_sb_member_account_fills_in_the_name_position_and_login():
+    accounts = [{"id": 7, "full_name": "Hon. Maria Santos", "username": "msantos", "sb_position": "Vice Mayor"},
+                {"id": 8, "full_name": "Hon. Jose Cruz", "username": "jcruz", "sb_position": "SK Federation President"}]
+    api = FakeApi(users=None, accounts=accounts)
+    page, view = build(api)
+
+    button(view, "Add member").on_click(None)
+    form = dialog(page)
+    picker = field(form, "SB Member")
+    assert picker.visible is True
+    # Hon. Maria Santos (user 7) is already a current member of this term, so only Jose Cruz is offered.
+    assert [option.key for option in picker.options] == ["none", "8"]
+    picker.value = "8"
+    picker.on_select(None) if getattr(picker, "on_select", None) else picker.on_change(None)
+
+    assert field(form, "Full name").value == "Hon. Jose Cruz"
+    assert field(form, "Position").value == "SK Federation President"
+    save(form)
+    assert ("POST", "/council/members",
+            {"full_name": "Hon. Jose Cruz", "position": "SK Federation President", "user_id": 8, "term_id": 2}) in api.calls

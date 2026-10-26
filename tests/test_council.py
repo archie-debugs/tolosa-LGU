@@ -160,3 +160,29 @@ def test_members_default_to_the_current_term(client):
 
     assert [m["full_name"] for m in client.get("/council/members", headers=admin).json()] == ["Hon. Present Member"]
     assert [m["full_name"] for m in client.get(f"/council/members?term_id={old['id']}", headers=admin).json()] == ["Hon. Past Member"]
+
+
+def test_sb_member_accounts_keep_their_position_for_filling_in_the_roster(client):
+    admin = headers_for(client, "admin")
+    account = {"username": "santos", "password": "pw123", "full_name": "Hon. Maria Santos", "email": "santos@example.com"}
+
+    created = client.post("/auth/register", headers=admin, json={**account, "role": "SB Member", "sb_position": "Vice Mayor"})
+    assert created.status_code == 200, created.text
+    assert created.json()["sb_position"] == "Vice Mayor"
+    bad = client.post("/auth/register", headers=admin, json={**account, "username": "x", "role": "SB Member", "sb_position": "Councilor"})
+    assert bad.status_code == 400
+    employee = client.post("/auth/register", headers=admin, json={**account, "username": "staff", "role": "Employee", "sb_position": "IPMR"})
+    assert employee.status_code == 200 and employee.json()["sb_position"] is None
+
+    accounts = client.get("/council/member-accounts", headers=headers_for(client, "clerk")).json()
+    assert [(a["full_name"], a["sb_position"]) for a in accounts] == [("Hon. Maria Santos", "Vice Mayor"), ("member", None)]
+    for username in ("reader", "member"):
+        assert client.get("/council/member-accounts", headers=headers_for(client, username)).status_code == 403
+
+    edit = {"full_name": "Hon. Maria Santos", "username": "santos", "email": "santos@example.com",
+            "role": "SB Member", "status": "Active", "permissions": ["view_documents"]}
+    user_id = created.json()["id"]
+    assert client.put(f"/auth/users/{user_id}", headers=admin, json=edit).status_code == 200  # no sb_position sent: kept
+    assert client.put(f"/auth/users/{user_id}", headers=admin, json={**edit, "sb_position": "Regular Member"}).status_code == 200
+    users = {user["username"]: user for user in client.get("/auth/users", headers=admin).json()}
+    assert users["santos"]["sb_position"] == "Regular Member"

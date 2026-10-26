@@ -13,7 +13,7 @@ from frontend.admin.documents import DROPDOWN_EVENT
 from frontend.admin.tracking_ui import TrackingWidgets
 
 POSITIONS = ["Vice Mayor", "Regular Member", "Liga ng mga Barangay President", "SK Federation President", "IPMR"]
-NO_LOGIN = "none"  # dropdown key for "no login" / "no chair"
+NO_LOGIN = "none"  # dropdown key for "no login" / "no chair" / "type it in"
 
 
 def _parse_date(value, label):
@@ -27,7 +27,7 @@ def _parse_date(value, label):
 def build_members_committees_view(page, surface_card, api, *, can_manage):
     """`api(method, path, **kwargs)` returns parsed JSON or raises with the backend's detail."""
     ui = TrackingWidgets(page)
-    state = {"terms": [], "term_id": None, "members": [], "committees": [], "users": None}
+    state = {"terms": [], "term_id": None, "members": [], "committees": [], "users": None, "accounts": []}
     message = ft.Text("", size=12, visible=False)
     term_choice = ft.Dropdown(label="Term", width=320, options=[], **{DROPDOWN_EVENT: lambda _: select_term(term_choice.value)})
     term_dates = ui.hint("")
@@ -47,6 +47,8 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
     def load():
         state["terms"] = call("GET", "/council/terms") or []
         state["committees"] = call("GET", "/council/committees") or []
+        if can_manage:
+            state["accounts"] = call("GET", "/council/member-accounts") or []
         if state["users"] is None and can_manage:
             try:
                 state["users"] = [user for user in api("GET", "/auth/users") if user.get("is_active", True)]
@@ -183,10 +185,29 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
         login_hint = ui.hint("Linking a login needs the View Users permission.") if not users else None
         left = ft.TextField(label="Left on (only if they left before the term ends)", hint_text="YYYY-MM-DD",
                             value=(item or {}).get("left_on") or "", visible=item is not None)
+        # Adding: pick an SB Member account to fill in the name, position and login from it.
+        taken = {member.get("user_id") for member in state["members"] if member.get("is_active")}
+        accounts = {str(account["id"]): account for account in state["accounts"] if account["id"] not in taken}
+
+        def pick_account(_):
+            account = accounts.get(picker.value)
+            if account:
+                name.value = account["full_name"]
+                position.value = account.get("sb_position") or position.value
+                login.value = str(account["id"])
+                page.update()
+
+        picker = ft.Dropdown(label="SB Member", value=NO_LOGIN, visible=item is None and bool(accounts),
+                             options=[ft.dropdown.Option(key=NO_LOGIN, text="Not listed: type it in")]
+                             + [ft.dropdown.Option(key=key, text=f"{account['full_name']} · {account.get('sb_position') or 'no position set'}")
+                                for key, account in accounts.items()],
+                             **{DROPDOWN_EVENT: pick_account})
 
         def on_save():
             if users:
                 user_id = None if login.value in (None, NO_LOGIN) else int(login.value)
+            elif picker.value in accounts:
+                user_id = int(picker.value)
             else:
                 user_id = (item or {}).get("user_id")  # can't see logins: keep whatever is linked
             payload = {"full_name": (name.value or "").strip(), "position": position.value, "user_id": user_id}
@@ -198,7 +219,7 @@ def build_members_committees_view(page, surface_card, api, *, can_manage):
             if not state["term_id"]:
                 raise ValueError("Add a term first.")
             return saved(dialog_call("POST", "/council/members", json={**payload, "term_id": state["term_id"]}), "Member added.")
-        fields = [name, position, login] + ([login_hint] if login_hint else []) + [left]
+        fields = [picker, name, position, login] + ([login_hint] if login_hint else []) + [left]
         open_dialog("Edit member" if item else f"Add member to the {(term() or {}).get('name', 'term')}", fields, on_save)
 
     def chair_options(current_id=None):
