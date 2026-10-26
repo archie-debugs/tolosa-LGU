@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..authentication import get_current_user
-from ..core import lgu_today, record_audit_log, require_permission
+from ..core import lgu_today, normalize_user_role, record_audit_log, require_permission
 from ..database import get_db
 
 router = APIRouter(prefix="/council", tags=["council"])
@@ -182,6 +182,18 @@ def list_members(
     order = {position: index for index, position in enumerate(POSITIONS)}
     members.sort(key=lambda member: (not _is_active_member(member, today), order.get(member.position, 99), member.full_name.lower()))
     return [_member_json(member, today) for member in members]
+
+
+@router.get("/member-accounts")
+def list_member_accounts(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Active SB Member accounts with their SB position, to pick from when adding a member to a term."""
+    require_permission(current_user, MANAGE)
+    users = [user for user in db.query(models.User).filter(models.User.is_active.is_(True)).all()
+             if normalize_user_role(user.role) == "SB Member"]
+    order = {position: index for index, position in enumerate(POSITIONS)}
+    users.sort(key=lambda user: (order.get(user.sb_position, 99), (user.full_name or user.username).lower()))
+    return [{"id": user.id, "full_name": user.full_name or user.username, "username": user.username,
+             "sb_position": user.sb_position} for user in users]
 
 
 @router.post("/members")

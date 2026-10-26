@@ -373,6 +373,8 @@ class User(Base):
     email = Column(String, nullable=True, index=True)
     office_id = Column(Integer, ForeignKey("offices.id"), nullable=True, index=True)
     office = relationship("Office", foreign_keys=[office_id], back_populates="users")
+    # SB Member accounts only: their seat on the SB, used to fill in the member roster (routes/council.py).
+    sb_position = Column(String(60), nullable=True)
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     permissions = Column(Text, nullable=True, default="[]")
     status = Column(String, nullable=False, default="Active", index=True)

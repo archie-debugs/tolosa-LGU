@@ -138,7 +138,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
     if BACKEND_URL.startswith("https://"):
         BACKEND_URL = BACKEND_URL.replace("https://", "http://", 1)
 
-from frontend.admin.council import build_members_committees_view
+from frontend.admin.council import POSITIONS as SB_POSITIONS, build_members_committees_view
 from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.documents import build_documents_view
 from frontend.admin.document_details import open_document_details
@@ -2925,6 +2925,9 @@ def main(page: ft.Page, session=None):
         )
         half = {"xs": 12, "sm": 6}
         office_block = _labelled(widgets, office_choice, "Department/Office", ft.Icons.APARTMENT, required=employee_only, col=None if employee_only else half)
+        # Saved on the account so Members & Committees can add this person to a term without retyping it.
+        sb_position_choice = ft.Dropdown(options=[ft.dropdown.Option(item) for item in SB_POSITIONS], hint_text="Select a position", **field_style)
+        sb_position_block = _labelled(widgets, sb_position_choice, "SB position", ft.Icons.EVENT_SEAT_OUTLINED, required=True, col=half)
 
         permission_area = ft.Column([], spacing=8)
         selected_create_permissions = set()
@@ -2968,6 +2971,7 @@ def main(page: ft.Page, session=None):
             office_block.visible = employee_only or selected_role() == "Employee"
             if not office_block.visible:
                 office_choice.value = office_placeholder
+            sb_position_block.visible = selected_role() == "SB Member"
             if employee_only:
                 has_office = office_choice.value != office_placeholder
                 permission_area.controls.append(widgets.hint(
@@ -3072,6 +3076,11 @@ def main(page: ft.Page, session=None):
                 page.update()
                 return
 
+            if selected_role() == "SB Member" and not sb_position_choice.value:
+                error_message.value = "Please select the SB Member's position."
+                page.update()
+                return
+
             if password.value != confirm_password.value:
                 error_message.value = "Passwords do not match."
                 page.update()
@@ -3091,6 +3100,8 @@ def main(page: ft.Page, session=None):
             }
             if selected_office:
                 payload["office_id"] = selected_office.get("id")
+            if selected_role() == "SB Member":
+                payload["sb_position"] = sb_position_choice.value
             available_permissions = {
                 create_permission_key(label)
                 for labels in create_permission_groups().values()
@@ -3123,6 +3134,7 @@ def main(page: ft.Page, session=None):
                     "email": email.value,
                     "role": body.get("role") or selected_role(),
                     "office_id": body.get("office_id"),
+                    "sb_position": body.get("sb_position"),
                     "department": office_choice.value if selected_office else None,
                     "status": "Active",
                     "permissions": body.get("permissions", permissions),
@@ -3142,6 +3154,7 @@ def main(page: ft.Page, session=None):
         role_row = [office_block] if employee_only else [
             _labelled(widgets, role_choice, "Role", ft.Icons.BADGE_OUTLINED, required=True, col=half),
             office_block,
+            sb_position_block,
         ]
         content = ft.Column([
             _section(widgets, ft.Icons.PERSON_OUTLINE, "Account details", [
@@ -3166,7 +3179,7 @@ def main(page: ft.Page, session=None):
 
         dialog = ft.AlertDialog()
         _style_dialog(
-            dialog, widgets, "Create Employee Account" if employee_only else "Create User Account", content,
+            dialog, widgets, "Create Office User Account" if employee_only else "Create User Account", content,
             [
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
                 _primary_button("Create Account", ft.Icons.PERSON_ADD, create_account),
@@ -3245,6 +3258,20 @@ def main(page: ft.Page, session=None):
             autofocus=False,
             disabled=is_super_admin,
         )
+        sb_position_choice = ft.Dropdown(
+            label="SB Position",
+            value=user.get("sb_position"),
+            options=[ft.dropdown.Option(item) for item in SB_POSITIONS],
+            width=270,
+            autofocus=False,
+            visible=user.get("role") == "SB Member",
+        )
+
+        def role_changed(_):
+            sb_position_choice.visible = role_choice.value == "SB Member"
+            page.update()
+
+        role_choice.on_change = role_changed
         office_choice = ft.Dropdown(
             label="Department/Office",
             options=[ft.dropdown.Option("Unassigned")] + [
@@ -3606,6 +3633,10 @@ def main(page: ft.Page, session=None):
                 error_message.value = "Full name, email, and username are required."
                 page.update()
                 return
+            if role_choice.value == "SB Member" and not sb_position_choice.value:
+                error_message.value = "Please select the SB Member's position."
+                page.update()
+                return
             payload = {
                 "full_name": full_name.value.strip(),
                 "username": username.value.strip(),
@@ -3613,6 +3644,7 @@ def main(page: ft.Page, session=None):
                 "role": role_choice.value,
                 "status": status_choice.value,
                 "permissions": collect_permissions(),
+                "sb_position": sb_position_choice.value if role_choice.value == "SB Member" else None,
             }
             if is_super_admin:
                 payload["permissions"] = ["*"]
@@ -3651,6 +3683,7 @@ def main(page: ft.Page, session=None):
                     ft.Text("Account Information", weight=ft.FontWeight.BOLD, size=14),
                     ft.Row([full_name, username], spacing=10),
                     ft.Row([email, role_choice], spacing=10),
+                    sb_position_choice,
                     office_choice,
                     status_choice,
                     error_message,

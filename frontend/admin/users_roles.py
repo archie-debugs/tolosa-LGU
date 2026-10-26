@@ -495,7 +495,7 @@ def build_users_roles_view(
         office_actions = []
         if create_employee:
             office_actions.append(ft.OutlinedButton(
-                "Create Employee Account", icon=ft.Icons.BADGE_OUTLINED, on_click=create_employee, height=40,
+                "Create Office User Account", icon=ft.Icons.BADGE_OUTLINED, on_click=create_employee, height=40,
                 style=ft.ButtonStyle(shape=pill, color=widgets.accent(), side=ft.BorderSide(1, widgets.accent())),
             ))
         office_actions.append(ft.FilledButton(

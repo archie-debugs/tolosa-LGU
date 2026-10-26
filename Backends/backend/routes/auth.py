@@ -26,6 +26,7 @@ from ..core import (
 )
 from ..authentication import get_current_user, get_current_user_for_user_management, oauth2_scheme
 from ..auth_jwt import create_access_token, create_refresh_token, decode_access_token, decode_refresh_token
+from .council import POSITIONS as COUNCIL_POSITIONS
 
 router = APIRouter()
 
@@ -38,6 +39,7 @@ class UserUpdate(BaseModel):
     role: str
     status: str
     permissions: list[str] = []
+    sb_position: str | None = None
 
 
 class PasswordReset(BaseModel):
@@ -48,6 +50,16 @@ class PasswordReset(BaseModel):
 class ProfileUpdate(BaseModel):
     full_name: str = ""
     email: str = ""
+
+
+def _sb_position(role, position):
+    """The SB position an account keeps: only SB Members have one. Accounts made before it was asked have none."""
+    position = (position or "").strip()
+    if role != "SB Member" or not position:
+        return None
+    if position not in COUNCIL_POSITIONS:
+        raise HTTPException(status_code=400, detail=f"SB position must be one of: {', '.join(COUNCIL_POSITIONS)}")
+    return position
 
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -104,6 +116,7 @@ async def register_user(
     normalized_role = normalize_user_role(role)
     if normalized_role not in {"Super Administrator", "Employee", "SB Member"}:
         raise HTTPException(status_code=400, detail="Invalid role")
+    sb_position = _sb_position(normalized_role, data.get("sb_position"))
 
     existing_user = db.query(models.User).filter(models.User.username == username).first()
     if existing_user:
@@ -144,6 +157,7 @@ async def register_user(
             email=email,
             office_id=office.id if office else None,
             role=normalized_role,
+            sb_position=sb_position,
             permissions=str(permission_list),
             status="Active",
             is_active=True,
@@ -181,6 +195,7 @@ async def register_user(
         "email": new_user.email,
         "role": new_user.role,
         "office_id": new_user.office_id,
+        "sb_position": new_user.sb_position,
         "permissions": permission_list,
     }
 
@@ -200,6 +215,7 @@ def list_users(
             "office_id": getattr(user, "office_id", None),
             "department": user.office.name if getattr(user, "office", None) else None,
             "role": normalize_user_role(user.role),
+            "sb_position": user.sb_position,
             "status": getattr(user, "status", "Active"),
             "locked": login_lockout.is_username_locked(db, user.username),
             "permissions": sorted(list(normalize_permissions(getattr(user, "permissions", None)))),
@@ -261,16 +277,19 @@ def update_user(
     if not payload.username.strip() or not payload.full_name.strip() or not payload.email.strip():
         raise HTTPException(status_code=400, detail="Full name, email, and username are required")
 
+    supplied_fields = getattr(payload, "model_fields_set", None)
+    if supplied_fields is None:
+        supplied_fields = getattr(payload, "__fields_set__", set())
+    # Older clients don't send sb_position; an SB Member then keeps the one on file.
+    sb_position = _sb_position(normalized_role, payload.sb_position if "sb_position" in supplied_fields else user.sb_position)
+
     if normalized_role != normalize_user_role(user.role):
         require_permission(current_admin, "assign_roles")
     requested_permissions = validate_permissions(payload.permissions)
     if not target_is_super_admin and set(requested_permissions) != normalize_permissions(user.permissions):
         require_permission(current_admin, "manage_permissions")
 
-    office_fields = getattr(payload, "model_fields_set", None)
-    if office_fields is None:
-        office_fields = getattr(payload, "__fields_set__", set())
-    office_id_supplied = "office_id" in office_fields
+    office_id_supplied = "office_id" in supplied_fields
     next_office_id = payload.office_id if office_id_supplied else user.office_id
     office_changed = next_office_id != user.office_id
     office = user.office if not office_changed else None
@@ -296,6 +315,7 @@ def update_user(
     user.email = payload.email.strip()
     user.office_id = office.id if office else None
     user.role = normalized_role
+    user.sb_position = sb_position
     user.permissions = str(["*"] if target_is_super_admin else requested_permissions)
     user.status = normalized_status
     user.is_active = normalized_status == "Active"
