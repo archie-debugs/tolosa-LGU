@@ -159,7 +159,7 @@ def test_the_form_offers_each_user_only_what_they_may_choose(client):
     assert clerk["office_locked"] is True
     assert clerk["default_office_id"] == office_id("Office of the Mayor")
     assert clerk["document_types"] == ["Ordinance", "Resolution", "Letter Request"]
-    assert (clerk["other_document_types"], clerk["categories"]) == ([], [])
+    assert clerk["categories"] == []
 
     admin = options("admin")
     assert [office["name"] for office in admin["offices"]] == ["Office of the Mayor", "Records Office"]
@@ -171,13 +171,27 @@ def test_the_form_offers_each_user_only_what_they_may_choose(client):
     assert (drifter["offices"], drifter["default_office_id"]) == ([], None)
 
 
-# Document type and category: typed freely
+# Document type: one of the three; category: typed freely
 
-def test_a_typed_type_and_category_are_saved_tidied(client):
+def test_a_typed_category_is_saved_tidied(client):
     headers = headers_for(client, "admin")
-    body = register(client, headers, category="  Public   Works ", document_type="  executive  order").json()
-    assert (body["category"], body["document_type"]) == ("Public Works", "executive order")
+    body = register(client, headers, category="  Public   Works ").json()
+    assert body["category"] == "Public Works"
     assert body["category_id"] is None and body["document_type_id"] is None
+
+
+def test_a_type_other_than_the_three_is_refused(client):
+    response = register(client, headers_for(client, "admin"), document_type="executive order")
+    assert (response.status_code, response.json()["detail"]) == (400, "Choose the document type: Ordinance, Resolution or Letter Request.")
+    with SessionLocal() as db:
+        assert db.query(models.Document).count() == 0
+
+
+def test_each_type_gets_its_own_tracking_numbers(client):
+    headers = headers_for(client, "admin")
+    numbers = [register(client, headers, title=title, document_type=document_type).json()["tracking_number"]
+               for title, document_type in [("A", "Ordinance"), ("B", "Letter Request"), ("C", "Ordinance"), ("D", "RESOLUTION")]]
+    assert numbers == ["ORD-000001", "LTR-000001", "ORD-000002", "RES-000001"]
 
 
 def test_ordinance_and_resolution_keep_their_standard_spelling(client):
@@ -209,7 +223,7 @@ def test_only_a_measure_registered_as_enacted_needs_its_number(client):
     assert (approved.status_code, approved.json()["detail"]) == (400, "Number is required.")
 
     assert register(client, headers, title="Market code", document_type="Ordinance", stage="Filed").status_code == 200
-    memo = register(client, headers, title="Office memo", document_type="Memorandum")
+    memo = register(client, headers, title="Office memo", document_type="Letter Request")
     assert memo.status_code == 200 and memo.json()["document_number"] is None
 
 
@@ -218,7 +232,7 @@ def test_multiple_registration_needs_the_same_fields_but_no_number(client):
     unnumbered = upload(client, headers, "memo.pdf", PDF)
     assert confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025}], author="").status_code == 400
 
-    result = confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025}], document_type="Memorandum").json()
+    result = confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025}], document_type="Letter Request").json()
     assert result["registered"] == 1, result
 
 
@@ -230,14 +244,13 @@ def test_an_overlong_type_or_category_is_refused(client):
         assert db.query(models.Document).count() == 0
 
 
-def test_the_form_suggests_types_and_categories_already_used(client):
+def test_the_form_offers_the_three_types_and_suggests_categories_already_used(client):
     headers = headers_for(client, "admin")
-    for title, category, document_type in [("A", "Finance", "Memorandum"), ("B", "Finance", "Ordinance"), ("C", "Health", "Memorandum")]:
+    for title, category, document_type in [("A", "Finance", "Letter Request"), ("B", "Finance", "Ordinance"), ("C", "Health", "Letter Request")]:
         response = register(client, headers, title=title, category=category, document_type=document_type, document_number=title)
         assert response.status_code == 200, response.text
     options = client.get("/documents/registration/options", headers=headers).json()
     assert options["document_types"] == ["Ordinance", "Resolution", "Letter Request"]
-    assert options["other_document_types"] == ["Memorandum"]
     assert options["categories"] == ["Finance", "Health"]
 
 
@@ -355,3 +368,41 @@ def test_identical_files_stay_blocked_even_when_overriding_numbers(client):
     again = register(client, headers, title="Copy", allow_duplicate_number="true", file=("b.pdf", PDF, "application/pdf"))
     assert again.status_code == 409
     assert "Duplicate PDF content" in again.json()["detail"]
+
+
+# Multiple registration holds one document type
+
+def test_a_multiple_registration_leaves_out_files_named_for_another_type(client):
+    headers = headers_for(client, "admin")
+    names = ["Ordinance No. 4.pdf", "Resolution No. 5.pdf", "Ordinance and Resolution.pdf", "scan_0012.pdf", "scan_0013.pdf"]
+    specs = [{"tmp_name": upload(client, headers, name, PDF + name.encode()), "series_year": 2025} for name in names]
+    specs[3]["title"] = "Ordinance on market fees"
+
+    result = confirm(client, headers, specs, document_type="Ordinance", multiple=True).json()
+
+    assert [item["filename"] for item in result["documents"]] == ["Ordinance No. 4.pdf", "scan_0012.pdf"]
+    assert {error["filename"]: error["reason"] for error in result["errors"]} == {
+        "Resolution No. 5.pdf": "Its name says Resolution, but this batch is Ordinances.",
+        "Ordinance and Resolution.pdf": "Its name says both Ordinance and Resolution. Rename the file so it says one type.",
+        "scan_0013.pdf": "Its name doesn't say what it is. Type a title that says Ordinance.",
+    }
+
+
+def test_letter_or_request_names_a_letter_request_and_requesting_does_not(client):
+    headers = headers_for(client, "admin")
+    names = ["Letter from the DOH.pdf", "Request for road repair.pdf", "Resolution requesting the Mayor.pdf"]
+    specs = [{"tmp_name": upload(client, headers, name, PDF + name.encode()), "series_year": 2025} for name in names]
+
+    result = confirm(client, headers, specs, document_type="Letter Request", multiple=True).json()
+
+    assert [item["filename"] for item in result["documents"]] == names[:2]
+    assert result["errors"][0]["reason"] == "Its name says Resolution, but this batch is Letter Requests."
+
+
+def test_the_single_form_registering_its_file_is_not_held_to_file_names(client):
+    headers = headers_for(client, "admin")
+    spec = {"tmp_name": upload(client, headers, "Resolution No. 5.pdf", PDF + b"single"), "series_year": 2025, "title": "Market code"}
+
+    result = confirm(client, headers, [spec], document_type="Ordinance").json()
+
+    assert result["registered"] == 1, result

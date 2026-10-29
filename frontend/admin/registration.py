@@ -2,6 +2,7 @@
 
 import inspect
 import os
+import re
 from datetime import date
 
 import flet as ft
@@ -103,6 +104,35 @@ def measure_kind(document_type):
     """"ordinance" or "resolution" for a measure's type, else None (as Backends/backend/stages.measure_kind)."""
     name = (document_type or "").strip().lower()
     return "ordinance" if "ordinance" in name else "resolution" if "resolution" in name else None
+
+
+# The words that say a document's type in a file name or title, and each type's plural
+# (as Backends/backend/tracking_numbers.TYPE_WORDS and TYPE_PLURALS).
+TYPE_WORDS = {
+    "Ordinance": {"ordinance", "ordinances"},
+    "Resolution": {"resolution", "resolutions"},
+    "Letter Request": {"letter", "letters", "request", "requests"},
+}
+TYPE_PLURALS = {"Ordinance": "Ordinances", "Resolution": "Resolutions", "Letter Request": "Letter Requests"}
+
+
+def types_named_in(text):
+    """The document types whose words appear in `text`, as whole words in any case."""
+    words = set(re.findall(r"[a-z]+", (text or "").lower()))
+    return [document_type for document_type, type_words in TYPE_WORDS.items() if words & type_words]
+
+
+def file_name_type_problem(document_type, file_name, title):
+    """Why a file cannot join a multiple registration of `document_type`, or None
+    (as Backends/backend/tracking_numbers.file_name_type_problem)."""
+    named = types_named_in(os.path.splitext(file_name or "")[0])
+    if len(named) > 1:
+        return f"Its name says both {' and '.join(named)}. Rename the file so it says one type."
+    if named and named[0] != document_type:
+        return f"Its name says {named[0]}, but this batch is {TYPE_PLURALS[document_type]}."
+    if not named and document_type not in types_named_in(title):
+        return f"Its name doesn't say what it is. Type a title that says {document_type}."
+    return None
 
 
 def title_from_filename(name):
@@ -255,7 +285,7 @@ def load_options(api):
 class _Form:
     """The fields both dialogs share: what the documents are and where they start."""
 
-    def __init__(self, page, options, widgets):
+    def __init__(self, page, options, widgets, document_type=None):
         self.page = page
         self.options = options
         self.widgets = widgets
@@ -263,7 +293,8 @@ class _Form:
         offices = options["offices"]
         default_office = options["default_office_id"] or (offices[0]["id"] if len(offices) == 1 else None)
         # `data` names each field, since its name is drawn above it rather than as its label.
-        self.document_type = DocumentTypeField(style, value=options["document_types"][0] if options.get("document_types") else None)
+        first_type = options["document_types"][0] if options.get("document_types") else None
+        self.document_type = DocumentTypeField(style, value=document_type or first_type)
         self.office = ft.Dropdown(
             data="Office", hint_text="Office", options=[ft.dropdown.Option(str(office["id"]), office["name"]) for office in offices],
             value=str(default_office) if default_office is not None else None,
@@ -372,11 +403,12 @@ def _year_dropdown(this_year, width=130, value=None, widgets=None):
     return ft.Dropdown(label="Year", options=options, value=str(value or this_year), width=width)
 
 
-def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None):
+def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None, document_type=None):
     """Register one document, with or without its file.
 
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises with the
     backend's detail. `files` is a PickerFiles. `open_details(document)` opens the new document.
+    `document_type` is the type the form starts with, which can still be changed.
     """
     widgets = TrackingWidgets(page)
     this_year = (today or date.today()).year
@@ -385,7 +417,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     except Exception as exc:
         _show_problem(page, dialog, widgets, "Register document", f"The registration form could not be loaded: {error_detail(exc)[0]}")
         return
-    form = _Form(page, options, widgets)
+    form = _Form(page, options, widgets, document_type)
     state = {"file": None, "tmp_name": None, "busy": False, "allow_duplicate": False, "duplicate": None}
 
     style = _field_style(widgets)
@@ -678,8 +710,13 @@ ROW_STATES = {
 }
 
 
-def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None):
-    """Register several files at once: each file gets its own title and year, the rest is shared."""
+def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None, document_type=None):
+    """Register several files at once: each file gets its own title and year, the rest is shared.
+
+    A batch holds one document type. With `document_type` (opened from that type's page) the type
+    cannot be changed; otherwise it is chosen, and fixed once the first file registers. A file named
+    for another type is left out, and one whose name names no type needs a title that does.
+    """
     widgets = TrackingWidgets(page)
     this_year = (today or date.today()).year
     try:
@@ -687,7 +724,9 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
     except Exception as exc:
         _show_problem(page, dialog, widgets, "Register several documents", f"The registration form could not be loaded: {error_detail(exc)[0]}")
         return
-    form = _Form(page, options, widgets)
+    form = _Form(page, options, widgets, document_type)
+    if document_type:
+        form.document_type.fix()
     rows = []  # each: {name, size, tmp_name, state, progress, reason, documents, allow, document, title, year}
     status = {"busy": False}
 
@@ -868,6 +907,22 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             message.value = "Give every file a title: " + ", ".join(untitled)
             page.update()
             return
+        type_name = form.document_type.value
+        problems = {id(row): file_name_type_problem(type_name, row["name"], row["title"]) for row in waiting}
+        # A file named for another type is left out; renaming it is the only fix.
+        misnamed = [row for row in waiting if problems[id(row)] and types_named_in(os.path.splitext(row["name"])[0])]
+        for row in misnamed:
+            row["state"], row["reason"] = "failed", problems[id(row)]
+        untyped = [row["name"] for row in waiting if problems[id(row)] and row not in misnamed]
+        if untyped:
+            message.value = f"Type a title that says {type_name} for: " + ", ".join(untyped)
+            render()
+            return
+        waiting = [row for row in waiting if row not in misnamed]
+        if not waiting:
+            message.value = f"Every file's name says another type than {TYPE_PLURALS[type_name]}. Remove them, or choose their type."
+            render()
+            return
         skipped = [row for row in waiting if row["state"] == "duplicate" and not row["allow"]]
         normal = [row for row in waiting if row["state"] != "duplicate"]
         overriding = [row for row in waiting if row["state"] == "duplicate" and row["allow"]]
@@ -900,6 +955,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 } for row in batch],
                 **shared,
                 "allow_duplicate_number": allow,
+                "multiple": True,
             })
         except Exception as exc:
             text = error_detail(exc)[0]

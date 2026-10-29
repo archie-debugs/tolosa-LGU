@@ -120,16 +120,17 @@ def test_editing_clears_optional_fields_but_keeps_required_ones(client):
     headers = headers_for(client, "admin")
     document = register(client, headers, category="Finance", document_type="Ordinance", current_office="Office A").json()
 
-    cleared = client.put(f"/documents/{document['id']}", json={"category": None, "document_type": None}, headers=headers)
+    cleared = client.put(f"/documents/{document['id']}", json={"category": None}, headers=headers)
     assert cleared.status_code == 200, cleared.text
     body = cleared.json()
     assert (body["category"], body["category_id"]) == (None, None)
-    assert (body["document_type"], body["document_type_id"]) == (None, None)
+    assert body["document_type"] == "Ordinance"
     assert body["current_office"] == "Office A"
 
     for payload, message in [
         ({"series_year": None}, "Legislative Year is required."),
         ({"priority": None}, "Priority is required."),
+        ({"document_type": None}, "Choose the document type: Ordinance, Resolution or Letter Request."),
         ({"title": "  "}, "Title is required."),
         ({"current_office": None}, "A document moves to another office only by passing it (Pass), so the trail records the move."),
     ]:

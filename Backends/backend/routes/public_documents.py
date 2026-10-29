@@ -1,5 +1,4 @@
 import os
-import re
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,6 +9,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..core import LGU_TIMEZONE, lgu_today
 from ..database import get_db
+from ..tracking_numbers import tracking_numbers_for_query
 from .measure_stages import stage_summary
 
 
@@ -42,13 +42,6 @@ def _public_pdf(db: Session, document_id: int) -> models.Attachment | None:
     return None
 
 
-def _tracking_value(value: str | None) -> str | None:
-    if not value:
-        return None
-    match = re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([0-9]+)", value.strip())
-    return f"DOC-{int(match.group(1))}" if match else None
-
-
 @router.get("")
 def list_public_documents(
     search: str | None = Query(default=None),
@@ -64,7 +57,7 @@ def list_public_documents(
     )
 
     if search and search.strip():
-        tracking_value = _tracking_value(search)
+        tracking_numbers = tracking_numbers_for_query(search)
         like = f"%{search.strip().lower()}%"
         search_conditions = [
             models.Document.tracking_number.ilike(like),
@@ -80,12 +73,8 @@ def list_public_documents(
             models.Document.author.ilike(like),
             models.Document.session.ilike(like),
         ]
-        if tracking_value:
-            tracking_number = int(tracking_value.removeprefix("DOC-"))
-            search_conditions.extend([
-                models.Document.tracking_number == tracking_value,
-                models.Document.tracking_number == f"DOC-{tracking_number:06d}",
-            ])
+        if tracking_numbers:
+            search_conditions.append(models.Document.tracking_number.in_(tracking_numbers))
         query = query.filter(or_(*search_conditions))
     if document_type and document_type != "All Types":
         query = query.filter(models.Document.document_type == document_type)

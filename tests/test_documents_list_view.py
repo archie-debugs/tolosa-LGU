@@ -69,3 +69,35 @@ def test_the_table_scrolls_sideways_in_a_narrow_window():
     assert table.width > 1000 - 370
     wide = next(c for c in walk(build(width=2000)) if isinstance(c, ft.Row) and c.scroll == ft.ScrollMode.AUTO)
     assert wide.controls[0].width == 2000 - 370
+
+
+def test_a_type_page_lists_only_that_type_under_its_name_without_a_type_filter():
+    calls = []
+
+    def recording_api(method, path, **kwargs):
+        calls.append(kwargs.get("params") or {})
+        return api(method, path, **kwargs)
+
+    registered = []
+    view, _ = build_documents_view(
+        DummyPage(), recording_api, lambda content, **_: ft.Container(content), normalize=lambda item: dict(item),
+        selection=set(), loaded=[], can_filter=True, can_register=True, open_register=lambda: registered.append(True),
+        document_type="Ordinance",
+    )
+
+    assert calls and all(params.get("document_type") == "Ordinance" for params in calls)
+    shown = texts(view)
+    assert "Ordinances" in shown and "Documents" not in shown
+    assert "Type" not in shown and "Category" in shown
+    register = next(c for c in walk(view) if isinstance(c, ft.FilledButton) and c.text == "Register document")
+    register.on_click(None)
+    assert registered == [True]
+
+
+def test_an_archived_type_page_is_named_for_its_type():
+    view, _ = build_documents_view(
+        DummyPage(), api, lambda content, **_: ft.Container(content), normalize=lambda item: dict(item),
+        selection=set(), loaded=[], archived=True, document_type="Letter Request",
+    )
+
+    assert "Archived Letter Requests" in texts(view)

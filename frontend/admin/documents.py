@@ -26,6 +26,8 @@ REMARKS_MIN_WIDTH = 150
 # Sidebar, page padding and the list card's padding: what the table can't use of the window.
 CHROME_WIDTH = 370
 ALL = "All"
+# The sidebar name of each type's own Documents page.
+TYPE_PAGE_NAMES = {"Ordinance": "Ordinances", "Resolution": "Resolutions", "Letter Request": "Letter Requests"}
 # Newer Flet versions renamed the dropdown's change event to on_select.
 DROPDOWN_EVENT = "on_select" if "on_select" in inspect.signature(ft.Dropdown.__init__).parameters else "on_change"
 
@@ -72,8 +74,12 @@ def build_documents_view(
     restore_selected=None,
     delete_permanently=None,
     delete_selected=None,
+    document_type=None,
 ):
     """The active document list, or with `archived=True` the archived one.
+
+    With `document_type` ("Ordinance", "Resolution" or "Letter Request") it lists only that type,
+    under that type's name, and has no Type filter.
 
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     `normalize(item)` turns a list item into the document shape the app's dialogs expect.
@@ -138,6 +144,8 @@ def build_documents_view(
         filters = [type_filter, category_filter, archived_by_filter, status_filter, from_year, to_year]
     else:
         filters = [type_filter, category_filter, status_filter, from_year, to_year]
+    if document_type:
+        filters.remove(type_filter)
     filter_boxes = {control: filter_box(control) for control in [*filters, sort_filter]}
 
     kpi_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
@@ -163,6 +171,8 @@ def build_documents_view(
         result["sort_by"], result["sort_order"] = sorts.get(sort_filter.value, sorts[default_sort])
         if archived:
             result["archived"] = "true"
+        if document_type:
+            result["document_type"] = document_type
         if can_search and (search_field.value or "").strip():
             result["search"] = search_field.value.strip()
         if can_filter:
@@ -530,11 +540,19 @@ def build_documents_view(
         ))
 
     filter_controls = [filter_boxes[control] for control in ([*filters, sort_filter] if can_filter else [sort_filter])]
-    banner = (
-        widgets.banner("Archived Documents", "Documents taken out of circulation. Restore one to put it back on Documents.", ft.Icons.ARCHIVE_OUTLINED)
-        if archived else
-        widgets.banner("Documents", "Every active legislative document, where it is, and what you can do with it.", ft.Icons.INVENTORY_2, actions=header_actions)
-    )
+    if document_type:
+        name = TYPE_PAGE_NAMES[document_type]
+        banner = (
+            widgets.banner(f"Archived {name}", f"Archived {name.lower()}. Restore one to put it back on {name}.", ft.Icons.ARCHIVE_OUTLINED)
+            if archived else
+            widgets.banner(name, f"Every active {document_type.lower()}, where it is, and what you can do with it.", ft.Icons.INVENTORY_2, actions=header_actions)
+        )
+    else:
+        banner = (
+            widgets.banner("Archived Documents", "Documents taken out of circulation. Restore one to put it back on Documents.", ft.Icons.ARCHIVE_OUTLINED)
+            if archived else
+            widgets.banner("Documents", "Every active legislative document, where it is, and what you can do with it.", ft.Icons.INVENTORY_2, actions=header_actions)
+        )
     kpi_card = surface_card(kpi_row, padding=18, expand=False)
     list_card = surface_card(
         ft.Column(

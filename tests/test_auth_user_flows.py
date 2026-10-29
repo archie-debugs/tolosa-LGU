@@ -1,7 +1,6 @@
 import json
 import os
 import time
-from itertools import count
 from datetime import datetime, timedelta, timezone
 import pytest
 
@@ -86,10 +85,8 @@ def bearer_headers(client, username="superuser", password="pw123"):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def test_system_tracking_numbers_use_display_sequence_and_preserve_legacy_ids(monkeypatch):
+def test_each_type_counts_its_own_tracking_numbers_and_legacy_ids_are_kept():
     reset_db()
-    sequence_values = count(1)
-    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
     with SessionLocal() as db:
         legacy = models.Document(
             tracking_number="DOC-32",
@@ -102,33 +99,25 @@ def test_system_tracking_numbers_use_display_sequence_and_preserve_legacy_ids(mo
         legacy_id = legacy.id
 
         generated = []
-        for year in (1994, 1995):
+        for document_type, year in (("Ordinance", 1994), ("Resolution", 1994), ("Ordinance", 1995), ("Letter Request", 1995)):
             document = models.Document(
-                tracking_number="pending",
-                title=f"ORDINANCE NO. 04 Series {year}",
+                tracking_number="PENDING-test",
+                title=f"{document_type} of {year}",
+                document_type=document_type,
                 status="Approved",
                 priority="Medium",
             )
-            tracking_number = documents_routes._assign_system_tracking_number(db, document)
+            generated.append(documents_routes._assign_system_tracking_number(db, document))
             db.commit()
-            generated.append((tracking_number, document.id, document.title))
 
         db.refresh(legacy)
         assert legacy.id == legacy_id
         assert legacy.tracking_number == "DOC-32"
-        assert [number for number, _, _ in generated] == ["DOC-000001", "DOC-000002"]
-        assert all(number != f"DOC-{row_id:06d}" for number, row_id, _ in generated)
-        assert generated[0][0] != generated[1][0]
-        assert [title for _, _, title in generated] == [
-            "ORDINANCE NO. 04 Series 1994",
-            "ORDINANCE NO. 04 Series 1995",
-        ]
+        assert generated == ["ORD-000001", "RES-000001", "ORD-000002", "LTR-000001"]
 
 
 def test_individual_registration_allows_repeated_number_across_series_years(monkeypatch):
     reset_db()
-    sequence_values = count(1)
-    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
     client = TestClient(main.app)
     admin_headers = bearer_headers(client)
 
@@ -160,7 +149,7 @@ def test_individual_registration_allows_repeated_number_across_series_years(monk
         registered.append(response.json())
 
     assert len({item["tracking_number"] for item in registered}) == 3
-    assert [item["tracking_number"] for item in registered] == ["DOC-000001", "DOC-000002", "DOC-000003"]
+    assert [item["tracking_number"] for item in registered] == ["ORD-000001", "ORD-000002", "ORD-000003"]
     assert [(item["document_number"], item["series_year"]) for item in registered] == [
         ("04", 1993),
         ("04", 1994),
@@ -194,28 +183,39 @@ def test_qr_lookup_prefers_current_tracking_id_then_historical_alias():
     reset_db()
     with SessionLocal() as db:
         current_document = models.Document(
-            tracking_number="DOC-000001",
+            tracking_number="ORD-000001",
             title="Current first record",
             status="Approved",
             priority="Medium",
         )
         historical_document = models.Document(
-            tracking_number="DOC-000002",
+            tracking_number="ORD-000002",
             title="Historical alias target",
             status="Approved",
             priority="Medium",
         )
-        db.add_all([current_document, historical_document])
+        resolution = models.Document(
+            tracking_number="RES-000001",
+            title="First resolution",
+            status="Approved",
+            priority="Medium",
+        )
+        db.add_all([current_document, historical_document, resolution])
         db.flush()
         db.add_all([
             models.DocumentTrackingNumberAlias(document_id=current_document.id, tracking_number="DOC-32"),
-            models.DocumentTrackingNumberAlias(document_id=historical_document.id, tracking_number="DOC-000506"),
+            models.DocumentTrackingNumberAlias(document_id=historical_document.id, tracking_number="RES-000506"),
         ])
         db.commit()
 
-        assert documents_routes._find_document_by_qr_or_tracking(db, "DOC-000001").id == current_document.id
-        assert documents_routes._find_document_by_qr_or_tracking(db, "DOC-32").id == current_document.id
-        assert documents_routes._find_document_by_qr_or_tracking(db, "DOC-000506").id == historical_document.id
+        find = documents_routes._find_document_by_qr_or_tracking
+        assert find(db, "ORD-000001").id == current_document.id
+        assert find(db, "ord 1").id == current_document.id
+        assert find(db, "RES-1").id == resolution.id
+        assert find(db, "2").id == historical_document.id
+        assert find(db, "1") is None, "a bare number in two series names no single document"
+        assert find(db, "DOC-32").id == current_document.id
+        assert find(db, "res-506").id == historical_document.id
 
 
 def test_document_registration_creates_stable_qr_token_and_public_qr_lookup(monkeypatch):
@@ -309,8 +309,6 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
     monkeypatch.setattr(documents_routes, "TEMP_UPLOAD_DIR", str(temp_upload_dir))
     monkeypatch.setattr(documents_routes, "UPLOAD_DIR", str(upload_dir))
     monkeypatch.setattr(documents_routes, "QR_IMAGE_DIR", str(qr_dir))
-    sequence_values = count(1)
-    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
 
     legacy_numbers = (1, 2, 4, 5)
     with SessionLocal() as db:
@@ -369,10 +367,10 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
         created = db.query(models.Document).filter(models.Document.series_year == 1994).order_by(models.Document.document_number).all()
         assert [document.document_number for document in created] == ["01", "02", "04", "05"]
         assert [document.tracking_number for document in created] == [
-            "DOC-000001",
-            "DOC-000002",
-            "DOC-000003",
-            "DOC-000004",
+            "ORD-000001",
+            "ORD-000002",
+            "ORD-000003",
+            "ORD-000004",
         ]
         assert len({document.tracking_number for document in created}) == 4
         assert db.query(models.Document).filter(models.Document.tracking_number.in_(["DOC-1", "DOC-2", "DOC-4", "DOC-5"])).count() == 4
@@ -455,8 +453,6 @@ def test_register_user_success_and_login_workflow():
 
 def test_uploaded_documents_are_created_as_approved(monkeypatch):
     reset_db()
-    sequence_values = count(1)
-    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
     client = TestClient(main.app)
     admin_headers = bearer_headers(client)
 
@@ -503,8 +499,6 @@ def test_bulk_registration_requires_explicit_per_file_years(tmp_path, monkeypatc
     monkeypatch.setattr(documents_routes, "TEMP_UPLOAD_DIR", str(temp_upload_dir))
     monkeypatch.setattr(documents_routes, "UPLOAD_DIR", str(upload_dir))
     monkeypatch.setattr(documents_routes, "QR_IMAGE_DIR", str(qr_dir))
-    sequence_values = count(1)
-    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
 
     years = [1993 + index % 3 for index in range(file_count)]
     tmp_names = []
@@ -536,7 +530,7 @@ def test_bulk_registration_requires_explicit_per_file_years(tmp_path, monkeypatc
         created = db.query(models.Document).order_by(models.Document.id).all()
         assert [document.series_year for document in created] == years
         assert [document.tracking_number for document in created] == [
-            f"DOC-{index:06d}" for index in range(1, file_count + 1)
+            f"ORD-{index:06d}" for index in range(1, file_count + 1)
         ]
 
 
@@ -546,7 +540,7 @@ def test_bulk_registration_rejects_any_missing_legislative_year(tmp_path, monkey
     temp_upload_dir.mkdir()
     monkeypatch.setattr(documents_routes, "TEMP_UPLOAD_DIR", str(temp_upload_dir))
     sequence_calls = []
-    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: sequence_calls.append(1) or 1)
+    monkeypatch.setattr(documents_routes, "next_tracking_number", lambda db, document_type: sequence_calls.append(1) or "ORD-000001")
 
     tmp_names = ["has-year.pdf", "missing-year.pdf"]
     for tmp_name in tmp_names:
@@ -581,13 +575,11 @@ def test_multipart_bulk_registration_requires_and_stores_each_year(tmp_path, mon
     qr_dir = tmp_path / "qr"
     monkeypatch.setattr(documents_routes, "UPLOAD_DIR", str(upload_dir))
     monkeypatch.setattr(documents_routes, "QR_IMAGE_DIR", str(qr_dir))
-    sequence_values = count(1)
-    monkeypatch.setattr(documents_routes, "_next_display_tracking_value", lambda db: next(sequence_values))
     client = TestClient(main.app)
     headers = bearer_headers(client)
     files = [
-        ("files", ("first.pdf", b"%PDF-1.4 first", "application/pdf")),
-        ("files", ("second.pdf", b"%PDF-1.4 second", "application/pdf")),
+        ("files", ("Ordinance first.pdf", b"%PDF-1.4 first", "application/pdf")),
+        ("files", ("Ordinance second.pdf", b"%PDF-1.4 second", "application/pdf")),
     ]
 
     missing_year = client.post(
@@ -611,7 +603,7 @@ def test_multipart_bulk_registration_requires_and_stores_each_year(tmp_path, mon
     with SessionLocal() as db:
         created = db.query(models.Document).order_by(models.Document.tracking_number).all()
         assert [document.series_year for document in created] == [1993, 1995]
-        assert [document.tracking_number for document in created] == ["DOC-000001", "DOC-000002"]
+        assert [document.tracking_number for document in created] == ["ORD-000001", "ORD-000002"]
 
 
 def test_authorized_admin_can_reset_employee_password_and_audits_without_plaintext():

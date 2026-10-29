@@ -64,15 +64,22 @@ def counts():
         return db.query(models.Office).count(), db.query(models.Category).count(), db.query(models.DocumentType).count()
 
 
-def test_edit_saves_a_typed_type_and_category(client, document):
+def test_edit_saves_a_typed_category_tidied(client, document):
     before = counts()
 
-    response = edit(client, document, category="  Public  Works", document_type="memorandum")
+    response = edit(client, document, category="  Public  Works")
 
     assert response.status_code == 200, response.text
-    body = response.json()
-    assert (body["category"], body["document_type"]) == ("Public Works", "memorandum")
+    assert response.json()["category"] == "Public Works"
     assert counts() == before
+
+
+@pytest.mark.parametrize("document_type", ["memorandum", "", None])
+def test_edit_refuses_a_type_other_than_the_three(client, document, document_type):
+    response = edit(client, document, document_type=document_type)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Choose the document type: Ordinance, Resolution or Letter Request."
 
 
 def test_edit_keeps_the_standard_spelling_and_can_clear_a_category(client, document):
@@ -80,6 +87,28 @@ def test_edit_keeps_the_standard_spelling_and_can_clear_a_category(client, docum
 
     assert response.status_code == 200, response.text
     assert (response.json()["category"], response.json()["document_type"]) == (None, "Resolution")
+
+
+def test_a_new_type_gives_the_next_number_in_its_series_and_the_old_one_still_finds_it(client, document):
+    assert document["tracking_number"] == "ORD-000001"
+
+    response = edit(client, document, document_type="Resolution")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tracking_number"] == "RES-000001"
+    found = client.get("/documents", params={"search": "ORD-000001"}, headers=headers_for(client)).json()["items"]
+    assert [item["id"] for item in found] == [document["id"]]
+    with SessionLocal() as db:
+        assert documents_routes._find_document_by_qr_or_tracking(db, "ORD-000001").id == document["id"]
+        logged = db.query(models.AuditLog).filter(models.AuditLog.action == "TRACKING_NUMBER_CHANGED").one()
+        assert logged.details == "ORD-000001 is now RES-000001 after its type changed to Resolution"
+
+
+def test_the_same_type_keeps_its_number(client, document):
+    response = edit(client, document, document_type="ordinance", title="Renamed")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tracking_number"] == "ORD-000001"
 
 
 def test_edit_refuses_an_overlong_category(client, document):
@@ -140,7 +169,6 @@ def test_edit_options_suggest_what_documents_already_use(client, document):
     assert response.status_code == 200, response.text
     assert response.json() == {
         "document_types": ["Ordinance", "Resolution", "Letter Request"],
-        "other_document_types": [],
         "categories": ["Old Category"],
     }
     assert client.get("/documents/edit-options", headers=headers_for(client, "clerk")).status_code == 403

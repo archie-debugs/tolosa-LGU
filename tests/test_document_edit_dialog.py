@@ -28,8 +28,7 @@ class FakeApi:
     def __call__(self, method, path, **kwargs):
         self.calls.append((method, path, kwargs))
         if path == "/documents/edit-options":
-            return {"categories": ["Finance", "Health"], "document_types": ["Ordinance", "Resolution"],
-                    "other_document_types": ["Memorandum"]}
+            return {"categories": ["Finance", "Health"], "document_types": ["Ordinance", "Resolution"]}
         if self.error:
             raise Exception(self.error)
         return {"id": 7}
@@ -90,12 +89,12 @@ def test_dialog_offers_the_standard_types_and_categories_used_before():
     assert field(dialog, "Priority").value == "High"
 
 
-def test_dialog_keeps_a_non_standard_type_as_a_choice():
+def test_dialog_offers_only_the_three_types_so_another_type_must_be_replaced():
     dialog = ft.AlertDialog()
     open_edit_document_dialog(DummyPage(), dialog, FakeApi(), {**DOCUMENT, "document_type": "Executive Order"})
 
-    assert field(dialog, "Document Type").value == "Executive Order"
-    assert options(field(dialog, "Document Type")) == ["Ordinance", "Resolution", "Letter Request", "Executive Order"]
+    assert field(dialog, "Document Type").value is None
+    assert options(field(dialog, "Document Type")) == ["Ordinance", "Resolution", "Letter Request"]
 
 
 def test_dialog_has_no_office_field_and_points_to_pass():

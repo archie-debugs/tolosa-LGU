@@ -1236,11 +1236,11 @@ def main(page: ft.Page, session=None):
             "can_print_qr": has_permission("print_qr_codes"),
         }
 
-    def open_register_document_dialog(_=None):
-        open_register_dialog(page, registration_dialog, registration_api, registration_files, **registration_settings())
+    def open_register_document_dialog(_=None, document_type=None):
+        open_register_dialog(page, registration_dialog, registration_api, registration_files, document_type=document_type, **registration_settings())
 
-    def open_bulk_register_document_dialog(_=None):
-        open_multiple_register_dialog(page, registration_dialog, registration_api, registration_files, **registration_settings())
+    def open_bulk_register_document_dialog(_=None, document_type=None):
+        open_multiple_register_dialog(page, registration_dialog, registration_api, registration_files, document_type=document_type, **registration_settings())
 
     def clear_selected_qr_documents():
         selected_qr_document_ids.clear()
@@ -2101,7 +2101,7 @@ def main(page: ft.Page, session=None):
     def load_documents_table():
         documents_refresh()
 
-    def documents_view():
+    def documents_view(document_type=None):
         nonlocal documents_refresh
         if not has_permission("view_documents"):
             return ft.Column([ft.Text("You do not have access to documents.")])
@@ -2123,8 +2123,8 @@ def main(page: ft.Page, session=None):
             can_print=has_permission("print_documents"),
             can_edit=has_permission("edit_documents"),
             open_details=show_document_details,
-            open_register=open_register_document_dialog,
-            open_bulk_register=open_bulk_register_document_dialog,
+            open_register=lambda: open_register_document_dialog(document_type=document_type),
+            open_bulk_register=lambda: open_bulk_register_document_dialog(document_type=document_type),
             open_edit=open_edit_document_dialog,
             open_replace_attachment=open_replace_attachment_dialog,
             preview=preview_document_pdf,
@@ -2134,6 +2134,7 @@ def main(page: ft.Page, session=None):
             archive=confirm_delete_document,
             archive_selected=open_documents_bulk_archive_dialog,
             qr_labels=open_qr_label_download_dialog,
+            document_type=document_type,
         )
         return view
 
@@ -3922,7 +3923,7 @@ def main(page: ft.Page, session=None):
         clear_pending_qr_token()
         show_login()
 
-    def archived_documents_view():
+    def archived_documents_view(document_type=None):
         nonlocal archived_refresh
         if not has_permission("view_documents"):
             return ft.Column([ft.Text("You do not have access to archived documents.")])
@@ -3944,6 +3945,7 @@ def main(page: ft.Page, session=None):
             restore_selected=open_archived_restore_selected_dialog,
             delete_permanently=confirm_permanent_delete_archived_document,
             delete_selected=open_archived_delete_selected_dialog,
+            document_type=document_type,
         )
         return view
 
@@ -4387,6 +4389,15 @@ def main(page: ft.Page, session=None):
         office_dashboard_refresh = refresh
         return view
 
+    def document_type_items(label_prefix, view, parent):
+        """One sidebar item per document type, shown under `parent`; `label_prefix` keeps labels unique."""
+        return [(icon, f"{label_prefix}{name}", lambda document_type=document_type: view(document_type), "Documents", parent, name)
+                for document_type, name, icon in (
+                    ("Ordinance", "Ordinances", ft.Icons.GAVEL_OUTLINED),
+                    ("Resolution", "Resolutions", ft.Icons.HOW_TO_VOTE_OUTLINED),
+                    ("Letter Request", "Letter Requests", ft.Icons.MAIL_OUTLINE),
+                )]
+
     def build_nav_items():
         # Each item is (icon, label, view, section). Items are kept in section
         # order; the shell draws a header whenever the section changes and pins
@@ -4407,12 +4418,14 @@ def main(page: ft.Page, session=None):
         # Documents
         if has_permission("view_documents"):
             items.append((ft.Icons.DESCRIPTION_OUTLINED, "Documents", lambda: documents_view(), "Documents"))
+            items.extend(document_type_items("", documents_view, "Documents"))
         if has_permission("set_documents_for_sb_members"):
             items.append((ft.Icons.EVENT_NOTE_OUTLINED, "Documents for SB Members", todays_documents_page, "Documents"))
         if has_permission("view_qr_tracking"):
             items.append((ft.Icons.QR_CODE_2, "QR Tracking", qr_tracking_view, "Documents"))
         if has_permission("view_documents"):
             items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view(), "Documents"))
+            items.extend(document_type_items("Archived ", archived_documents_view, "Archived Documents"))
 
         # Legislative
         if not is_employee() or has_permission("view_documents"):
