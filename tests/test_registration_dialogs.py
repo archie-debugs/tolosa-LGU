@@ -225,23 +225,23 @@ def open_multiple(api=None):
 def test_several_files_register_after_their_uploads_with_their_own_titles():
     page, dialog, files, api, registered = open_multiple()
     press(dialog, "Choose files")
-    files.on_picked([{"name": "res-1.pdf", "size": 1}, {"name": "res-2.pdf", "size": 1}, {"name": "notes.txt", "size": 1}])
+    files.on_picked([{"name": "ordinance-1.pdf", "size": 1}, {"name": "ordinance-2.pdf", "size": 1}, {"name": "notes.txt", "size": 1}])
 
     assert "Only PDF, DOC and DOCX files can be registered." in texts(dialog)
     assert button(dialog, "Waiting for uploads…").disabled is True
-    files.on_progress("res-1.pdf", 1.0, None)
+    files.on_progress("ordinance-1.pdf", 1.0, None)
     assert button(dialog, "Waiting for uploads…").disabled is True
-    files.on_progress("res-2.pdf", None, None)
+    files.on_progress("ordinance-2.pdf", None, None)
     register = button(dialog, "Register 2 documents")
     assert register.disabled is False
 
     titles = [c for c in walk(dialog) if type(c).__name__ == "TextField" and c.label == "Title"]
-    titles[0].value = "Resolution on roads"
+    titles[0].value = "Ordinance on roads"
     titles[0].on_change(type("E", (), {"control": titles[0]})())
     press(dialog, "Register 2 documents")
 
     specs = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["documents"]
-    assert [spec["title"] for spec in specs] == ["Resolution on roads", "res 2"]
+    assert [spec["title"] for spec in specs] == ["Ordinance on roads", "ordinance 2"]
     assert "Registered DOC-000001" in texts(dialog) and "Registered DOC-000002" in texts(dialog)
     assert find_button(dialog, "QR labels").visible is True
     assert registered == [1]
@@ -254,14 +254,14 @@ def test_files_whose_number_is_used_can_be_retried_on_their_own():
         first, second = payload["documents"]
         doc = {**api.document(first["title"]), "tmp_name": first["tmp_name"]}
         return {"registered": 1, "documents": [doc], "errors": [
-            {"tmp_name": second["tmp_name"], "filename": "b.pdf", "duplicate_number": True, "documents": ["DOC-000009"], "reason": "used"}]}
+            {"tmp_name": second["tmp_name"], "filename": "ordinance b.pdf", "duplicate_number": True, "documents": ["DOC-000009"], "reason": "used"}]}
 
     api.confirm_results.append(one_duplicate)
     page, dialog, files, api, _ = open_multiple(api)
     press(dialog, "Choose files")
-    files.on_picked([{"name": "a.pdf", "size": 1}, {"name": "b.pdf", "size": 1}])
-    files.on_progress("a.pdf", 1.0, None)
-    files.on_progress("b.pdf", 1.0, None)
+    files.on_picked([{"name": "ordinance a.pdf", "size": 1}, {"name": "ordinance b.pdf", "size": 1}])
+    files.on_progress("ordinance a.pdf", 1.0, None)
+    files.on_progress("ordinance b.pdf", 1.0, None)
     press(dialog, "Register 2 documents")
 
     assert "Number already used" in texts(dialog)
@@ -275,7 +275,7 @@ def test_files_whose_number_is_used_can_be_retried_on_their_own():
     box.on_change(type("E", (), {"control": box})())
     press(dialog, "Register the other 1")
     retried = api.posted("/documents/bulk-register/confirm_tmp")[1]["json"]
-    assert retried["tmp_names"] == ["tmp_b.pdf"] and retried["allow_duplicate_number"] is True
+    assert retried["tmp_names"] == ["tmp_ordinance b.pdf"] and retried["allow_duplicate_number"] is True
     assert "Registered DOC-000001" in texts(dialog) and "Registered DOC-000002" in texts(dialog)
     assert all(c.disabled for c in walk(dialog) if type(c).__name__ == "TextField" and c.label == "Title")
 
@@ -353,12 +353,12 @@ def test_several_files_of_a_non_measure_register_without_numbers():
     page, dialog, files, api, registered = open_multiple()
     choose(field(dialog, "Document type"), "Letter Request")
     press(dialog, "Choose files")
-    files.on_picked([{"name": "memo.pdf", "size": 10}])
-    files.on_progress("memo.pdf", 1.0, None)
+    files.on_picked([{"name": "request memo.pdf", "size": 10}])
+    files.on_progress("request memo.pdf", 1.0, None)
 
     press(dialog, "Register 1 document")
     payload = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]
-    assert payload["documents"] == [{"tmp_name": "tmp_memo.pdf", "series_year": 2026, "title": "memo"}]
+    assert payload["documents"] == [{"tmp_name": "tmp_request memo.pdf", "series_year": 2026, "title": "request memo"}]
     assert not {"priority", "due_date", "stage"} & set(payload)
     assert registered == [1]
 
@@ -375,3 +375,40 @@ def test_registering_from_a_type_page_starts_with_that_type_and_it_can_still_cha
 
     open_multiple_register_dialog(DummyPage(), dialog, FakeApi(MEASURE_OPTIONS), FakeFiles(), today=TODAY, document_type="Letter Request")
     assert field(dialog, "Document type").value == "Letter Request"
+
+
+def test_a_batch_leaves_out_a_file_named_for_another_type_and_asks_a_title_for_an_unnamed_one():
+    page, dialog, files, api, _ = open_multiple()
+    press(dialog, "Choose files")
+    files.on_picked([{"name": "Ordinance No. 4.pdf", "size": 1}, {"name": "Resolution No. 5.pdf", "size": 1}, {"name": "scan_0012.pdf", "size": 1}])
+    for name in ("Ordinance No. 4.pdf", "Resolution No. 5.pdf", "scan_0012.pdf"):
+        files.on_progress(name, 1.0, None)
+
+    press(dialog, "Register 3 documents")
+    assert "Type a title that says Ordinance for: scan_0012.pdf" in texts(dialog)
+    assert "Its name says Resolution, but this batch is Ordinances." in texts(dialog)
+    assert api.posted("/documents/bulk-register/confirm_tmp") == []
+
+    title = [c for c in walk(dialog) if type(c).__name__ == "TextField" and c.label == "Title"][2]
+    title.value = "Ordinance on market fees"
+    title.on_change(type("E", (), {"control": title})())
+    press(dialog, "Register 3 documents")
+
+    sent = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]
+    assert sent["multiple"] is True
+    assert [spec["title"] for spec in sent["documents"]] == ["Ordinance No. 4", "Ordinance on market fees"]
+    assert field(dialog, "Document type").disabled is True, "the batch's type is fixed once a file registers"
+
+
+def test_a_batch_opened_from_a_type_page_keeps_that_type():
+    page, dialog, files, api = DummyPage(), ft.AlertDialog(), FakeFiles(), FakeApi(MEASURE_OPTIONS)
+    open_multiple_register_dialog(page, dialog, api, files, today=TODAY, document_type="Resolution")
+
+    kind = field(dialog, "Document type")
+    assert (kind.value, kind.disabled) == ("Resolution", True)
+    press(dialog, "Choose files")
+    files.on_picked([{"name": "resolution-1.pdf", "size": 1}])
+    files.on_progress("resolution-1.pdf", 1.0, None)
+    fill_required(dialog)
+    press(dialog, "Register 1 document")
+    assert field(dialog, "Document type").disabled is True

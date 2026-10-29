@@ -119,7 +119,7 @@ def test_multiple_registration_refuses_a_malformed_due_date(client):
 def test_multipart_bulk_registration_accepts_a_due_date(client):
     response = client.post("/documents/bulk-register/confirm", headers=headers_for(client),
                            data={**FILLED, "series_years": ["2025"], "due_date": "2026-11-20"},
-                           files=[("files", ("c.pdf", PDF + b"c", "application/pdf"))])
+                           files=[("files", ("Ordinance c.pdf", PDF + b"c", "application/pdf"))])
 
     assert response.status_code == 200, response.text
     with SessionLocal() as db:

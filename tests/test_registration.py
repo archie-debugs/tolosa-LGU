@@ -368,3 +368,41 @@ def test_identical_files_stay_blocked_even_when_overriding_numbers(client):
     again = register(client, headers, title="Copy", allow_duplicate_number="true", file=("b.pdf", PDF, "application/pdf"))
     assert again.status_code == 409
     assert "Duplicate PDF content" in again.json()["detail"]
+
+
+# Multiple registration holds one document type
+
+def test_a_multiple_registration_leaves_out_files_named_for_another_type(client):
+    headers = headers_for(client, "admin")
+    names = ["Ordinance No. 4.pdf", "Resolution No. 5.pdf", "Ordinance and Resolution.pdf", "scan_0012.pdf", "scan_0013.pdf"]
+    specs = [{"tmp_name": upload(client, headers, name, PDF + name.encode()), "series_year": 2025} for name in names]
+    specs[3]["title"] = "Ordinance on market fees"
+
+    result = confirm(client, headers, specs, document_type="Ordinance", multiple=True).json()
+
+    assert [item["filename"] for item in result["documents"]] == ["Ordinance No. 4.pdf", "scan_0012.pdf"]
+    assert {error["filename"]: error["reason"] for error in result["errors"]} == {
+        "Resolution No. 5.pdf": "Its name says Resolution, but this batch is Ordinances.",
+        "Ordinance and Resolution.pdf": "Its name says both Ordinance and Resolution. Rename the file so it says one type.",
+        "scan_0013.pdf": "Its name doesn't say what it is. Type a title that says Ordinance.",
+    }
+
+
+def test_letter_or_request_names_a_letter_request_and_requesting_does_not(client):
+    headers = headers_for(client, "admin")
+    names = ["Letter from the DOH.pdf", "Request for road repair.pdf", "Resolution requesting the Mayor.pdf"]
+    specs = [{"tmp_name": upload(client, headers, name, PDF + name.encode()), "series_year": 2025} for name in names]
+
+    result = confirm(client, headers, specs, document_type="Letter Request", multiple=True).json()
+
+    assert [item["filename"] for item in result["documents"]] == names[:2]
+    assert result["errors"][0]["reason"] == "Its name says Resolution, but this batch is Letter Requests."
+
+
+def test_the_single_form_registering_its_file_is_not_held_to_file_names(client):
+    headers = headers_for(client, "admin")
+    spec = {"tmp_name": upload(client, headers, "Resolution No. 5.pdf", PDF + b"single"), "series_year": 2025, "title": "Market code"}
+
+    result = confirm(client, headers, [spec], document_type="Ordinance").json()
+
+    assert result["registered"] == 1, result

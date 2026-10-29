@@ -578,8 +578,8 @@ def test_multipart_bulk_registration_requires_and_stores_each_year(tmp_path, mon
     client = TestClient(main.app)
     headers = bearer_headers(client)
     files = [
-        ("files", ("first.pdf", b"%PDF-1.4 first", "application/pdf")),
-        ("files", ("second.pdf", b"%PDF-1.4 second", "application/pdf")),
+        ("files", ("Ordinance first.pdf", b"%PDF-1.4 first", "application/pdf")),
+        ("files", ("Ordinance second.pdf", b"%PDF-1.4 second", "application/pdf")),
     ]
 
     missing_year = client.post(

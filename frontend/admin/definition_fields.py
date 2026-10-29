@@ -41,6 +41,7 @@ class DocumentTypeField:
             options=[ft.dropdown.Option(name) for name in STANDARD_TYPES], value=standard, **style, **sizing,
         )
         self.width = width
+        self.fixed = False
         self._handlers = []
         _on_select(self.choice, lambda _: self._changed())
 
@@ -65,7 +66,12 @@ class DocumentTypeField:
         return None
 
     def lock(self, locked):
-        self.choice.disabled = locked
+        self.choice.disabled = locked or self.fixed
+
+    def fix(self):
+        """Keep the chosen type: the field stays locked whatever else unlocks."""
+        self.fixed = True
+        self.choice.disabled = True
 
     def control(self):
         return self.choice

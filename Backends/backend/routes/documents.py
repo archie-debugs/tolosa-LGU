@@ -15,7 +15,7 @@ from ..core import LGU_TIMEZONE, UPLOAD_DIR, lgu_today, TEMP_UPLOAD_DIR, normali
 from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
 from .measure_stages import add_stage_change, registration_stage, stage_summary
-from ..tracking_numbers import DOCUMENT_TYPES, next_tracking_number, standard_document_type, tracking_numbers_for_query
+from ..tracking_numbers import DOCUMENT_TYPES, file_name_type_problem, next_tracking_number, standard_document_type, tracking_numbers_for_query
 import uuid
 import threading
 import time
@@ -351,6 +351,8 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
         category=payload.get("category"), document_type=payload.get("document_type"), due_date=payload.get("due_date"),
     )
     type_name = placement["document_type"]
+    # Multiple registration says so; the single-document form also registers its file through here.
+    multiple = payload.get("multiple") is True
     allow_duplicate_number = payload.get("allow_duplicate_number") is True
     title = payload.get("title")
     description = payload.get("description")
@@ -400,6 +402,11 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
 
             base_title = os.path.splitext(original_filename)[0]
             doc_title = (title_by_tmp_name.get(safe_name) or title or base_title or f"Document {idx}").strip()
+            # Multiple registration holds one type: a file named for another type stays out.
+            type_problem = file_name_type_problem(type_name, base_title, doc_title) if multiple else None
+            if type_problem:
+                failed.append({"index": idx, "tmp_name": safe_name, "filename": original_filename, "reason": type_problem})
+                continue
             inferred_number = _extract_legislative_number(original_filename or doc_title)
             document_number = (number_by_tmp_name.get(safe_name) or payload.get("document_number") or inferred_number or "").strip() or None
             series_year = year_by_tmp_name[safe_name]
@@ -591,6 +598,9 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             # attempt to create document record
             base_title = os.path.splitext(os.path.basename(filename))[0]
             doc_title = (title or base_title or f"Document {idx}").strip()
+            type_problem = file_name_type_problem(placement["document_type"], base_title, doc_title)
+            if type_problem:
+                raise Exception(type_problem)
             inferred_number = _extract_legislative_number(filename or doc_title)
             document_number = (inferred_number or "").strip() or None
             series_year = validated_years[idx - 1]
