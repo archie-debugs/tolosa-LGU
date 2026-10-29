@@ -743,7 +743,7 @@ def _registration_office(db: Session, current_user: models.User, office_id=None,
 
 
 # Offered on every registration; any other type or category is typed in.
-STANDARD_DOCUMENT_TYPES = ["Ordinance", "Resolution"]
+STANDARD_DOCUMENT_TYPES = ["Ordinance", "Resolution", "Letter Request"]
 DEFINITION_MAX_LENGTH = 120
 
 
@@ -801,13 +801,13 @@ def _require_registration_details(**values) -> None:
 
 
 def _number_problem(document_type: str | None, stage: str | None, number: str | None) -> str | None:
-    """A number is required, except on a measure not yet approved or adopted: it gets its number then."""
+    """A number is only required on a measure registered as already approved or adopted."""
     if number:
         return None
     kind = stages.measure_kind(document_type)
-    if kind and not stages.is_enacted(kind, stage):
-        return None
-    return "Number is required."
+    if kind and stages.is_enacted(kind, stage):
+        return "Number is required."
+    return None
 
 
 def _registration_placement(db: Session, current_user: models.User, *, office_id=None, office_name=None, category=None, document_type=None, due_date=None) -> dict:

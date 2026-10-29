@@ -139,7 +139,7 @@ def test_edit_options_suggest_what_documents_already_use(client, document):
 
     assert response.status_code == 200, response.text
     assert response.json() == {
-        "document_types": ["Ordinance", "Resolution"],
+        "document_types": ["Ordinance", "Resolution", "Letter Request"],
         "other_document_types": [],
         "categories": ["Old Category"],
     }

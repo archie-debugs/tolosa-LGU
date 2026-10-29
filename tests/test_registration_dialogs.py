@@ -3,7 +3,6 @@ from datetime import date
 import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
 import flet as ft
 
-from frontend.admin.definition_fields import OTHER
 from frontend.admin.registration import open_multiple_register_dialog, open_register_dialog
 
 TODAY = date(2026, 10, 20)
@@ -46,7 +45,7 @@ class FakeApi:
         self.calls = []
         self.options = options or {"offices": [MAYOR], "default_office_id": 2, "office_locked": True,
                                    "categories": ["Finance"], "document_types": ["Ordinance", "Resolution"]}
-        self.duplicates = []
+        self.duplicates = []  # tracking numbers the backend reports as having the same number
         self.confirm_results = []
         self.next_id = 1
 
@@ -54,9 +53,9 @@ class FakeApi:
         self.calls.append((method, path, kwargs))
         if path == "/documents/registration/options":
             return self.options
-        if path == "/documents/registration/duplicates":
-            return {"documents": [{"id": 9, "tracking_number": number, "title": "Old"} for number in self.duplicates]}
         if path == "/documents/register":
+            if self.duplicates and kwargs["data"].get("allow_duplicate_number") != "true":
+                raise Exception({"message": "used", "duplicate_number": True, "documents": self.duplicates})
             return self.document(kwargs["data"]["title"])
         if path == "/documents/uploads/create_tmp_uploads":
             return {"files": [
@@ -134,8 +133,8 @@ def press(dialog, text):
     click(button(dialog, text))
 
 
-REQUIRED = {"Due date": "2026-12-01", "Referred to": "SB Secretary", "Author": "Hon. Cruz"}
-SENT = {"due_date": "2026-12-01", "assigned_to": "SB Secretary", "action_required": "None", "author": "Hon. Cruz"}
+REQUIRED = {"Referred to": "SB Secretary", "Author": "Hon. Cruz"}
+SENT = {"assigned_to": "SB Secretary", "action_required": "None", "author": "Hon. Cruz"}
 
 
 def fill_required(dialog):
@@ -161,12 +160,10 @@ def test_an_employee_registers_a_record_into_their_own_office():
     assert "Without a file, only the record is registered." in texts(dialog)
 
     field(dialog, "Title").value = "Market code"
-    field(dialog, "Number").value = "12"
     press(dialog, "Register")
 
     data = api.posted("/documents/register")[0]["data"]
-    assert data == {"title": "Market code", "document_number": "12", "series_year": "2026", "document_type": "Ordinance",
-                    "office_id": "2", "priority": "Medium", **SENT}
+    assert data == {"title": "Market code", "series_year": "2026", "document_type": "Ordinance", "office_id": "2", "stage": "Filed", **SENT}
     assert "DOC-000001" in texts(dialog) and "Document registered" in texts(dialog)
     press(dialog, "QR label")
     assert page.launched == ["http://backend/labels.pdf"]
@@ -178,15 +175,13 @@ def test_a_number_already_used_warns_and_can_be_registered_anyway():
     api = FakeApi()
     api.duplicates = ["DOC-000004"]
     page, dialog, files, api, _ = open_single(api)
-    field(dialog, "Title").value = "Market code"
-    field(dialog, "Number").value = "7"
+    field(dialog, "Title").value = "Ordinance No. 7 on markets"
     press(dialog, "Register")
 
-    assert api.posted("/documents/register") == []
-    assert "Ordinance No. 7 s. 2026 is already registered" in texts(dialog)
+    assert "A document with the same number is already registered" in texts(dialog)
     assert "DOC-000004" in texts(dialog)
     press(dialog, "Register anyway")
-    assert api.posted("/documents/register")[0]["data"]["allow_duplicate_number"] == "true"
+    assert api.posted("/documents/register")[1]["data"]["allow_duplicate_number"] == "true"
     assert "Document registered" in texts(dialog)
 
 
@@ -207,7 +202,7 @@ def test_a_document_with_its_file_registers_once_the_upload_finishes():
     assert find_button(dialog, "Uploading 50%") is not None
     files.on_progress("Ordinance_on_parking.pdf", 1.0, None)
     payload = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]
-    assert payload["documents"] == [{"tmp_name": "tmp_Ordinance_on_parking.pdf", "series_year": 2026, "title": "Ordinance on parking", "document_number": None}]
+    assert payload["documents"] == [{"tmp_name": "tmp_Ordinance_on_parking.pdf", "series_year": 2026, "title": "Ordinance on parking"}]
     assert payload["office_id"] == 2 and payload["allow_duplicate_number"] is False
     assert "DOC-000001" in texts(dialog)
 
@@ -286,37 +281,11 @@ def test_files_whose_number_is_used_can_be_retried_on_their_own():
 
 
 
-def test_a_due_date_is_sent_with_a_single_registration():
-    page, dialog, files, api, _ = open_single()
-    field(dialog, "Title").value = "Market code"
-    field(dialog, "Due date").value = "2026-11-05"
-
-    press(dialog, "Register")
-
-    assert api.posted("/documents/register")[0]["data"]["due_date"] == "2026-11-05"
-
-
-def test_a_malformed_due_date_is_caught_before_registering():
-    page, dialog, files, api, _ = open_single()
-    field(dialog, "Title").value = "Market code"
-    field(dialog, "Due date").value = "Nov 5"
-
-    press(dialog, "Register")
-
-    assert api.posted("/documents/register") == []
-    assert "Enter the due date as YYYY-MM-DD, for example 2026-11-05." in texts(dialog)
-
-
-def test_several_files_share_one_due_date():
-    page, dialog, files, api, _ = open_multiple()
-    field(dialog, "Due date").value = "2026-12-01"
-    press(dialog, "Choose files")
-    files.on_picked([{"name": "a.pdf", "size": 1}])
-    files.on_progress("a.pdf", 1.0, None)
-
-    press(dialog, "Register 1 document")
-
-    assert api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["due_date"] == "2026-12-01"
+def test_the_forms_ask_for_no_number_priority_due_date_or_stage():
+    for opened in (open_single(FakeApi(MEASURE_OPTIONS)), open_multiple(FakeApi(MEASURE_OPTIONS))):
+        dialog = opened[1]
+        names = {c.data or c.label for c in walk(dialog) if type(c).__name__ in ("TextField", "Dropdown")}
+        assert not names & {"Number", "Priority", "Due date", "Stage"}, names
 
 
 MEASURE_OPTIONS = {"offices": [MAYOR], "default_office_id": 2, "office_locked": True, "categories": [],
@@ -329,21 +298,15 @@ def choose(dropdown, value):
     (getattr(dropdown, "on_change", None) or getattr(dropdown, "on_select", None))(None)
 
 
-def test_a_measure_is_registered_at_the_stage_chosen_and_other_documents_have_none():
+def test_a_measure_is_registered_at_filed_and_other_documents_have_no_stage():
     page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS))
-    stage = field(dialog, "Stage")
-    assert stage.value == "Filed" and [option.key or option.text for option in stage.options] == ["Filed", "First Reading", "Approved"]
-
     field(dialog, "Title").value = "Market code"
-    stage.value = "First Reading"
     press(dialog, "Register")
-    assert api.posted("/documents/register")[0]["data"]["stage"] == "First Reading"
+    assert api.posted("/documents/register")[0]["data"]["stage"] == "Filed"
 
     page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS))
-    choose(field(dialog, "Document type"), OTHER)
-    field(dialog, "Other document type").value = "Memorandum"
+    choose(field(dialog, "Document type"), "Letter Request")
     field(dialog, "Title").value = "Office memo"
-    field(dialog, "Number").value = "5"
     press(dialog, "Register")
     assert "stage" not in api.posted("/documents/register")[0]["data"]
 
@@ -358,27 +321,21 @@ def test_a_measure_registered_with_its_file_sends_its_stage():
     assert api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["stage"] == "Filed"
 
 
-def test_a_typed_type_is_sent_and_there_is_no_category():
+def test_the_type_is_ordinance_resolution_or_letter_request_and_there_is_no_category():
     page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS | {"categories": ["Finance", "Health"]}))
     assert not any(c.data == "Category" for c in walk(dialog) if type(c).__name__ == "TextField")
-    other = field(dialog, "Other document type")
-    assert other.visible is False
-    choose(field(dialog, "Document type"), OTHER)
-    assert other.visible is True and field(dialog, "Stage").options == []
+    assert not any(c.data == "Other document type" for c in walk(dialog) if type(c).__name__ == "TextField")
+    kind = field(dialog, "Document type")
+    assert [option.key or option.text for option in kind.options] == ["Ordinance", "Resolution", "Letter Request"]
 
-    field(dialog, "Title").value = "Office memo"
-    field(dialog, "Number").value = "5"
-    press(dialog, "Register")
-    assert "Type the document type, or choose Ordinance or Resolution." in texts(dialog)
-    assert api.posted("/documents/register") == []
-
-    other.value = "  Executive  Order "
+    choose(kind, "Letter Request")
+    field(dialog, "Title").value = "Request for road repair"
     press(dialog, "Register")
     data = api.posted("/documents/register")[0]["data"]
-    assert data["document_type"] == "Executive Order" and "category" not in data
+    assert data["document_type"] == "Letter Request" and "category" not in data and "stage" not in data
 
 
-def test_every_field_but_the_description_and_due_date_must_be_filled_before_registering():
+def test_every_field_but_the_description_must_be_filled_before_registering():
     page, dialog, files, api, _ = open_single()
     field(dialog, "Title").value = "Market code"
     for name in ("Author", "Referred to"):
@@ -388,33 +345,19 @@ def test_every_field_but_the_description_and_due_date_must_be_filled_before_regi
     assert api.posted("/documents/register") == []
 
     field(dialog, "Referred to").value, field(dialog, "Author").value = "SB Secretary", "Hon. Cruz"
-    field(dialog, "Due date").value = ""
-    press(dialog, "Register")
-    assert len(api.posted("/documents/register")) == 1
-    assert "due_date" not in api.posted("/documents/register")[0]["data"]
-
-
-def test_a_number_is_needed_unless_the_measure_is_not_yet_enacted():
-    page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS | {"enacted_stages": {"ordinance": "Approved", "resolution": "Adopted"}}))
-    field(dialog, "Title").value = "Market code"
-    field(dialog, "Stage").value = "Approved"
-    press(dialog, "Register")
-    assert "Enter the document's number." in texts(dialog)
-    assert api.posted("/documents/register") == []
-
-    field(dialog, "Stage").value = "Filed"
     press(dialog, "Register")
     assert len(api.posted("/documents/register")) == 1
 
 
-def test_several_files_of_a_non_measure_each_need_a_number():
+def test_several_files_of_a_non_measure_register_without_numbers():
     page, dialog, files, api, registered = open_multiple()
-    choose(field(dialog, "Document type"), OTHER)
-    field(dialog, "Other document type").value = "Memorandum"
+    choose(field(dialog, "Document type"), "Letter Request")
     press(dialog, "Choose files")
     files.on_picked([{"name": "memo.pdf", "size": 10}])
     files.on_progress("memo.pdf", 1.0, None)
 
     press(dialog, "Register 1 document")
-    assert "Give every file a number: memo.pdf" in texts(dialog)
-    assert api.posted("/documents/bulk-register/confirm_tmp") == []
+    payload = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]
+    assert payload["documents"] == [{"tmp_name": "tmp_memo.pdf", "series_year": 2026, "title": "memo"}]
+    assert not {"priority", "due_date", "stage"} & set(payload)
+    assert registered == [1]

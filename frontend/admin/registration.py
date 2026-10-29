@@ -2,13 +2,12 @@
 
 import inspect
 import os
-from datetime import date, datetime
+from datetime import date
 
 import flet as ft
 
 from frontend.admin.definition_fields import DocumentTypeField
-from frontend.admin.todays_documents import picked_date
-from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date
+from frontend.admin.tracking_ui import TrackingWidgets
 
 ALLOWED_EXTENSIONS = ("pdf", "doc", "docx")
 PRIORITIES = ("Low", "Medium", "High")
@@ -17,7 +16,6 @@ ACTIONS_REQUIRED = ("None", "For Agenda", "Approval", "Posting")
 STATUSES = ("For information", "Approved", "Completed", "Posted")
 OLDEST_YEAR = 1900
 FILED = "Filed"
-ENACTED_STAGES = {"ordinance": "Approved", "resolution": "Adopted"}
 
 # Flet 0.28 labels a button with `text`; newer releases use `content`.
 _BUTTON_CLASS = ft.Button if inspect.isclass(ft.Button) else (getattr(ft, "FilledButton", None) or ft.ElevatedButton)
@@ -110,15 +108,6 @@ def measure_kind(document_type):
 def title_from_filename(name):
     stem = os.path.splitext(name or "")[0].replace("_", " ").replace("-", " ").strip()
     return " ".join(stem.split())
-
-
-def number_label(document_type, number, year):
-    parts = [document_type or "Document"]
-    if number:
-        parts.append(f"No. {number}")
-    if year:
-        parts.append(f"s. {year}")
-    return " ".join(parts)
 
 
 def _accent(widgets):
@@ -260,8 +249,6 @@ def load_options(api):
         "default_office_id": options.get("default_office_id"),
         "office_locked": bool(options.get("office_locked")),
         "document_types": options.get("document_types") or [],
-        "measure_stages": options.get("measure_stages") or {},
-        "enacted_stages": options.get("enacted_stages") or ENACTED_STAGES,
     }
 
 
@@ -276,60 +263,26 @@ class _Form:
         offices = options["offices"]
         default_office = options["default_office_id"] or (offices[0]["id"] if len(offices) == 1 else None)
         # `data` names each field, since its name is drawn above it rather than as its label.
-        self.document_type = DocumentTypeField(style, value=options["document_types"][0] if options.get("document_types") else None,
-                                               used_before=options.get("other_document_types") or [])
+        self.document_type = DocumentTypeField(style, value=options["document_types"][0] if options.get("document_types") else None)
         self.office = ft.Dropdown(
             data="Office", hint_text="Office", options=[ft.dropdown.Option(str(office["id"]), office["name"]) for office in offices],
             value=str(default_office) if default_office is not None else None,
             disabled=options["office_locked"], **style,
         )
-        self.priority = ft.Dropdown(data="Priority", options=[ft.dropdown.Option(name) for name in PRIORITIES], value="Medium", **style)
-        self.due_date = ft.TextField(data="Due date", hint_text="YYYY-MM-DD", **{**style, "content_padding": ft.Padding(12, 12, 44, 12)})
         self.assigned_to = ft.TextField(data="Referred to", hint_text="e.g. SB Secretary, Vice Mayor…", **style)
         self.action_required = ft.Dropdown(data="Action required", options=[ft.dropdown.Option(name) for name in ACTIONS_REQUIRED], value="None", **style)
         self.author = ft.TextField(data="Author", hint_text="Enter author name...", **style)
         self.description = ft.TextField(data="Description", hint_text="What the document is about (optional)", multiline=True, min_lines=2, max_lines=3, **style)
-        self.due_button = ft.IconButton(ft.Icons.CALENDAR_MONTH_OUTLINED, icon_size=18, icon_color=widgets.muted_color(), tooltip="Pick a date", on_click=lambda _: self.pick_due())
-
-    def due_field(self):
-        """The due date box with its calendar button inside it."""
-        return ft.Stack([self.due_date, ft.Container(self.due_button, right=0, top=0, bottom=0, alignment=ft.Alignment(0, 0))])
-
-    def pick_due(self):
-        # One picker per page, kept in the overlay; it fills whichever form opened it last.
-        picker = getattr(self.page, "_due_date_picker", None)
-        if picker is None:
-            picker = ft.DatePicker(first_date=datetime(2000, 1, 1), last_date=datetime(2100, 12, 31))
-            self.page._due_date_picker = picker
-            self.page.overlay.append(picker)
-            self.page.update()
-        picker.on_change = self._due_picked
-        current = parse_due_date((self.due_date.value or "").strip())
-        picker.value = datetime.combine(current, datetime.min.time()) if current else None
-        if hasattr(picker, "pick_date"):
-            picker.pick_date()
-        else:
-            self.page.open(picker)
-
-    def _due_picked(self, e):
-        day = picked_date(e.control.value)
-        if day:
-            self.due_date.value = day.isoformat()
-            self.page.update()
 
     def details_problem(self):
-        """Everything but the description and due date must be filled in."""
+        """Everything but the description must be filled in."""
         blank = [name for name, value in (
             ("Referred to", self.assigned_to.value), ("Action required", self.action_required.value), ("Author", self.author.value),
         ) if not (value or "").strip()]
         return f"Fill in the required fields: {', '.join(blank)}." if blank else None
 
     def problem(self):
-        return self.office_problem() or self.document_type.problem() or self.details_problem() or self.due_problem()
-
-    def due_problem(self):
-        text = (self.due_date.value or "").strip()
-        return DUE_DATE_HINT if text and parse_due_date(text) is None else None
+        return self.office_problem() or self.document_type.problem() or self.details_problem()
 
     def office_name(self):
         return next((office["name"] for office in self.options["offices"] if str(office["id"]) == str(self.office.value)), None)
@@ -347,8 +300,6 @@ class _Form:
         return {
             "document_type": self.document_type.value,
             "office_id": int(self.office.value) if self.office.value else None,
-            "priority": self.priority.value or "Medium",
-            "due_date": (self.due_date.value or "").strip() or None,
             "assigned_to": (self.assigned_to.value or "").strip() or None,
             "action_required": self.action_required.value or None,
             "author": (self.author.value or "").strip() or None,
@@ -356,7 +307,7 @@ class _Form:
         }
 
     def lock(self, locked):
-        for control in (self.priority, self.due_date, self.due_button, self.assigned_to, self.action_required, self.author, self.description):
+        for control in (self.assigned_to, self.action_required, self.author, self.description):
             control.disabled = locked
         self.document_type.lock(locked)
         self.office.disabled = locked or self.options["office_locked"]
@@ -439,10 +390,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
 
     style = _field_style(widgets)
     title = ft.TextField(data="Title", hint_text="Enter document title...", autofocus=True, **style)
-    number = ft.TextField(data="Number", hint_text="Enter document number...", **style)
     year = _year_dropdown(this_year, width=None, widgets=widgets)
-    stage = ft.Dropdown(data="Stage", hint_text="Stage", value=FILED, **style)
-    stage_hint = widgets.hint("A measure gets its number when it is approved or adopted. Leave the number blank before then.")
     file_name = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=widgets.heading_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
     file_hint = widgets.hint("")
     remove_file = ft.IconButton(ft.Icons.CLOSE, tooltip="Remove file", on_click=lambda _: set_file(None))
@@ -482,7 +430,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         progress.visible = busy
         register_button.disabled = busy
         set_label(register_button, label or "Register")
-        for control in (title, number, year, stage):
+        for control in (title, year):
             control.disabled = busy
         form.lock(busy)
         render_file()
@@ -494,18 +442,17 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
 
     def show_duplicate(documents):
         state["duplicate"] = documents
-        label = number_label(form.document_type.value, (number.value or "").strip(), year.value)
         duplicate_box.controls = [
             ft.Container(
                 content=ft.Column([
                     ft.Row([
                         ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=ft.Colors.AMBER_800, size=18),
-                        ft.Text(f"{label} is already registered", size=13, weight=ft.FontWeight.BOLD, color=widgets.heading_color()),
+                        ft.Text("A document with the same number is already registered", size=13, weight=ft.FontWeight.BOLD, color=widgets.heading_color()),
                     ], spacing=6),
                     ft.Text(", ".join(documents), size=12, color=widgets.body_color()),
-                    ft.Text("Check the number and year. If this really is a separate document, register it anyway.", size=12, color=widgets.body_color()),
+                    ft.Text("Its number was read from the title or file name. If this really is a separate document, register it anyway.", size=12, color=widgets.body_color()),
                     ft.Row([
-                        ft.TextButton("Change the number", on_click=lambda _: dismiss_duplicate()),
+                        ft.TextButton("Go back", on_click=lambda _: dismiss_duplicate()),
                         ft.OutlinedButton("Register anyway", on_click=lambda _: register_anyway()),
                     ], spacing=8, wrap=True),
                 ], spacing=4),
@@ -528,36 +475,11 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         duplicate_box.visible = False
         submit()
 
-    def stage_choices():
-        return options["measure_stages"].get(measure_kind(form.document_type.value)) or []
-
-    def show_stage(update=True):
-        """Only ordinances and resolutions have a stage; a new one starts at Filed."""
-        choices = stage_choices()
-        stage.options = [ft.dropdown.Option(name) for name in choices]
-        if stage.value not in choices:
-            stage.value = FILED if FILED in choices else None
-        stage_box.visible = stage_hint.visible = bool(choices)
-        if update:
-            page.update()
-
-    def number_needed():
-        """Every document needs its number, except a measure not yet approved or adopted."""
-        kind = measure_kind(form.document_type.value)
-        if kind is None:
-            return True
-        choices, enacted = stage_choices(), options["enacted_stages"].get(kind)
-        return enacted in choices and stage.value in choices and choices.index(stage.value) >= choices.index(enacted)
-
     def fields():
-        values = {
-            "title": (title.value or "").strip(),
-            "document_number": (number.value or "").strip() or None,
-            "series_year": int(year.value),
-            **form.shared_fields(),
-        }
-        if stage_choices() and stage.value:
-            values["stage"] = stage.value
+        values = {"title": (title.value or "").strip(), "series_year": int(year.value), **form.shared_fields()}
+        # A new ordinance or resolution starts at Filed; it gets its number when approved or adopted.
+        if measure_kind(form.document_type.value):
+            values["stage"] = FILED
         return values
 
     def submit():
@@ -568,27 +490,12 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
             message.value = "Enter the document's title."
             page.update()
             return
-        if number_needed() and not (number.value or "").strip():
-            message.value = "Enter the document's number."
-            page.update()
-            return
         problem = form.problem()
         if problem:
             message.value = problem
             page.update()
             return
         values = fields()
-        if not state["allow_duplicate"] and values["document_number"]:
-            try:
-                found = api("GET", "/documents/registration/duplicates", params={
-                    "document_type": values["document_type"] or "", "document_number": values["document_number"], "series_year": values["series_year"],
-                }).get("documents") or []
-            except Exception as exc:
-                fail(error_detail(exc)[0])
-                return
-            if found:
-                show_duplicate([item["tracking_number"] for item in found])
-                return
         if state["file"]:
             upload_then_register(values)
         else:
@@ -647,7 +554,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     def confirm(values):
         set_busy(True, "Registering…")
         progress.value = None
-        spec = {"tmp_name": state["tmp_name"], "series_year": values["series_year"], "title": values["title"], "document_number": values["document_number"]}
+        spec = {"tmp_name": state["tmp_name"], "series_year": values["series_year"], "title": values["title"]}
         shared = {key: value for key, value in values.items() if key not in spec and key != "title"}
         try:
             result = api("POST", "/documents/bulk-register/confirm_tmp", json={
@@ -711,23 +618,14 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     render_file()
     narrow = (page.width or 1024) <= 600
     third = {"xs": 12, "sm": 4}
-    stage_box = _labelled(widgets, stage, "Stage", ft.Icons.TIMELINE, required=True, col=third)
-    form.document_type.on_change(lambda _: show_stage())
-    show_stage(update=False)
+    half = {"xs": 12, "sm": 6}
     content = ft.Column([
         _section(widgets, ft.Icons.DESCRIPTION, "The document", [
             _labelled(widgets, title, "Title", ft.Icons.TITLE, required=True),
             ft.ResponsiveRow([
-                _labelled(widgets, number, "Number", ft.Icons.TAG, required=True, col=third),
-                _labelled(widgets, year, "Year", ft.Icons.CALENDAR_TODAY_OUTLINED, required=True, col=third),
-                _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=third),
+                _labelled(widgets, year, "Year", ft.Icons.CALENDAR_TODAY_OUTLINED, required=True, col=half),
+                _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=half),
             ], spacing=14, run_spacing=12),
-            ft.ResponsiveRow([
-                _labelled(widgets, form.priority, "Priority", ft.Icons.FLAG_OUTLINED, required=True, col=third),
-                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=third),
-                stage_box,
-            ], spacing=14, run_spacing=12),
-            stage_hint,
         ]),
         _section(widgets, ft.Icons.ACCOUNT_BALANCE, "Where it starts", [
             _labelled(widgets, form.office, "Office", ft.Icons.APARTMENT, required=True),
@@ -781,7 +679,7 @@ ROW_STATES = {
 
 
 def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None):
-    """Register several files at once: each file gets its own title, number and year, the rest is shared."""
+    """Register several files at once: each file gets its own title and year, the rest is shared."""
     widgets = TrackingWidgets(page)
     this_year = (today or date.today()).year
     try:
@@ -790,7 +688,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
         _show_problem(page, dialog, widgets, "Register several documents", f"The registration form could not be loaded: {error_detail(exc)[0]}")
         return
     form = _Form(page, options, widgets)
-    rows = []  # each: {name, size, tmp_name, state, progress, reason, documents, allow, document, title, number, year}
+    rows = []  # each: {name, size, tmp_name, state, progress, reason, documents, allow, document, title, year}
     status = {"busy": False}
 
     rows_column = ft.Column(spacing=0)
@@ -847,7 +745,6 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             return changed
 
         row["_title"] = ft.TextField(label="Title", value=row["title"], on_change=keep("title"), expand=True)
-        row["_number"] = ft.TextField(label="Number", value=row["number"], on_change=keep("number"), width=110)
         row["_year"] = _year_dropdown(this_year, width=120, value=row["year"])
         on_dropdown_change(row["_year"], keep("year"))
         row["_status"] = ft.Row([], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -861,7 +758,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                     row["_status"],
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([row["_title"]], spacing=8),
-                ft.Row([row["_number"], row["_year"]], spacing=8, wrap=True, run_spacing=8),
+                ft.Row([row["_year"]], spacing=8, wrap=True, run_spacing=8),
                 row["_details"],
             ], spacing=8),
             padding=ft.Padding(0, 10, 0, 12),
@@ -870,7 +767,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
 
     def update_row(row):
         locked = row["state"] in ("registered", "registering", "refused") or status["busy"]
-        for control in (row["_title"], row["_number"], row["_year"]):
+        for control in (row["_title"], row["_year"]):
             control.disabled = locked
         row["_year"].value = row["year"]
         shown = (row["state"], round(row["progress"] or 0, 2), locked)
@@ -931,7 +828,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             row = {
                 "name": f["name"], "size": f["size"], "tmp_name": item.get("tmp_name"), "progress": 0.0, "reason": None,
                 "documents": [], "allow": False, "document": None,
-                "title": title_from_filename(f["name"]), "number": "", "year": year_for_all.value or str(this_year),
+                "title": title_from_filename(f["name"]), "year": year_for_all.value or str(this_year),
                 "state": "uploading" if item.get("ok") else "refused",
             }
             if not item.get("ok"):
@@ -971,17 +868,11 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             message.value = "Give every file a title: " + ", ".join(untitled)
             page.update()
             return
-        # A measure without a number is registered at Filed and gets its number when enacted.
-        unnumbered = [row["name"] for row in waiting if not (row["number"] or "").strip()]
-        if unnumbered and measure_kind(form.document_type.value) is None:
-            message.value = "Give every file a number: " + ", ".join(unnumbered)
-            page.update()
-            return
         skipped = [row for row in waiting if row["state"] == "duplicate" and not row["allow"]]
         normal = [row for row in waiting if row["state"] != "duplicate"]
         overriding = [row for row in waiting if row["state"] == "duplicate" and row["allow"]]
         if not normal and not overriding:
-            message.value = "Tick “Register anyway” or change the number of the files whose number is already used."
+            message.value = "Tick “Register anyway” on the files whose number is already used, or remove them."
             page.update()
             return
         status["busy"] = True
@@ -1005,7 +896,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 "tmp_names": [row["tmp_name"] for row in batch],
                 "documents": [{
                     "tmp_name": row["tmp_name"], "series_year": int(row["year"]),
-                    "title": row["title"].strip(), "document_number": (row["number"] or "").strip() or None,
+                    "title": row["title"].strip(),
                 } for row in batch],
                 **shared,
                 "allow_duplicate_number": allow,
@@ -1052,10 +943,6 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 _labelled(widgets, form.office, "Office", ft.Icons.APARTMENT, required=True, col=half),
             ], spacing=14, run_spacing=12),
             ft.ResponsiveRow([
-                _labelled(widgets, form.priority, "Priority", ft.Icons.PRIORITY_HIGH, required=True, col=half),
-                _labelled(widgets, form.due_field(), "Due date", ft.Icons.EVENT_OUTLINED, col=half),
-            ], spacing=14, run_spacing=12),
-            ft.ResponsiveRow([
                 _labelled(widgets, form.assigned_to, "Referred to", ft.Icons.PERSON_OUTLINE, required=True, col=third),
                 _labelled(widgets, form.action_required, "Action required", ft.Icons.TASK_ALT, required=True, col=third),
                 _labelled(widgets, form.author, "Author", ft.Icons.EDIT_OUTLINED, required=True, col=third),
@@ -1066,7 +953,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             _upload_box(
                 widgets,
                 ft.Text("Choose files", size=14, weight=ft.FontWeight.BOLD, color=widgets.heading_color()),
-                widgets.hint("PDF, DOC or DOCX. Each file becomes one document; give each its own title, number and year."),
+                widgets.hint("PDF, DOC or DOCX. Each file becomes one document; give each its own title and year."),
                 _pill_button(widgets, "Choose files", ft.Icons.ATTACH_FILE, lambda _: files.pick(True, picked)),
             ),
             summary,
