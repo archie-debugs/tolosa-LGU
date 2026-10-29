@@ -103,7 +103,7 @@ def test_without_a_stage_a_numbered_measure_starts_enacted_and_other_documents_h
     admin = headers_for(client, "admin")
     numbered = register(client, admin, title="Ordinance No. 7", document_type="Ordinance").json()
     resolution = register(client, admin, title="A resolution", document_type="Resolution").json()
-    memo = register(client, admin, title="Office memo", document_type="Memorandum", document_number="3", stage="Filed").json()
+    memo = register(client, admin, title="Office memo", document_type="Letter Request", document_number="3", stage="Filed").json()
 
     assert numbered["stage"] == "Approved" and numbered["document_number"] == "7"
     assert resolution["stage"] == "Filed"

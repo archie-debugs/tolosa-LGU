@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi import Query
-from sqlalchemy import Integer, String, cast, exc, exists, func, or_, text
+from sqlalchemy import Integer, String, cast, exc, exists, func, or_, select, text
 from sqlalchemy.orm import Session
 from .. import models, schemas, stages
 from ..database import get_db
@@ -15,6 +15,7 @@ from ..core import LGU_TIMEZONE, UPLOAD_DIR, lgu_today, TEMP_UPLOAD_DIR, normali
 from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
 from .measure_stages import add_stage_change, registration_stage, stage_summary
+from ..tracking_numbers import DOCUMENT_TYPES, next_tracking_number, standard_document_type, tracking_numbers_for_query
 import uuid
 import threading
 import time
@@ -654,16 +655,12 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
     return {"success": len(failed) == 0, "total": len(files), "registered": len(created), "failed": len(failed), "documents": created, "errors": failed, "duplicates": duplicates}
 
 
-def _next_display_tracking_value(db: Session) -> int:
-    if db.bind and db.bind.dialect.name == "sqlite":
-        max_value = db.execute(text("SELECT COALESCE(MAX(CAST(SUBSTR(tracking_number, 5) AS INTEGER)), 0) FROM documents")).scalar_one()
-        return int(max_value) + 1
-    return int(db.execute(text("SELECT nextval('document_tracking_number_seq')")).scalar_one())
-
-
 def _assign_system_tracking_number(db: Session, doc: models.Document) -> str:
-    sequence_value = _next_display_tracking_value(db)
-    tracking_number = f"DOC-{int(sequence_value):06d}"
+    """Give `doc` the next number in its type's series; a number it had before still finds it."""
+    previous = doc.tracking_number
+    tracking_number = next_tracking_number(db, doc.document_type)
+    if previous and not previous.startswith("PENDING-"):
+        db.add(models.DocumentTrackingNumberAlias(document_id=doc.id, tracking_number=previous))
     doc.tracking_number = tracking_number
     db.add(doc)
     db.flush()
@@ -742,19 +739,27 @@ def _registration_office(db: Session, current_user: models.User, office_id=None,
     return db.get(models.Office, own_office_id) if own_office_id is not None else None
 
 
-# Offered on every registration; any other type or category is typed in.
-STANDARD_DOCUMENT_TYPES = ["Ordinance", "Resolution", "Letter Request"]
+# A document is always one of the three types; a category is typed in.
 DEFINITION_MAX_LENGTH = 120
+DOCUMENT_TYPE_REQUIRED = "Choose the document type: Ordinance, Resolution or Letter Request."
 
 
 def _typed_name(value: str | None, label: str) -> str | None:
-    """A typed document type or category: trimmed, single-spaced, and the standard spelling when it is one."""
+    """A typed category: trimmed and single-spaced."""
     name = " ".join((value or "").split())
     if not name:
         return None
     if len(name) > DEFINITION_MAX_LENGTH:
         raise HTTPException(status_code=400, detail=f"{label} can be at most {DEFINITION_MAX_LENGTH} characters.")
-    return next((standard for standard in STANDARD_DOCUMENT_TYPES if standard.lower() == name.lower()), name)
+    return name
+
+
+def _document_type(value: str | None) -> str:
+    """The standard spelling of a document type; anything but the three is refused."""
+    name = standard_document_type(value)
+    if name is None:
+        raise HTTPException(status_code=400, detail=DOCUMENT_TYPE_REQUIRED)
+    return name
 
 
 def _names_in_use(db: Session, column) -> list[str]:
@@ -765,10 +770,7 @@ def _names_in_use(db: Session, column) -> list[str]:
 
 
 def _definition_options(db: Session) -> dict:
-    other_types = [name for name in _names_in_use(db, models.Document.document_type)
-                   if name.lower() not in {standard.lower() for standard in STANDARD_DOCUMENT_TYPES}]
-    return {"document_types": list(STANDARD_DOCUMENT_TYPES), "other_document_types": other_types,
-            "categories": _names_in_use(db, models.Document.category)}
+    return {"document_types": list(DOCUMENT_TYPES), "categories": _names_in_use(db, models.Document.category)}
 
 
 DUE_DATE_ERROR = "Due date must be a date like 2026-11-05."
@@ -816,7 +818,7 @@ def _registration_placement(db: Session, current_user: models.User, *, office_id
         "due_date": _parse_due_date(due_date),
         "office": _registration_office(db, current_user, office_id, office_name),
         "category": _typed_name(category, "Category"),
-        "document_type": _typed_name(document_type, "Document type"),
+        "document_type": _document_type(document_type),
     }
 
 
@@ -1111,21 +1113,21 @@ def _find_document_by_qr_or_tracking(db: Session, qr_value: str):
     if current_qr is not None:
         return current_qr
 
-    aliases = {normalized_value}
-    normalized_tracking = _normalize_tracking_query(qr_text)
-    if normalized_tracking is not None:
-        numeric_tracking = int(normalized_tracking)
-        aliases.add(f"DOC-{numeric_tracking}")
-        aliases.add(f"DOC-{numeric_tracking:06d}")
+    # "ORD-12" or "ord 12" means ORD-000012; a bare "12" counts only when one series has it.
+    numbers = {normalized_value, *tracking_numbers_for_query(qr_text)}
+    matches = db.query(models.Document).filter(models.Document.tracking_number.in_(numbers)).limit(2).all()
+    if len(matches) == 1:
+        return matches[0]
 
-    alias = (
+    aliases = (
         db.query(models.DocumentTrackingNumberAlias)
-        .filter(models.DocumentTrackingNumberAlias.tracking_number.in_(aliases))
-        .first()
+        .filter(models.DocumentTrackingNumberAlias.tracking_number.in_(numbers))
+        .limit(2)
+        .all()
     )
-    if alias is None:
+    if len(aliases) != 1 or matches:
         return None
-    return db.query(models.Document).filter(models.Document.id == alias.document_id).first()
+    return db.query(models.Document).filter(models.Document.id == aliases[0].document_id).first()
 
 
 # The backend address as the viewer's browser reaches it (QR codes, preview and download links).
@@ -1271,6 +1273,14 @@ def _edited_reference(current_name, current_id, name, label):
     return _typed_name(name, label), None
 
 
+def _tracking_number_conditions(search: str) -> list:
+    """Search conditions for a tracking number: a current one, or one a document had before its type changed."""
+    numbers = tracking_numbers_for_query(search)
+    earlier = select(models.DocumentTrackingNumberAlias.document_id).where(
+        models.DocumentTrackingNumberAlias.tracking_number.in_([search.strip().upper(), *numbers]))
+    return [models.Document.tracking_number.in_(numbers), models.Document.id.in_(earlier)]
+
+
 def _ensure_document_office_association(db: Session, document_id: int, office_id: int | None) -> None:
     if office_id is None:
         return
@@ -1280,18 +1290,6 @@ def _ensure_document_office_association(db: Session, document_id: int, office_id
     ).first()
     if existing is None:
         db.add(models.DocumentOffice(document_id=document_id, office_id=office_id))
-
-
-def _normalize_tracking_query(search: str | None) -> str | None:
-    if search is None:
-        return None
-    text = str(search).strip()
-    if not text:
-        return None
-    match = re.fullmatch(r"(?i)(?:doc[-\s]*)?0*([1-9][0-9]*|0)", text)
-    if match:
-        return match.group(1)
-    return None
 
 
 def _parse_document_date_filter(value: str, is_end: bool = False) -> str:
@@ -1409,7 +1407,6 @@ def list_office_documents(
     )
 
     if search:
-        normalized_tracking = _normalize_tracking_query(search)
         like = f"%{search}%"
         search_conditions = [
             models.Document.tracking_number.ilike(like),
@@ -1418,11 +1415,7 @@ def list_office_documents(
             models.Document.title.ilike(like),
             models.Document.document_type.ilike(like),
         ]
-        if normalized_tracking is not None:
-            search_conditions.extend([
-                models.Document.tracking_number == f"DOC-{int(normalized_tracking)}",
-                models.Document.tracking_number == f"DOC-{int(normalized_tracking):06d}",
-            ])
+        search_conditions.extend(_tracking_number_conditions(search))
         query = query.filter(or_(*search_conditions))
     if status:
         query = query.filter(models.Document.status == status)
@@ -1626,12 +1619,7 @@ def office_queue(
             models.Document.title.ilike(like),
             models.Document.document_type.ilike(like),
         ]
-        normalized_tracking = _normalize_tracking_query(search)
-        if normalized_tracking is not None:
-            conditions += [
-                models.Document.tracking_number == f"DOC-{int(normalized_tracking)}",
-                models.Document.tracking_number == f"DOC-{int(normalized_tracking):06d}",
-            ]
+        conditions.extend(_tracking_number_conditions(search))
         holding_query = holding_query.filter(or_(*conditions))
     holding_total = holding_query.count()
     held_docs = holding_query.order_by(models.Document.updated_at.desc(), models.Document.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
@@ -1826,7 +1814,6 @@ def list_documents(
     current_year = datetime.now(timezone.utc).year
     available_years = list(range(oldest_year, current_year + 1)) if oldest_year else [current_year]
     if search:
-        normalized_tracking = _normalize_tracking_query(search)
         like = f"%{search.lower()}%"
         search_conditions = [
             models.Document.tracking_number.ilike(like),
@@ -1845,12 +1832,7 @@ def list_documents(
             models.Document.session.ilike(like),
             models.Document.created_by.ilike(like),
         ]
-        if normalized_tracking is not None:
-            tracking_value = int(normalized_tracking)
-            search_conditions.extend([
-                models.Document.tracking_number == f"DOC-{tracking_value}",
-                models.Document.tracking_number == f"DOC-{tracking_value:06d}",
-            ])
+        search_conditions.extend(_tracking_number_conditions(search))
         query = query.filter(or_(*search_conditions))
     if status:
         query = query.filter(models.Document.status == status)
@@ -1988,8 +1970,11 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
     references = {}
     if "category" in data:
         references["category"] = _edited_reference(doc.category, doc.category_id, data["category"], "Category")
+    retyped = False
     if "document_type" in data:
-        references["document_type"] = _edited_reference(doc.document_type, doc.document_type_id, data["document_type"], "Document type")
+        type_name = _document_type(data["document_type"])
+        retyped = type_name != doc.document_type
+        references["document_type"] = (type_name, None) if retyped else (doc.document_type, doc.document_type_id)
     previous_visibility = bool(doc.is_public)
     if "is_public" in data and data["is_public"] != previous_visibility:
         require_permission(current_user, "manage_public_visibility")
@@ -2003,9 +1988,23 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
         doc.category, doc.category_id = references["category"]
     if "document_type" in references:
         doc.document_type, doc.document_type_id = references["document_type"]
+    previous_tracking_number = doc.tracking_number
+    if retyped:
+        # The number always matches the type, so a new type means the next number in its series.
+        _assign_system_tracking_number(db, doc)
 
     db.commit()
     db.refresh(doc)
+    if retyped:
+        _ensure_qr_png(doc, doc.qr_code_value or None)
+        record_audit_log(
+            db,
+            actor=getattr(current_user, "username", "System"),
+            action="TRACKING_NUMBER_CHANGED",
+            target_type="document",
+            target_id=str(doc.id),
+            details=f"{previous_tracking_number} is now {doc.tracking_number} after its type changed to {doc.document_type}",
+        )
     record_audit_log(
         db,
         actor=getattr(current_user, "username", "System"),

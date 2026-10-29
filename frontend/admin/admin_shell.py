@@ -158,8 +158,19 @@ def render_shell(
         if content is not None:
             apply_view_theme(content)
 
-    # Nav items are (icon, label, view) or (icon, label, view, section).
-    shell_nav_items = [item if len(item) == 4 else (*item, None) for item in shell_nav_items]
+    # Nav items are (icon, label, view, section, parent, text); only the first three are required.
+    # An item with a parent is drawn indented under it, shown while that group is open, with
+    # `text` (default: the label) as its name, so two groups can each have an "Ordinances".
+    shell_nav_items = [(*item, None, None, None)[:6] for item in shell_nav_items]
+    shell_nav_items = [(icon, label, view, section, parent, text or label)
+                       for icon, label, view, section, parent, text in shell_nav_items]
+    parents = {item[4] for item in shell_nav_items if item[4]}
+    # The groups whose sub-items show; opening a page opens its own group.
+    open_groups = set()
+
+    def group_of(index):
+        _, label, _, _, parent, _ = shell_nav_items[index]
+        return parent or (label if label in parents else None)
 
     # =========================================================
     # SIDEBAR
@@ -206,6 +217,9 @@ def render_shell(
         nonlocal selected_index
 
         selected_index = index
+        open_groups.clear()
+        if group_of(index):
+            open_groups.add(group_of(index))
         build_nav()
         refresh_notifications()
         build_profile_bar()
@@ -330,25 +344,25 @@ def render_shell(
     # BUILD NAVIGATION
     # =========================================================
 
-    def nav_tile(icon, label, on_click, selected=False):
-        return ft.Container(
-            content=ft.Row(
-                [
-                    ft.Icon(icon, color=ft.Colors.WHITE, size=21),
-                    ft.Container(width=10),
-                    ft.Text(
-                        label,
-                        size=13,
-                        color=ft.Colors.WHITE,
-                        weight=ft.FontWeight.W_600 if selected else ft.FontWeight.W_400,
-                        max_lines=1,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                        expand=True,
-                    ),
-                ],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    def nav_tile(icon, label, on_click, selected=False, sub_item=False, trailing=None):
+        row = [
+            ft.Icon(icon, color=ft.Colors.WHITE, size=17 if sub_item else 21),
+            ft.Container(width=10),
+            ft.Text(
+                label,
+                size=12.5 if sub_item else 13,
+                color=ft.Colors.WHITE,
+                weight=ft.FontWeight.W_600 if selected else ft.FontWeight.W_400,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+                expand=True,
             ),
-            padding=ft.Padding(left=14, top=10, right=12, bottom=10),
+        ]
+        if trailing is not None:
+            row.append(trailing)
+        return ft.Container(
+            content=ft.Row(row, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(left=40 if sub_item else 14, top=7 if sub_item else 10, right=12 if trailing is None else 4, bottom=7 if sub_item else 10),
             width=SIDEBAR_WIDTH - 24,
             bgcolor=colors["selected"] if selected else None,
             border_radius=12,
@@ -371,6 +385,24 @@ def render_shell(
             ),
             padding=ft.Padding(left=14, top=16, right=12, bottom=6),
             width=SIDEBAR_WIDTH - 24,
+        )
+
+    def group_toggle(group):
+        """The arrow beside a group's name: it opens or closes the group without leaving the page."""
+        def toggle(e):
+            open_groups.symmetric_difference_update({group})
+            build_nav()
+            page.update()
+
+        is_open = group in open_groups
+        return ft.Container(
+            content=ft.Icon(ft.Icons.EXPAND_LESS if is_open else ft.Icons.EXPAND_MORE, color=ft.Colors.WHITE, size=20),
+            data=f"toggle:{group}",
+            tooltip="Hide the document types" if is_open else "Show the document types",
+            padding=4,
+            border_radius=8,
+            on_click=toggle,
+            ink=True,
         )
 
     def build_nav():
@@ -419,10 +451,13 @@ def render_shell(
 
         current_section = None
 
-        for idx, (icon, label, _, section) in enumerate(shell_nav_items):
+        for idx, (icon, label, _, section, parent, text) in enumerate(shell_nav_items):
 
+            if parent and parent not in open_groups:
+                continue
             is_selected = idx == selected_index
-            tile = nav_tile(icon, label, lambda e, i=idx: switch_view(i), selected=is_selected)
+            toggle = group_toggle(label) if label in parents else None
+            tile = nav_tile(icon, text, lambda e, i=idx: switch_view(i), selected=is_selected, sub_item=bool(parent), trailing=toggle)
 
             if section == MENU_SECTION:
                 continue

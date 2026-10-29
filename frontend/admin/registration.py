@@ -255,7 +255,7 @@ def load_options(api):
 class _Form:
     """The fields both dialogs share: what the documents are and where they start."""
 
-    def __init__(self, page, options, widgets):
+    def __init__(self, page, options, widgets, document_type=None):
         self.page = page
         self.options = options
         self.widgets = widgets
@@ -263,7 +263,8 @@ class _Form:
         offices = options["offices"]
         default_office = options["default_office_id"] or (offices[0]["id"] if len(offices) == 1 else None)
         # `data` names each field, since its name is drawn above it rather than as its label.
-        self.document_type = DocumentTypeField(style, value=options["document_types"][0] if options.get("document_types") else None)
+        first_type = options["document_types"][0] if options.get("document_types") else None
+        self.document_type = DocumentTypeField(style, value=document_type or first_type)
         self.office = ft.Dropdown(
             data="Office", hint_text="Office", options=[ft.dropdown.Option(str(office["id"]), office["name"]) for office in offices],
             value=str(default_office) if default_office is not None else None,
@@ -372,11 +373,12 @@ def _year_dropdown(this_year, width=130, value=None, widgets=None):
     return ft.Dropdown(label="Year", options=options, value=str(value or this_year), width=width)
 
 
-def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None):
+def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None, document_type=None):
     """Register one document, with or without its file.
 
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises with the
     backend's detail. `files` is a PickerFiles. `open_details(document)` opens the new document.
+    `document_type` is the type the form starts with, which can still be changed.
     """
     widgets = TrackingWidgets(page)
     this_year = (today or date.today()).year
@@ -385,7 +387,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     except Exception as exc:
         _show_problem(page, dialog, widgets, "Register document", f"The registration form could not be loaded: {error_detail(exc)[0]}")
         return
-    form = _Form(page, options, widgets)
+    form = _Form(page, options, widgets, document_type)
     state = {"file": None, "tmp_name": None, "busy": False, "allow_duplicate": False, "duplicate": None}
 
     style = _field_style(widgets)
@@ -678,7 +680,7 @@ ROW_STATES = {
 }
 
 
-def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None):
+def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=None, open_details=None, can_print_qr=False, today=None, document_type=None):
     """Register several files at once: each file gets its own title and year, the rest is shared."""
     widgets = TrackingWidgets(page)
     this_year = (today or date.today()).year
@@ -687,7 +689,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
     except Exception as exc:
         _show_problem(page, dialog, widgets, "Register several documents", f"The registration form could not be loaded: {error_detail(exc)[0]}")
         return
-    form = _Form(page, options, widgets)
+    form = _Form(page, options, widgets, document_type)
     rows = []  # each: {name, size, tmp_name, state, progress, reason, documents, allow, document, title, year}
     status = {"busy": False}
 

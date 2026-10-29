@@ -289,7 +289,7 @@ def test_the_forms_ask_for_no_number_priority_due_date_or_stage():
 
 
 MEASURE_OPTIONS = {"offices": [MAYOR], "default_office_id": 2, "office_locked": True, "categories": [],
-                   "document_types": ["Ordinance", "Resolution"], "other_document_types": ["Memorandum"],
+                   "document_types": ["Ordinance", "Resolution"],
                    "measure_stages": {"ordinance": ["Filed", "First Reading", "Approved"], "resolution": ["Filed", "Adopted"]}}
 
 
@@ -361,3 +361,17 @@ def test_several_files_of_a_non_measure_register_without_numbers():
     assert payload["documents"] == [{"tmp_name": "tmp_memo.pdf", "series_year": 2026, "title": "memo"}]
     assert not {"priority", "due_date", "stage"} & set(payload)
     assert registered == [1]
+
+
+def test_registering_from_a_type_page_starts_with_that_type_and_it_can_still_change():
+    page, dialog, files, api, _ = open_single(FakeApi(MEASURE_OPTIONS), document_type="Resolution")
+    kind = field(dialog, "Document type")
+    assert kind.value == "Resolution"
+
+    choose(kind, "Letter Request")
+    field(dialog, "Title").value = "Request for road repair"
+    press(dialog, "Register")
+    assert api.posted("/documents/register")[0]["data"]["document_type"] == "Letter Request"
+
+    open_multiple_register_dialog(DummyPage(), dialog, FakeApi(MEASURE_OPTIONS), FakeFiles(), today=TODAY, document_type="Letter Request")
+    assert field(dialog, "Document type").value == "Letter Request"

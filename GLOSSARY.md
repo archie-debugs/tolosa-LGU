@@ -9,8 +9,11 @@ Any paper record registered in the system and identified by a tracking number an
 _Avoid_: File, record, item
 
 **Tracking number**:
-The `DOC-…` identifier a document gets when it is registered, used before and alongside any enacted number.
+The identifier a document gets when it is registered, counted separately for each document type: `ORD-000001` for ordinances, `RES-000001` for resolutions, `LTR-000001` for letter requests. A document whose type changes gets the next number in its new series, and its old number still finds it. Not the enacted number: `ORD-000012` is not Ordinance No. 12.
 _Avoid_: Reference number, control number
+
+**Document type**:
+What a document is: Ordinance, Resolution or Letter Request, and nothing else.
 
 **Office**:
 A unit of the LGU that can hold a document, such as the SB Secretariat or the Mayor's Office.

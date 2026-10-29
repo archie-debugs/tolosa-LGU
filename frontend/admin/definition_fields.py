@@ -1,8 +1,8 @@
 """The Document type and Category fields of the registration and edit forms.
 
-Document type is chosen from Ordinance, Resolution and Letter Request; a document already saved with
-another type keeps it as a choice. The type decides whether a document is a measure (one containing
-"ordinance" or "resolution" is). Category is typed freely, with the categories already in use offered
+Document type is chosen from Ordinance, Resolution and Letter Request, the only types a document can
+have; each counts its own tracking numbers. The type decides whether a document is a measure (an
+ordinance or resolution is). Category is typed freely, with the categories already in use offered
 as quick picks.
 """
 
@@ -29,17 +29,16 @@ def _on_select(dropdown, handler):
 
 
 class DocumentTypeField:
-    """A Dropdown of the standard types, plus the document's own type when it is not one of them."""
+    """A Dropdown of the three types; a document saved with any other type has to be given one."""
 
     def __init__(self, style=None, *, value=None, label=None, width=None):
         style = style or {}
         sizing = {"width": width} if width else {}
         current = " ".join((value or "").split())
         standard = next((name for name in STANDARD_TYPES if name.lower() == current.lower()), None)
-        names = STANDARD_TYPES + ([current] if current and not standard else [])
         self.choice = ft.Dropdown(
             data="Document type", hint_text="Choose the type", label=label,
-            options=[ft.dropdown.Option(name) for name in names], value=standard or current or None, **style, **sizing,
+            options=[ft.dropdown.Option(name) for name in STANDARD_TYPES], value=standard, **style, **sizing,
         )
         self.width = width
         self._handlers = []
