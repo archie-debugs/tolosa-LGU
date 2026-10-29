@@ -42,8 +42,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     except Exception:
         reference = {}
     # Document details passes its display record, where a missing value is "-".
-    document_type = DocumentTypeField(label="Document Type", width=280, value=_text(document.get("document_type")),
-                                      used_before=reference.get("other_document_types") or [])
+    document_type = DocumentTypeField(label="Document Type", width=280, value=_text(document.get("document_type")))
     category = CategoryField(label="Category", width=280, value=_text(document.get("category")),
                              used_before=reference.get("categories") or [])
 
@@ -59,9 +58,6 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     def save():
         if not (title.value or "").strip():
             show_error("Title is required.")
-            return
-        if document_type.problem(required=False):
-            show_error(document_type.problem(required=False))
             return
         due = (due_date.value or "").strip()
         if due and parse_due_date(due) is None:

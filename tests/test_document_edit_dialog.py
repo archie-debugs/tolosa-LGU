@@ -1,7 +1,6 @@
 import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
 import flet as ft
 
-from frontend.admin.definition_fields import OTHER
 from frontend.admin.document_edit import open_edit_document_dialog
 
 DOCUMENT = {
@@ -57,10 +56,6 @@ def field(dialog, label):
     return next(c for c in walk(dialog.content) if isinstance(c, (ft.TextField, ft.Dropdown)) and c.label == label)
 
 
-def other_type(dialog):
-    return next(c for c in walk(dialog.content) if isinstance(c, ft.TextField) and c.data == "Other document type")
-
-
 def picks(dialog):
     return [c.data for c in walk(dialog.content) if isinstance(c, ft.TextButton)]
 
@@ -88,20 +83,19 @@ def test_dialog_offers_the_standard_types_and_categories_used_before():
     dialog = open_dialog(FakeApi())
 
     assert dialog.open is True
-    assert options(field(dialog, "Document Type")) == ["Ordinance", "Resolution", OTHER]
+    assert options(field(dialog, "Document Type")) == ["Ordinance", "Resolution", "Letter Request"]
     assert field(dialog, "Document Type").value == "Ordinance"
-    assert other_type(dialog).visible is False
     assert field(dialog, "Category").value == "Old Category"
     assert picks(dialog) == ["Finance", "Health"]
     assert field(dialog, "Priority").value == "High"
 
 
-def test_dialog_shows_a_non_standard_type_in_the_other_box():
+def test_dialog_keeps_a_non_standard_type_as_a_choice():
     dialog = ft.AlertDialog()
     open_edit_document_dialog(DummyPage(), dialog, FakeApi(), {**DOCUMENT, "document_type": "Executive Order"})
 
-    assert field(dialog, "Document Type").value == OTHER
-    assert (other_type(dialog).visible, other_type(dialog).value) == (True, "Executive Order")
+    assert field(dialog, "Document Type").value == "Executive Order"
+    assert options(field(dialog, "Document Type")) == ["Ordinance", "Resolution", "Letter Request", "Executive Order"]
 
 
 def test_dialog_has_no_office_field_and_points_to_pass():
@@ -118,8 +112,7 @@ def test_saving_sends_the_edited_fields_without_offices():
     dialog = open_dialog(api, saved)
     field(dialog, "Title").value = "Ordinance No. 7, amended"
     field(dialog, "Category").value = ""
-    field(dialog, "Document Type").value = OTHER
-    other_type(dialog).value = "  Executive   Order "
+    field(dialog, "Document Type").value = "Letter Request"
 
     press(dialog, "Save changes")
 
@@ -128,7 +121,7 @@ def test_saving_sends_the_edited_fields_without_offices():
     payload = kwargs["json"]
     assert payload["title"] == "Ordinance No. 7, amended"
     assert payload["category"] is None
-    assert payload["document_type"] == "Executive Order"
+    assert payload["document_type"] == "Letter Request"
     assert payload["series_year"] == "2025"
     assert "current_office" not in payload and "originating_office" not in payload
     assert saved == [True]
@@ -145,13 +138,6 @@ def test_saving_needs_a_title_and_shows_the_backend_reason():
     assert [c for c in api.calls if c[0] == "PUT"] == []
 
     field(dialog, "Title").value = "Ordinance No. 7"
-    field(dialog, "Document Type").value = OTHER
-    other_type(dialog).value = ""
-    press(dialog, "Save changes")
-    assert "Type the document type, or choose Ordinance or Resolution." in texts(dialog.content)
-    assert [c for c in api.calls if c[0] == "PUT"] == []
-
-    other_type(dialog).value = "Memorandum"
     press(dialog, "Save changes")
     assert "Category 'X' is not an active entry in Reference Data." in texts(dialog.content)
     assert dialog.open is True

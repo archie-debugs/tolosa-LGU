@@ -158,7 +158,7 @@ def test_the_form_offers_each_user_only_what_they_may_choose(client):
     assert [office["name"] for office in clerk["offices"]] == ["Office of the Mayor"]
     assert clerk["office_locked"] is True
     assert clerk["default_office_id"] == office_id("Office of the Mayor")
-    assert clerk["document_types"] == ["Ordinance", "Resolution"]
+    assert clerk["document_types"] == ["Ordinance", "Resolution", "Letter Request"]
     assert (clerk["other_document_types"], clerk["categories"]) == ([], [])
 
     admin = options("admin")
@@ -203,27 +203,23 @@ def test_the_description_due_date_and_category_are_optional(client):
     assert (body["description"], body["due_date"], body["category"]) == (None, None, None)
 
 
-def test_a_document_needs_its_number_unless_it_is_a_measure_not_yet_enacted(client):
+def test_only_a_measure_registered_as_enacted_needs_its_number(client):
     headers = headers_for(client, "admin")
-    memo = register(client, headers, title="Office memo", document_type="Memorandum")
-    assert (memo.status_code, memo.json()["detail"]) == (400, "Number is required.")
     approved = register(client, headers, title="Market code", document_type="Ordinance", stage="Approved")
     assert (approved.status_code, approved.json()["detail"]) == (400, "Number is required.")
 
     assert register(client, headers, title="Market code", document_type="Ordinance", stage="Filed").status_code == 200
-    assert register(client, headers, title="Office memo", document_type="Memorandum", document_number="3").status_code == 200
+    memo = register(client, headers, title="Office memo", document_type="Memorandum")
+    assert memo.status_code == 200 and memo.json()["document_number"] is None
 
 
-def test_multiple_registration_needs_the_same_fields_and_a_number_per_file(client):
+def test_multiple_registration_needs_the_same_fields_but_no_number(client):
     headers = headers_for(client, "admin")
     unnumbered = upload(client, headers, "memo.pdf", PDF)
     assert confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025}], author="").status_code == 400
 
     result = confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025}], document_type="Memorandum").json()
-    assert result["registered"] == 0 and result["errors"][0]["reason"] == "Number is required."
-    numbered = confirm(client, headers, [{"tmp_name": unnumbered, "series_year": 2025, "document_number": "4"}],
-                       document_type="Memorandum").json()
-    assert numbered["registered"] == 1, numbered
+    assert result["registered"] == 1, result
 
 
 def test_an_overlong_type_or_category_is_refused(client):
@@ -240,7 +236,7 @@ def test_the_form_suggests_types_and_categories_already_used(client):
         response = register(client, headers, title=title, category=category, document_type=document_type, document_number=title)
         assert response.status_code == 200, response.text
     options = client.get("/documents/registration/options", headers=headers).json()
-    assert options["document_types"] == ["Ordinance", "Resolution"]
+    assert options["document_types"] == ["Ordinance", "Resolution", "Letter Request"]
     assert options["other_document_types"] == ["Memorandum"]
     assert options["categories"] == ["Finance", "Health"]
 

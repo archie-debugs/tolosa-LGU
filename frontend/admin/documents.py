@@ -19,7 +19,6 @@ ARCHIVED_SORTS = {
     "Newest number": ("tracking_number", "desc"),
     "Title A–Z": ("title", "asc"),
 }
-PRIORITY_COLORS = {"High": ft.Colors.RED_700, "Low": ft.Colors.BLUE_GREY_600}
 STATUS_COLORS = {"Approved": ft.Colors.AMBER_900, "Completed": ft.Colors.GREEN_700, "Posted": ft.Colors.TEAL_700}
 # Column widths, laid out like the SB's tracking sheet. Remarks takes whatever is left.
 COLUMN_WIDTHS = {"document": 210, "type": 105, "referred": 115, "action": 90, "status": 105, "where": 150, "registered": 95, "actions": 88}
@@ -130,7 +129,6 @@ def build_documents_view(
     )
     type_filter = dropdown("Type", [(ALL, ALL)])
     category_filter = dropdown("Category", [(ALL, ALL)])
-    priority_filter = dropdown("Priority", [(ALL, ALL), ("High", "High"), ("Medium", "Medium"), ("Low", "Low")])
     status_filter = dropdown("Status", [(ALL, ALL)])
     from_year = dropdown("From year", [(ALL, "Any")])
     to_year = dropdown("To year", [(ALL, "Any")])
@@ -139,7 +137,7 @@ def build_documents_view(
     if archived:
         filters = [type_filter, category_filter, archived_by_filter, status_filter, from_year, to_year]
     else:
-        filters = [type_filter, category_filter, priority_filter, status_filter, from_year, to_year]
+        filters = [type_filter, category_filter, status_filter, from_year, to_year]
     filter_boxes = {control: filter_box(control) for control in [*filters, sort_filter]}
 
     kpi_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
@@ -168,7 +166,7 @@ def build_documents_view(
         if can_search and (search_field.value or "").strip():
             result["search"] = search_field.value.strip()
         if can_filter:
-            for key, control in (("document_type", type_filter), ("category", category_filter), ("priority", priority_filter), ("status", status_filter), ("start_date", from_year), ("end_date", to_year), ("archived_by", archived_by_filter)):
+            for key, control in (("document_type", type_filter), ("category", category_filter), ("status", status_filter), ("start_date", from_year), ("end_date", to_year), ("archived_by", archived_by_filter)):
                 if control.value and control.value != ALL:
                     result[key] = control.value
         quick = state["quick"]
@@ -294,9 +292,6 @@ def build_documents_view(
         chips = [widgets.chip(doc["stage"], stage_color(doc["stage"]))] if doc.get("stage") else []
         if doc.get("is_public") and not archived:
             chips.append(widgets.chip("Public", ft.Colors.GREEN_700))
-        priority = doc.get("priority")
-        if priority in PRIORITY_COLORS and priority != "Low":
-            chips.append(widgets.chip(f"{priority} priority", PRIORITY_COLORS[priority]))
         if not has_file(doc):
             chips.append(widgets.chip("No file", ft.Colors.RED_700))
         return chips
