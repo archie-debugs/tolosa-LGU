@@ -4,11 +4,18 @@ The backend decides what each role may do; these pages only show the controls th
 Nobody changes their own role, office or permissions here: a Super Administrator sets those in Users & Roles.
 """
 
+import inspect
+
 import flet as ft
 
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
 
 LABEL_WIDTH = 150
+# Newer Flet versions renamed the dropdown's change event to on_select.
+DROPDOWN_EVENT = "on_select" if "on_select" in inspect.signature(ft.Dropdown.__init__).parameters else "on_change"
+# What each document type is kept for after it is archived, until a Super Administrator changes it; None is permanent.
+DEFAULT_RETENTION_MONTHS = {"Ordinance": None, "Resolution": 120, "Letter Request": 10}
+RETENTION_UNITS = ("Years", "Months", "Permanent")
 
 DEFAULT_SYSTEM_SETTINGS = {
     "organization_name": "LGU Tolosa",
@@ -83,6 +90,7 @@ def build_super_admin_settings_view(page, *, api, profile, change_password, edit
               ft.Icons.ADMIN_PANEL_SETTINGS_OUTLINED, [_admin_link(ui, entry, open_page) for entry in links] or [
                   ui.empty_box("Your account has none of the administration pages.")]),
         _system_configuration_card(page, ui, api),
+        _retention_card(page, ui, api),
         _system_information_card(ui, api),
     ])
 
@@ -301,6 +309,70 @@ def _system_configuration_card(page, ui, api):
         message,
         ft.Row([
             ft.FilledButton("Save system settings", icon=ft.Icons.SAVE_OUTLINED, on_click=save, height=44),
+        ], alignment=ft.MainAxisAlignment.END),
+    ])
+
+
+def _retention_card(page, ui, api):
+    """How long each document type is kept after it is archived, before it is due for deletion."""
+    retention = dict(DEFAULT_RETENTION_MONTHS)
+    message = ft.Text("", size=12, visible=False)
+    try:
+        stored = (api("GET", "/system-settings").get("settings") or {}).get("retention_months") or {}
+        retention.update({key: value for key, value in stored.items() if key in retention})
+    except Exception as exc:
+        message.value, message.color, message.visible = f"Unable to load retention periods: {exc}", ft.Colors.RED_700, True
+
+    controls = {}
+
+    def type_row(document_type, months):
+        unit_value = "Permanent" if months is None else "Years" if months % 12 == 0 else "Months"
+        amount = ft.TextField(value="" if months is None else str(months // 12 if unit_value == "Years" else months),
+                              keyboard_type=ft.KeyboardType.NUMBER, disabled=months is None)
+        unit = ft.Dropdown(value=unit_value, options=[ft.dropdown.Option(key=name, text=name) for name in RETENTION_UNITS])
+
+        def unit_changed(_):
+            amount.disabled = unit.value == "Permanent"
+            page.update()
+
+        setattr(unit, DROPDOWN_EVENT, unit_changed)
+        controls[document_type] = (amount, unit)
+        return ft.Row([
+            ft.Text(document_type, size=13, weight=ft.FontWeight.W_600, color=ui.heading_color(), width=LABEL_WIDTH),
+            _field(ui, "Keep for", amount, width=110),
+            _field(ui, "Unit", unit, width=160),
+        ], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.END)
+
+    def save(_):
+        months = {}
+        for document_type, (amount, unit) in controls.items():
+            if unit.value == "Permanent":
+                months[document_type] = None
+                continue
+            try:
+                value = int(str(amount.value or "").strip())
+            except ValueError:
+                value = 0
+            if value < 1:
+                message.value, message.color, message.visible = f"Type how long a {document_type} is kept, or choose Permanent.", ft.Colors.RED_700, True
+                page.update()
+                return
+            months[document_type] = value * 12 if unit.value == "Years" else value
+        try:
+            api("PUT", "/system-settings", json={"settings": {"retention_months": months}})
+            message.value, message.color = "Retention periods saved.", ft.Colors.GREEN_700
+        except Exception as exc:
+            message.value, message.color = f"Unable to save retention periods: {str(exc)[:180]}", ft.Colors.RED_700
+        message.visible = True
+        page.update()
+
+    return _card(ui, "Document Retention", "How long archived documents are kept before they are due for deletion.", ft.Icons.AUTO_DELETE_OUTLINED, [
+        *[type_row(document_type, months) for document_type, months in retention.items()],
+        _note(ui, "The time counts from the day a document is archived. When it ends, everyone who may delete documents "
+                  "is asked to delete it or keep it longer. Nothing is deleted on its own."),
+        message,
+        ft.Row([
+            ft.FilledButton("Save retention periods", icon=ft.Icons.SAVE_OUTLINED, on_click=save, height=44),
         ], alignment=ft.MainAxisAlignment.END),
     ])
 

@@ -5,6 +5,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form, Body
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi import Query
 from sqlalchemy import Integer, String, cast, exc, exists, func, or_, select, text
@@ -15,6 +16,8 @@ from ..core import LGU_TIMEZONE, UPLOAD_DIR, lgu_today, TEMP_UPLOAD_DIR, normali
 from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
 from .measure_stages import add_stage_change, registration_stage, stage_summary
+from ..retention import MAX_EXTENSION_MONTHS, extend_retention, retain_until
+from .settings import retention_months
 from ..tracking_numbers import DOCUMENT_TYPES, file_name_type_problem, next_tracking_number, standard_document_type, tracking_numbers_for_query
 import uuid
 import threading
@@ -1919,9 +1922,13 @@ def list_documents(
             models.DocumentHandoff.status == "Pending Receipt",
         )
     } if docs else {}
+    retention = retention_months(db) if archived else {}
     items = []
     for doc in docs:
         item = _serialize_document(doc)
+        if archived:
+            until = retain_until(doc, retention)
+            item["retain_until"] = until.isoformat() if until else None
         handoff = handoffs.get(doc.id)
         item["in_transit_to"] = handoff.receiving_office.name if handoff and handoff.receiving_office else None
         item["in_transit_since"] = _as_utc(handoff.sent_at) if handoff else None
@@ -3406,6 +3413,7 @@ def restore_document(document_id: int, db: Session = Depends(get_db), current_us
     doc.archived = False
     doc.archived_at = None
     doc.archived_by = None
+    doc.retention_extended_until = None
     db.commit()
     record_audit_log(
         db,
@@ -3416,6 +3424,33 @@ def restore_document(document_id: int, db: Session = Depends(get_db), current_us
         details=f"Restored archived document {doc.tracking_number}: {doc.title}",
     )
     return {"message": "Document restored successfully"}
+
+
+class RetentionExtension(BaseModel):
+    months: int = Field(ge=1, le=MAX_EXTENSION_MONTHS)
+
+
+@router.post("/{document_id:int}/retention/extend")
+def extend_document_retention(document_id: int, payload: RetentionExtension, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Keep an archived document longer instead of deleting it when its retention period ends."""
+    require_permission(current_user, "delete_documents")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        until = extend_retention(db, doc, payload.months, datetime.now(timezone.utc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="EXTEND_DOCUMENT_RETENTION",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Extended retention of {doc.tracking_number} by {payload.months} month(s), to {until.date().isoformat()}",
+    )
+    return {"message": "Retention extended.", "retain_until": until.isoformat()}
 
 
 @router.delete("/{document_id:int}/permanent")

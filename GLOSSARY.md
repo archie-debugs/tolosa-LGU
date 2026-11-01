@@ -35,6 +35,13 @@ _Avoid_: Assigned to, assignee
 What the SB has to do with a document: None, For Agenda, Approval or Posting.
 _Avoid_: Action (a recorded office action is a different thing)
 
+**Archived document**:
+A document taken out of circulation by hand. It can be restored, or deleted permanently.
+
+**Retention period**:
+How long an archived document is kept, counted from the day it was archived: ordinances permanently, resolutions 10 years, letter requests 10 months, unless a Super Administrator changes them. When it ends the document is due for deletion, and someone who may delete documents deletes it or extends it. Nothing is deleted on its own.
+_Avoid_: Expiry, shelf life
+
 ## Legislation
 
 **Measure**:

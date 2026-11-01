@@ -509,6 +509,8 @@ def render_shell(
         "registered": (ft.Icons.NOTE_ADD_OUTLINED, ft.Colors.BLUE_GREY_600),
         "due": (ft.Icons.EVENT_OUTLINED, ft.Colors.AMBER_800),
         "overdue": (ft.Icons.EVENT_BUSY_OUTLINED, ft.Colors.RED_700),
+        "retention_due": (ft.Icons.AUTO_DELETE_OUTLINED, ft.Colors.RED_700),
+        "retention_soon": (ft.Icons.AUTO_DELETE_OUTLINED, ft.Colors.AMBER_800),
     }
 
     def refresh_notifications():
@@ -535,9 +537,16 @@ def render_shell(
             ft.Text(item.get("tracking_number") or "-", size=12, weight=ft.FontWeight.BOLD, color=(ft.Colors.BLUE_200 if is_dark else ft.Colors.BLUE_900)),
             ft.Text(item.get("title") or "", size=12, color=heading_color, expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
         ]
-        if item.get("unread"):
+        if item.get("priority"):
+            heading.append(ft.Container(ft.Text("URGENT", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                        bgcolor=ft.Colors.RED_700, border_radius=6, padding=ft.Padding(6, 1, 6, 1)))
+        elif item.get("unread"):
             heading.append(ft.Container(width=8, height=8, border_radius=4, bgcolor=ft.Colors.BLUE_600))
+        # A priority item (a document due for deletion) is framed in red until someone acts on it.
+        edge = ft.BorderSide(1, ft.Colors.RED_700) if item.get("priority") else None
         return ft.Container(
+            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.RED_700) if item.get("priority") else None,
+            border=ft.Border(left=edge, top=edge, right=edge, bottom=edge) if edge else None,
             content=ft.Row(
                 [
                     ft.Container(ft.Icon(icon, size=18, color=color), padding=6, border_radius=8, bgcolor=ft.Colors.with_opacity(0.12, color)),

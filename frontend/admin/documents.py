@@ -1,6 +1,7 @@
 """Documents and Archived Documents screens: find a document, see where it is, and act on it."""
 
 import inspect
+from datetime import datetime, timezone
 
 import flet as ft
 
@@ -74,9 +75,13 @@ def build_documents_view(
     restore_selected=None,
     delete_permanently=None,
     delete_selected=None,
+    keep_or_delete=None,
     document_type=None,
 ):
     """The active document list, or with `archived=True` the archived one.
+
+    On the archived list each row says when it is due for deletion, and `keep_or_delete(doc)`
+    asks whether to delete it now or keep it longer.
 
     With `document_type` ("Ordinance", "Resolution" or "Letter Request") it lists only that type,
     under that type's name, and has no Type filter.
@@ -221,7 +226,8 @@ def build_documents_view(
         set_options(type_filter, payload.get("available_document_types") or [], ALL)
         set_options(category_filter, payload.get("available_categories") or [], ALL)
         items = payload.get("items") or []
-        loaded[:] = [{**normalize(item), "in_transit_to": item.get("in_transit_to"), "in_transit_since": item.get("in_transit_since")} for item in items]
+        loaded[:] = [{**normalize(item), "in_transit_to": item.get("in_transit_to"), "in_transit_since": item.get("in_transit_since"),
+                      "retain_until": item.get("retain_until")} for item in items]
         selection.intersection_update(doc.get("id") for doc in loaded)
         render()
         page.update()
@@ -270,10 +276,12 @@ def build_documents_view(
         if archived:
             archived_at = doc.get("date_archived") if doc.get("date_archived") not in (None, "-") else doc.get("archived_at")
             by = doc.get("archived_by")
+            until = doc.get("retain_until")
             return ft.Column(
                 [
                     ft.Text(format_date(archived_at), size=12, color=widgets.body_color()),
                     widgets.hint(f"by {by}" if by and by != "-" else "Archiver not recorded"),
+                    widgets.hint(f"Delete after {format_date(until)}" if until else "Kept permanently"),
                 ],
                 spacing=3,
                 width=COLUMN_WIDTHS["where"],
@@ -304,7 +312,13 @@ def build_documents_view(
             chips.append(widgets.chip("Public", ft.Colors.GREEN_700))
         if not has_file(doc):
             chips.append(widgets.chip("No file", ft.Colors.RED_700))
+        if archived and due_for_deletion(doc):
+            chips.append(widgets.chip("Due for deletion", ft.Colors.RED_700))
         return chips
+
+    def due_for_deletion(doc):
+        until = parse_time(doc.get("retain_until"))
+        return until is not None and until <= datetime.now(timezone.utc)
 
     def has_file(doc):
         return any(isinstance(item, dict) and item.get("id") for item in doc.get("attachments") or [])
@@ -325,6 +339,8 @@ def build_documents_view(
         if archived:
             if can_restore:
                 add("Restore to Documents", ft.Icons.UNARCHIVE_OUTLINED, restore)
+            if can_delete and keep_or_delete and doc.get("retain_until"):
+                add("Keep longer or delete", ft.Icons.MORE_TIME, keep_or_delete)
             if can_delete and delete_permanently:
                 if items:
                     items.append(ft.PopupMenuItem())

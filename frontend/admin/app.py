@@ -140,7 +140,8 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
 
 from frontend.admin.council import POSITIONS as SB_POSITIONS, build_members_committees_view
 from frontend.admin.council_sessions import build_sessions_view
-from frontend.admin.documents import build_documents_view
+from frontend.admin.documents import build_documents_view, format_date
+from frontend.admin.retention import RETENTION_KINDS, due_for_deletion, open_retention_dialog
 from frontend.admin.document_details import open_document_details
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
 from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
@@ -3878,8 +3879,37 @@ def main(page: ft.Page, session=None):
                 # The bell keeps checking every 30s; once signed out it has nothing to ask for.
                 "load": lambda: backend_api("GET", "/notifications") if runtime_token or AUTH_TOKEN else {"unread": 0, "items": []},
                 "seen": lambda: backend_api("POST", "/notifications/seen"),
-                "open": lambda item: show_document_details({"id": item.get("document_id")}),
+                "open": open_notification,
             },
+        )
+
+    def open_retention(items, **kwargs):
+        open_retention_dialog(page, backend_api, items, on_changed=lambda: archived_refresh(), **kwargs)
+
+    def show_retention_popup():
+        """Right after sign-in: ask about archived documents whose retention period has ended."""
+        if not has_permission("delete_documents"):
+            return
+        try:
+            items = due_for_deletion(backend_api("GET", "/notifications"))
+        except Exception:
+            return
+        open_retention(items)
+
+    def open_notification(item):
+        if item.get("kind") == "retention_due":
+            open_retention([item])
+        elif item.get("kind") in RETENTION_KINDS:
+            open_retention([item], title="Due for deletion soon", intro="Its retention period ends soon. Delete it now, or keep it longer.")
+        else:
+            show_document_details({"id": item.get("document_id")})
+
+    def keep_or_delete_archived(doc):
+        until = doc.get("retain_until")
+        open_retention(
+            [{"document_id": doc.get("id"), "tracking_number": doc.get("tracking_number"), "title": doc.get("title"),
+              "message": f"{doc.get('document_type') or 'Document'} due for deletion on {format_date(until)}."}],
+            title="Keep or delete", intro="Delete it now, or keep it longer than its retention period.",
         )
 
     def backend_api(method, path, timeout=15, **kwargs):
@@ -3945,6 +3975,7 @@ def main(page: ft.Page, session=None):
             restore_selected=open_archived_restore_selected_dialog,
             delete_permanently=confirm_permanent_delete_archived_document,
             delete_selected=open_archived_delete_selected_dialog,
+            keep_or_delete=keep_or_delete_archived,
             document_type=document_type,
         )
         return view
@@ -4291,6 +4322,7 @@ def main(page: ft.Page, session=None):
                     else:
                         initial_view = ft.Column([ft.Text("No available modules for this account.")])
                     show_shell(initial_view, initial_selected_index=0)
+                    show_retention_popup()
                     if role not in {"Super Administrator", "Employee", "SB Member"}:
                         page.snack_bar = ft.SnackBar(ft.Text("Your account is not approved for access yet."), open=True)
                         page.update()
@@ -4495,6 +4527,7 @@ def main(page: ft.Page, session=None):
             nav_items[:] = build_nav_items()
             initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
             show_shell(initial_view, initial_selected_index=0)
+            show_retention_popup()
             return True
         except Exception:
             return False
@@ -4513,6 +4546,7 @@ def main(page: ft.Page, session=None):
         nav_items[:] = build_nav_items()
         initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
         show_shell(initial_view, initial_selected_index=0)
+        show_retention_popup()
     elif not restore_saved_session():
         show_login()
 
