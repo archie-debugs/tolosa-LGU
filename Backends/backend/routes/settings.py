@@ -54,7 +54,33 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
             return _clean_announcements(value)
         return value
 
+    if expected_type is dict:
+        if not isinstance(value, dict):
+            raise HTTPException(status_code=400, detail=f"Setting '{key}' must be an object")
+        if key == "retention_months":
+            return _clean_retention(value)
+        return value
+
     return value
+
+
+# At most 100 years; anything longer should be kept permanently.
+MAX_RETENTION_MONTHS = 1200
+
+
+def _clean_retention(value: dict) -> dict[str, int | None]:
+    """Every document type's retention in months, None for permanent; types left out keep their default."""
+    cleaned = dict(DEFAULT_SYSTEM_SETTINGS["retention_months"])
+    for document_type, months in value.items():
+        if document_type not in cleaned:
+            raise HTTPException(status_code=400, detail=f"Unknown document type: {document_type}")
+        if months is None:
+            cleaned[document_type] = None
+            continue
+        if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= MAX_RETENTION_MONTHS:
+            raise HTTPException(status_code=400, detail=f"{document_type} retention must be 1 to {MAX_RETENTION_MONTHS} months, or permanent")
+        cleaned[document_type] = months
+    return cleaned
 
 
 MAX_ANNOUNCEMENTS = 10
@@ -101,6 +127,11 @@ def _load_settings(db: Session) -> dict[str, Any]:
             except HTTPException:
                 settings[row.key] = DEFAULT_SYSTEM_SETTINGS.get(row.key)
     return settings
+
+
+def retention_months(db: Session) -> dict[str, int | None]:
+    """Months each document type is kept after it is archived; None keeps it permanently."""
+    return _load_settings(db)["retention_months"]
 
 
 @router.get("/system-settings")

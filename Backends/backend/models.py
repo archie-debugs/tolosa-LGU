@@ -302,6 +302,8 @@ class Document(Base):
     archived = Column(Boolean, nullable=False, default=False, index=True)
     archived_at = Column(DateTime(timezone=True), nullable=True, index=True)
     archived_by = Column(String, nullable=True, index=True)
+    # Set when someone extends an archived document past its type's retention period.
+    retention_extended_until = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 

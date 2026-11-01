@@ -102,6 +102,8 @@ class DocumentResponse(BaseModel):
     due_date: Optional[date] = None
     stage: Optional[str] = None
     archived_by: Optional[str] = None
+    # On the archived list: when it is due for deletion, None when it is kept permanently.
+    retain_until: Optional[datetime] = None
     office_receipt_status: Optional[str] = None
     office_receipt_confirmed_at: Optional[datetime] = None
     in_transit_to: Optional[str] = None

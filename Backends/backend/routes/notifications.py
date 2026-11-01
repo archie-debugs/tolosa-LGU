@@ -1,7 +1,9 @@
-"""Notifications: what needs the signed-in user's attention, built from handoffs, registrations and due dates.
+"""Notifications: what needs the signed-in user's attention, built from handoffs, registrations,
+due dates and archived documents whose retention period is ending.
 
 Nothing is stored per notification. An item is unread when it happened after the user's
-notifications_seen_at, which POST /notifications/seen moves to now.
+notifications_seen_at, which POST /notifications/seen moves to now. A priority item (an archived
+document due for deletion) stays unread and on top until someone deletes or extends the document.
 """
 
 from datetime import datetime, time, timedelta, timezone
@@ -13,6 +15,7 @@ from .. import models
 from ..authentication import get_current_user
 from ..core import LGU_TIMEZONE, lgu_today, user_has_permission
 from ..database import get_db
+from ..retention import RETENTION_WARNING_DAYS, documents_due
 from .documents import QR_TRACKING_OVERDUE_HOURS
 
 router = APIRouter()
@@ -134,6 +137,22 @@ def _office_items(db, user, now, today):
     return items + _due_items(db, office_documents, today, with_office=False)
 
 
+def _retention_items(db, now):
+    """Archived documents due for deletion (priority) or due within RETENTION_WARNING_DAYS."""
+    items = []
+    for doc, until in documents_due(db, now):
+        local_day = until.astimezone(LGU_TIMEZONE).strftime("%b %d, %Y")
+        if until <= now:
+            item = _item("retention_due", doc, until,
+                         f"{doc.document_type} retention ended {local_day}. Delete it now or extend how long it is kept.", doc.id)
+            item["priority"] = True
+        else:
+            item = _item("retention_soon", doc, until - timedelta(days=RETENTION_WARNING_DAYS),
+                         f"{doc.document_type} is due for deletion on {local_day}.", doc.id)
+        items.append(item)
+    return items
+
+
 def _system_items(db, now, today):
     items = []
     for handoff in _pending_handoffs(db):
@@ -158,11 +177,15 @@ def list_notifications(db: Session = Depends(get_db), current_user: models.User 
         items = _system_items(db, now, today)
     else:
         items = []
+    if user_has_permission(current_user, "delete_documents"):
+        items += _retention_items(db, now)
     items.sort(key=lambda item: item["at"], reverse=True)
-    items = items[:MAX_ITEMS]
+    # Priority items come first and are never cut off by MAX_ITEMS.
+    priority = [item for item in items if item.get("priority")]
+    items = priority + [item for item in items if not item.get("priority")][:MAX_ITEMS]
     seen = _aware(current_user.notifications_seen_at)
     for item in items:
-        item["unread"] = seen is None or datetime.fromisoformat(item["at"]) > seen
+        item["unread"] = item.get("priority", False) or seen is None or datetime.fromisoformat(item["at"]) > seen
     return {"unread": sum(item["unread"] for item in items), "items": items}
 
 

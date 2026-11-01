@@ -237,6 +237,8 @@ DEFAULT_SYSTEM_SETTINGS = {
     "upload_max_size_mb": 25,
     "allowed_file_types": ["pdf", "doc", "docx", "jpg", "jpeg", "png"],
     "homepage_announcements": DEFAULT_HOMEPAGE_ANNOUNCEMENTS,
+    # How many months an archived document of each type is kept before it is due for deletion; None keeps it permanently.
+    "retention_months": {"Ordinance": None, "Resolution": 120, "Letter Request": 10},
 }
 
 SYSTEM_SETTING_TYPES = {
@@ -248,6 +250,7 @@ SYSTEM_SETTING_TYPES = {
     "upload_max_size_mb": int,
     "allowed_file_types": list,
     "homepage_announcements": list,
+    "retention_months": dict,
 }
 
 ROLE_DEFINITIONS = {
