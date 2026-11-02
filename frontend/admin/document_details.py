@@ -62,6 +62,9 @@ def describe_location(location, events):
     return "Not routed yet", "No office has this document on record."
 
 
+PASS_FROM_DASHBOARD = "To pass this on, open it from the Office Dashboard."
+
+
 def open_document_details(
     page,
     dialog,
@@ -87,6 +90,8 @@ def open_document_details(
     The backend decides what the user's office can do now (receive, pass on, record an
     action); the `can_*` flags only cover what the user's permissions allow.
     `qr_token` is set when the document was opened by scanning its QR code; receiving needs it.
+    `open_pass` is given only where passing is done (the Office Dashboard and a QR scan); elsewhere an
+    office that may pass the document is pointed to the Office Dashboard instead.
     A document the office does not hold comes back `tracking_only`: where it is and its trail.
     `load_qr_image(document_id)` returns the QR code as base64 PNG, or None when the
     user may not see it. `on_change()` runs after a receipt, action or stage change is recorded.
@@ -375,6 +380,7 @@ def open_document_details(
             location_banner(payload.get("location") or {}, events),
             *([ft.Text(message, size=12, color=ft.Colors.RED_700 if error else ft.Colors.GREEN_700)] if message else []),
             *([buttons] if buttons else []),
+            *([widgets.hint(PASS_FROM_DASHBOARD)] if can.get("pass") and not open_pass else []),
             *([action_panel()] if can.get("record_action") and state["action"] is not None else []),
             ft.Divider(height=1, color=widgets.line_color()),
             body,
