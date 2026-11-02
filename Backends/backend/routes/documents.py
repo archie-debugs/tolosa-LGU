@@ -992,6 +992,32 @@ def list_duplicate_attachments(db: Session = Depends(get_db), current_user: mode
     return {"groups": groups, "total_groups": len(groups)}
 
 
+def _add_remark(doc: models.Document, text: str, user) -> None:
+    """Add a remark to `doc`'s history and make it the document's current remark."""
+    if not doc.remark_entries and (doc.remarks or "").strip():
+        # A remark from before the history existed is kept as its first entry.
+        doc.remark_entries.append(models.DocumentRemark(
+            text=doc.remarks, author=doc.created_by, author_id=doc.created_by_id, created_at=doc.updated_at or doc.created_at,
+        ))
+    doc.remark_entries.append(models.DocumentRemark(
+        text=text, author=getattr(user, "username", None), author_id=getattr(user, "id", None),
+    ))
+    doc.remarks = text
+
+
+def _remark_history(doc: models.Document) -> list[dict]:
+    """Every remark on `doc`, newest first. A remark from before the history existed shows on its own."""
+    try:
+        entries = list(doc.remark_entries)
+    except Exception:
+        entries = []
+    if entries:
+        return [{"id": r.id, "text": r.text, "author": r.author, "created_at": r.created_at} for r in entries]
+    if (doc.remarks or "").strip():
+        return [{"id": None, "text": doc.remarks, "author": doc.created_by, "created_at": None}]
+    return []
+
+
 def _serialize_document(doc: models.Document):
     payload = {
         "id": doc.id,
@@ -1011,6 +1037,7 @@ def _serialize_document(doc: models.Document):
         "priority": doc.priority,
         "is_public": bool(doc.is_public),
         "remarks": doc.remarks,
+        "remark_history": _remark_history(doc),
         "action_required": doc.action_required,
         "author": doc.author,
         "session": doc.session,
@@ -1970,6 +1997,11 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
         raise HTTPException(status_code=400, detail="Tracking numbers are generated automatically and cannot be changed.")
 
     data = payload.model_dump(exclude_unset=True)
+    # Remarks are never overwritten or cleared: new text is added to the history as a new remark.
+    new_remark = (data.pop("new_remark", None) or "").strip()
+    typed_remark = (data.pop("remarks", None) or "").strip()
+    if not new_remark and typed_remark != (doc.remarks or "").strip():
+        new_remark = typed_remark
     # The edit form sends None for a cleared field; required columns cannot be cleared.
     for field, label in (("title", "Title"), ("status", "Status"), ("priority", "Priority"), ("is_public", "Public visibility")):
         if field in data and (data[field] is None or (isinstance(data[field], str) and not data[field].strip())):
@@ -2005,6 +2037,9 @@ def update_document(document_id: int, payload: schemas.DocumentUpdate, db: Sessi
         doc.category, doc.category_id = references["category"]
     if "document_type" in references:
         doc.document_type, doc.document_type_id = references["document_type"]
+    if new_remark:
+        _add_remark(doc, new_remark, current_user)
+        data["remarks"] = new_remark
     previous_tracking_number = doc.tracking_number
     if retyped:
         # The number always matches the type, so a new type means the next number in its series.

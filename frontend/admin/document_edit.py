@@ -4,7 +4,7 @@ import flet as ft
 
 from frontend.admin.definition_fields import CategoryField, DocumentTypeField
 from frontend.admin.registration import ACTIONS_REQUIRED, PRIORITIES, STATUSES, error_detail
-from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date
+from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date, remark_list
 
 def _text(value):
     return "" if value in (None, "-") else str(value).strip()
@@ -14,6 +14,19 @@ def _choices(options, current):
     """`options`, plus the document's current value when it is not one of them, so saving keeps it."""
     current = _text(current)
     return [*options, current] if current and current not in options else list(options)
+
+
+def _remark_history(api, document):
+    """The document's remarks, newest first; a table row or details record may not carry them."""
+    history = document.get("remark_history")
+    if history is None and document.get("id"):
+        try:
+            history = (api("GET", f"/documents/{document['id']}") or {}).get("remark_history")
+        except Exception:
+            history = None
+    if history is None and _text(document.get("remarks")):
+        history = [{"text": _text(document.get("remarks"))}]
+    return list(history or [])
 
 
 def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
@@ -34,13 +47,16 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
                                   value=_text(document.get("action_required")) or None)
     author = ft.TextField(label="Author", value=_text(document.get("author")), width=280)
     due_date = ft.TextField(label="Due date", hint_text="YYYY-MM-DD (optional)", value=_text(document.get("due_date")), width=180)
-    remarks = ft.TextField(label="Remarks", value=_text(document.get("remarks")), multiline=True, min_lines=2, max_lines=3)
+    # Earlier remarks are kept and shown; whatever is typed here is added as a new one.
+    new_remark = ft.TextField(label="New remark", hint_text="Leave empty to keep the remarks as they are",
+                              multiline=True, min_lines=2, max_lines=3)
     message = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
 
     try:
         reference = api("GET", "/documents/edit-options")
     except Exception:
         reference = {}
+    remarks = _remark_history(api, document)
     # Document details passes its display record, where a missing value is "-".
     document_type = DocumentTypeField(label="Document Type", width=280, value=_text(document.get("document_type")))
     category = CategoryField(label="Category", width=280, value=_text(document.get("category")),
@@ -76,7 +92,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             "status": status.value or "Approved",
             "action_required": action_required.value or None,
             "author": (author.value or "").strip() or None,
-            "remarks": (remarks.value or "").strip() or None,
+            "new_remark": (new_remark.value or "").strip() or None,
         }
         try:
             api("PUT", f"/documents/{document['id']}", json=payload)
@@ -99,7 +115,9 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             ft.Row([document_type.control(), category.control()], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.START),
             ft.Row([status, action_required], spacing=12, wrap=True),
             ft.Row([assigned_to, author], spacing=12, wrap=True),
-            remarks,
+            ui.hint("Remarks"),
+            *([remark_list(ui, remarks)] if remarks else []),
+            new_remark,
             message,
         ],
         spacing=10,

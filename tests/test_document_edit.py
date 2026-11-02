@@ -191,3 +191,53 @@ def test_registration_records_the_action_required(client):
 
     assert response.status_code == 200, response.text
     assert response.json()["action_required"] == "Posting"
+
+
+def test_each_remark_is_added_and_the_earlier_ones_are_kept(client, document):
+    first = edit(client, document, new_remark="Received by SB Secretary")
+    second = edit(client, document, new_remark="  Returned for signature ")
+
+    assert first.status_code == 200 and second.status_code == 200, second.text
+    body = second.json()
+    assert body["remarks"] == "Returned for signature"
+    assert [r["text"] for r in body["remark_history"]] == ["Returned for signature", "Received by SB Secretary"]
+    assert {r["author"] for r in body["remark_history"]} == {"admin"}
+    assert all(r["created_at"] for r in body["remark_history"])
+
+
+def test_an_empty_or_unchanged_remark_adds_nothing_and_never_clears(client, document):
+    edit(client, document, new_remark="Received by SB Secretary")
+
+    for payload in ({"new_remark": ""}, {"new_remark": None}, {"remarks": None}, {"remarks": "Received by SB Secretary"}, {"title": "Renamed"}):
+        response = edit(client, document, **payload)
+        assert response.status_code == 200, response.text
+        assert [r["text"] for r in response.json()["remark_history"]] == ["Received by SB Secretary"]
+        assert response.json()["remarks"] == "Received by SB Secretary"
+
+
+def test_a_changed_remarks_field_is_added_as_a_new_remark(client, document):
+    edit(client, document, remarks="First")
+
+    response = edit(client, document, remarks="Second")
+
+    assert [r["text"] for r in response.json()["remark_history"]] == ["Second", "First"]
+
+
+def test_a_remark_from_before_the_history_is_kept_when_a_new_one_is_added(client, document):
+    with SessionLocal() as db:
+        db.query(models.Document).filter(models.Document.id == document["id"]).update({"remarks": "Old note"})
+        db.commit()
+    assert [r["text"] for r in client.get(f"/documents/{document['id']}", headers=headers_for(client)).json()["remark_history"]] == ["Old note"]
+
+    response = edit(client, document, new_remark="New note")
+
+    assert [r["text"] for r in response.json()["remark_history"]] == ["New note", "Old note"]
+
+
+def test_the_list_shows_the_newest_remark(client, document):
+    edit(client, document, new_remark="First")
+    edit(client, document, new_remark="Second")
+
+    items = client.get("/documents", headers=headers_for(client)).json()["items"]
+
+    assert [i["remarks"] for i in items if i["id"] == document["id"]] == ["Second"]
