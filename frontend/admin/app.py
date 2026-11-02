@@ -1850,6 +1850,7 @@ def main(page: ft.Page, session=None):
             "canonical_qr_url": doc.get("canonical_qr_url") or doc.get("qr_code_value") or "-",
             "attachment_name": doc.get("attachment_name") or "-",
             "remarks": doc.get("remarks") or "",
+            "remark_history": doc.get("remark_history"),
             "action_required": doc.get("action_required") or "-",
             "attachments": doc.get("attachments") or [],
             "document_number": doc.get("document_number"),

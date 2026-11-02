@@ -41,6 +41,28 @@ def format_time(value):
     return parsed.astimezone().strftime("%b %d, %I:%M %p") if parsed else "-"
 
 
+def remark_list(widgets, history):
+    """A document's remarks, newest first, each with who wrote it and when."""
+    rows = []
+    for item in history or []:
+        when = parse_time(item.get("created_at"))
+        byline = " · ".join(part for part in (
+            item.get("author"), when.astimezone().strftime("%b %d, %Y %I:%M %p") if when else None,
+        ) if part)
+        rows.append(ft.Container(
+            content=ft.Column(
+                [ft.Text(item.get("text") or "", size=13, color=widgets.body_color(), selectable=True),
+                 *([widgets.hint(byline)] if byline else [])],
+                spacing=2,
+            ),
+            data="remark",
+            padding=ft.Padding(10, 8, 10, 8),
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.05, widgets.body_color()),
+        ))
+    return ft.Column(rows, spacing=6)
+
+
 def format_elapsed(value, now=None):
     """'2d 3h', '5h 12m' or '8m' since `value`."""
     parsed = parse_time(value)

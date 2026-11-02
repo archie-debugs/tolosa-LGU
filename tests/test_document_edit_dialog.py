@@ -196,3 +196,47 @@ def test_a_status_outside_the_choices_is_kept():
 
     assert field(dialog, "Status").value == "Archived"
     assert "Archived" in options(field(dialog, "Status"))
+
+
+def test_earlier_remarks_are_shown_and_a_new_remark_is_sent_on_its_own():
+    api = FakeApi()
+    page = DummyPage()
+    dialog = ft.AlertDialog()
+    document = {**DOCUMENT, "remarks": "Returned for signature", "remark_history": [
+        {"text": "Returned for signature", "author": "TolosaAdmin", "created_at": "2026-11-01T07:10:00+00:00"},
+        {"text": "Received by SB Secretary", "author": "TolosaAdmin", "created_at": "2026-10-30T01:02:00+00:00"},
+    ]}
+    open_edit_document_dialog(page, dialog, api, document)
+    shown = texts(dialog.content)
+    assert shown.index("Returned for signature") < shown.index("Received by SB Secretary")
+    assert any(t.startswith("TolosaAdmin · ") and "2026" in t for t in shown)
+    assert field(dialog, "New remark").value in (None, "")
+
+    field(dialog, "New remark").value = "  Signed by the Vice Mayor "
+    press(dialog, "Save changes")
+
+    payload = api.calls[-1][2]["json"]
+    assert payload["new_remark"] == "Signed by the Vice Mayor"
+    assert "remarks" not in payload
+
+
+def test_an_empty_new_remark_sends_none():
+    api = FakeApi()
+    dialog = open_dialog(api)
+
+    press(dialog, "Save changes")
+
+    assert api.calls[-1][2]["json"]["new_remark"] is None
+
+
+def test_a_row_without_history_fetches_it():
+    class HistoryApi(FakeApi):
+        def __call__(self, method, path, **kwargs):
+            if method == "GET" and path == "/documents/7":
+                self.calls.append((method, path, kwargs))
+                return {"remark_history": [{"text": "From the server", "author": "admin", "created_at": None}]}
+            return super().__call__(method, path, **kwargs)
+
+    dialog = open_dialog(HistoryApi())
+
+    assert "From the server" in texts(dialog.content)

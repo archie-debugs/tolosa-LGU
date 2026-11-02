@@ -7,7 +7,7 @@ from urllib.parse import quote
 import flet as ft
 
 from frontend.admin.stage_panel import build_stage_section
-from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time, parse_time, stage_color
+from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time, parse_time, remark_list, stage_color
 
 # What an office can record having done to a document it holds. Receiving is its own step.
 ACTION_TYPES = ("Signed", "Reviewed", "Approved", "Noted", "Other")
@@ -356,6 +356,7 @@ def open_document_details(
             ])
             return
         qr_base64, stage_section = state["extras"] or (None, None)
+        remarks = document.get("remark_history") or ([{"text": document["remarks"]}] if document.get("remarks") else [])
         grid = details_grid(document)
         body = (
             ft.ResponsiveRow(
@@ -378,7 +379,7 @@ def open_document_details(
             ft.Divider(height=1, color=widgets.line_color()),
             body,
             *([text_block("Description", document["description"])] if document.get("description") else []),
-            *([text_block("Remarks", document["remarks"])] if document.get("remarks") else []),
+            *([ft.Column([widgets.hint("Remarks"), remark_list(widgets, remarks)], spacing=6)] if remarks else []),
             *([ft.Divider(height=1, color=widgets.line_color()), stage_section] if stage_section else []),
             *trail,
         ]

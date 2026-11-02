@@ -307,6 +307,23 @@ class Document(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
+    # Every remark ever added, newest first. `remarks` above always holds the newest one's text.
+    remark_entries = relationship("DocumentRemark", order_by="DocumentRemark.id.desc()",
+                                  cascade="all, delete-orphan", passive_deletes=True)
+
+
+class DocumentRemark(Base):
+    """One remark on a document. Remarks are only ever added: a correction is a newer remark."""
+    __tablename__ = "document_remarks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    # The writer's username when it was written, kept even if the account is later removed.
+    author = Column(String, nullable=True)
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
 
 class DocumentOffice(Base):
     __tablename__ = "document_offices"

@@ -53,7 +53,9 @@ class DocumentUpdate(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     is_public: Optional[bool] = None
+    # Setting `remarks` (or `new_remark`) adds a remark to the document's history; old ones stay.
     remarks: Optional[str] = None
+    new_remark: Optional[str] = None
     action_required: Optional[str] = None
     author: Optional[str] = None
     session: Optional[str] = None
@@ -97,6 +99,8 @@ class DocumentResponse(BaseModel):
     current_office_id: Optional[int] = None
     history_rows: Optional[list[dict]] = None
     attachments: Optional[list[dict]] = None
+    # Every remark, newest first: {text, author, created_at}.
+    remark_history: Optional[list[dict]] = None
     archived: bool
     archived_at: Optional[datetime] = None
     due_date: Optional[date] = None

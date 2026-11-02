@@ -35,6 +35,9 @@ _Avoid_: Assigned to, assignee
 What the SB has to do with a document: None, For Agenda, Approval or Posting.
 _Avoid_: Action (a recorded office action is a different thing)
 
+**Remark**:
+A note added to a document, with who wrote it and when. Remarks are only ever added, never changed or removed; a correction is a newer remark. The document's remark history lists them newest first, and the newest one is the remark shown in lists, the public portal and reports.
+
 **Archived document**:
 A document taken out of circulation by hand. It can be restored, or deleted permanently.
 
