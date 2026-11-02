@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import flet as ft
 
-from frontend.admin.screen import is_phone
+from frontend.admin.screen import DESKTOP, is_phone, screen_size
 
 # Served from the shared assets folder; banners show plain colour when it is missing.
 BANNER_IMAGE = "sb_tolosa_homepage.jpg"
@@ -339,7 +339,9 @@ class TrackingWidgets:
         heading = title if isinstance(title, ft.Text) else ft.Text(title, size=15 if phone else 17, weight=ft.FontWeight.BOLD, color=self.link_color())
         # A phone leaves out the explanation under the heading.
         lines = [heading, *([ft.Text(subtitle, size=12, color=self.muted_color())] if subtitle and not phone else [])]
-        return ft.Row(
+        # On a phone a row of buttons goes underneath the heading, wrapping as needed.
+        below = phone and isinstance(trailing, ft.Row)
+        heading_row = ft.Row(
             [
                 ft.Container(
                     content=ft.Icon(icon, size=18 if phone else 24, color=self.accent()),
@@ -348,12 +350,16 @@ class TrackingWidgets:
                     bgcolor=ft.Colors.with_opacity(0.10, self.accent()),
                 ),
                 ft.Column(lines, spacing=3, expand=True),
-                *([trailing] if trailing is not None else []),
+                *([trailing] if trailing is not None and not below else []),
             ],
             spacing=10 if phone else 16,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            wrap=phone and trailing is not None,
         )
+        if not below:
+            return heading_row
+        trailing.wrap = True
+        trailing.run_spacing = 8
+        return ft.Column([heading_row, trailing], spacing=10)
 
     def empty_box(self, message, icon=ft.Icons.INFO, centered=False):
         """An empty list's message in a tinted box; `centered` stacks the icon above it."""
@@ -407,6 +413,9 @@ class TrackingWidgets:
         """
         if self.phone:
             return self._phone_banner(title, icon, actions, corner)
+        if actions and screen_size(self.page) != DESKTOP:
+            # An upright tablet has no room beside the subtitle, so the buttons go underneath.
+            return ft.Column([self.banner(title, subtitle, icon, corner=corner), ft.Row(actions, spacing=10, run_spacing=8, wrap=True)], spacing=10)
         blue = "#0D4FB0"
         layers = [
             ft.Container(
@@ -473,7 +482,8 @@ class TrackingWidgets:
                     ),
                     ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE, expand=True,
                             max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                    *([corner] if corner is not None else []),
+                    # Only a small button (like Refresh) fits beside the title; other corner items are left out.
+                    *([corner] if isinstance(corner, ft.IconButton) else []),
                 ],
                 spacing=12,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,

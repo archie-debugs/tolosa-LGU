@@ -144,7 +144,7 @@ from frontend.admin.documents import build_documents_view, format_date
 from frontend.admin.retention import RETENTION_KINDS, due_for_deletion, open_retention_dialog
 from frontend.admin.document_details import open_document_details
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
-from frontend.admin.screen import is_phone
+from frontend.admin.screen import DESKTOP, is_phone, screen_size
 from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
@@ -652,6 +652,31 @@ def main(page: ft.Page, session=None):
         border_radius=12,
     )
 
+    # A phone shows the audit log as cards instead of the table; both are refilled on every load.
+    audit_log_cards = ft.Column(spacing=8)
+
+    def audit_card(item):
+        widgets = TrackingWidgets(page)
+        module = str(item.get("module") or item.get("target_type") or "—")
+        details = str(item.get("details") or item.get("description") or "")
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row([render_audit_action(item.get("action")), ft.Container(expand=True), render_status_badge(item.get("status") or "Success")],
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row([render_audit_actor(item.get("actor")), widgets.hint(f"{module} · {format_audit_datetime(item.get('created_at'))}")],
+                           spacing=8, wrap=True, run_spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    *([ft.Text(details, size=12, color=widgets.body_color(), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)] if details else []),
+                ],
+                spacing=6,
+            ),
+            padding=ft.Padding(12, 10, 12, 10),
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=10,
+            on_click=lambda _, payload_item=item: build_audit_details_dialog(payload_item),
+            ink=True,
+        )
+
     AUDIT_LOGS_SAMPLE = [
         {"created_at": "2026-09-02T02:22:00+00:00", "actor": "admin", "action": "USER_LOGIN", "target_type": "Auth", "details": "User logged in successfully.", "status": "Success"},
         {"created_at": "2026-09-02T05:13:58+00:00", "actor": "admin", "action": "DOCUMENT_REJECT", "target_type": "Documents", "details": "Document rejected because required validation fields were missing.", "status": "Failed"},
@@ -1021,6 +1046,9 @@ def main(page: ft.Page, session=None):
                     ])
                 ]
             audit_logs_table.rows = rows
+            audit_log_cards.controls = [audit_card(item) for item in items] or [
+                TrackingWidgets(page).empty_box("No audit logs found for the selected filters.")
+            ]
 
             total_items = payload.get("total") or 0
             current_page = payload.get("page") or 1
@@ -1039,6 +1067,7 @@ def main(page: ft.Page, session=None):
                 ])
                 for item in sample_rows
             ]
+            audit_log_cards.controls = [audit_card(item) for item in sample_rows]
             failed_count = sum(1 for item in sample_rows if str(item.get("status", "Success")).lower() == "failed")
             today_count = sum(1 for item in sample_rows if local_time(item.get("created_at")) and local_time(item["created_at"]).date() == datetime.now().date())
             render_summary_cards({
@@ -1074,6 +1103,7 @@ def main(page: ft.Page, session=None):
                 clear_filters=clear_audit_filters,
                 export=on_export_audit_logs,
                 pagination_bar=audit_pagination_bar,
+                cards=audit_log_cards,
             )
         except Exception as e:
             import traceback
@@ -2595,11 +2625,13 @@ def main(page: ft.Page, session=None):
             lambda item=None: open_reset_password_dialog(item or visible_users[0] if visible_users else {}),
             lambda item=None: delete_user(item or visible_users[0] if visible_users else {}),
             unlock_user=unlock_user if current_user_role == "Super Administrator" else None,
+            phone=is_phone(page),
         )
         office_table_holder.content = build_offices_table(
             office_management_data,
             open_edit_office_dialog,
             open_view_office_users_dialog,
+            phone=is_phone(page),
         )
         user_no_users_notice.visible = len(visible_users) == 0
         page.update()
@@ -4185,21 +4217,40 @@ def main(page: ft.Page, session=None):
                     "Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id),
                     style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=ft.Colors.RED_600, side=ft.BorderSide(1, ft.Colors.RED_300)),
                 )
-            return ft.Container(
-                content=ft.Row(
+            avatar = ft.CircleAvatar(content=ft.Text(username[:2].upper(), size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE), bgcolor=ft.Colors.BLUE_700, radius=21)
+            who = ft.Column(
+                [ft.Text(username, size=15, weight=ft.FontWeight.W_600, color=widgets.link_color()), widgets.hint(item.get("role") or "")],
+                spacing=2,
+                expand=True,
+            )
+            if is_phone(page):
+                # A phone shows only when the session was last used and when it ends, on one line.
+                content = ft.Column(
                     [
-                        ft.CircleAvatar(content=ft.Text(username[:2].upper(), size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE), bgcolor=ft.Colors.BLUE_700, radius=21),
-                        ft.Column(
-                            [ft.Text(username, size=15, weight=ft.FontWeight.W_600, color=widgets.link_color()), widgets.hint(item.get("role") or "")],
-                            spacing=2,
-                            expand=True,
-                        ),
-                        *times,
-                        ft.Container(action, width=110, alignment=ft.Alignment(1, 0)),
+                        ft.Row([avatar, who, action], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        widgets.hint(f"Last active {session_time(item.get('last_activity'))} · Ends {session_time(item.get('expires_at'))}"),
                     ],
+                    spacing=6,
+                )
+            elif screen_size(page) != DESKTOP:
+                # A tablet puts the times under the name, as many to a line as fit.
+                for column in times:
+                    column.width = 150
+                content = ft.Column(
+                    [
+                        ft.Row([avatar, who, action], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Row(times, spacing=12, run_spacing=8, wrap=True),
+                    ],
+                    spacing=10,
+                )
+            else:
+                content = ft.Row(
+                    [avatar, who, *times, ft.Container(action, width=110, alignment=ft.Alignment(1, 0))],
                     spacing=16,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
+                )
+            return ft.Container(
+                content=content,
                 padding=ft.Padding(12, 10, 12, 10),
                 bgcolor=widgets.tone("#F7FAFE", "#1B2430"),
                 border=ft.border.all(1, widgets.line_color()),

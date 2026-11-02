@@ -391,6 +391,34 @@ def build_office_overview_view(page, api, surface_card, open_office):
             bgcolor=count_tint,
             border_radius=10,
         )
+        if widgets.phone:
+            # The office's name gets the full width; its counts go underneath, sharing the row.
+            for cell in counts.content.controls:
+                if isinstance(cell, ft.Column):
+                    cell.width = None
+                    cell.expand = True
+            counts.content.tight = False
+            heading = ft.Row(
+                [
+                    ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=widgets.tone(ft.Colors.BLUE_700, ft.Colors.BLUE_300), size=20),
+                    ft.Text(name, size=15, weight=ft.FontWeight.BOLD, color=widgets.link_color(), expand=True),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT, color=widgets.tone(ft.Colors.BLUE_700, ft.Colors.BLUE_300)),
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            return ft.Container(
+                content=ft.Column(
+                    [heading, *([widgets.chip(f"{overdue} overdue to receive", ft.Colors.RED_700)] if overdue else []), counts],
+                    spacing=8,
+                ),
+                padding=10,
+                bgcolor=tint,
+                border=ft.border.all(1, widgets.line_color()),
+                border_radius=12,
+                on_click=lambda _, selected=office: open_office(selected),
+                ink=True,
+            )
         return ft.Container(
             content=ft.Row(
                 [

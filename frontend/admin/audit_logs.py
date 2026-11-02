@@ -38,9 +38,11 @@ def build_audit_logs_view(
     clear_filters,
     export,
     pagination_bar,
+    cards=None,
 ):
     """`filter_fields` are the search box and dropdowns, restyled here. `summary_cards` and `pagination_bar`
-    are rows the app refills on every load, so they are placed as they are rather than copied."""
+    are rows the app refills on every load, so they are placed as they are rather than copied.
+    On a phone `cards` (one per log entry, also refilled on every load) replace the table."""
     widgets = TrackingWidgets(page)
     if callable(load_audit_logs_view):
         load_audit_logs_view()
@@ -52,28 +54,29 @@ def build_audit_logs_view(
     search_field.width = None
     search_field.expand = True
     search_field.on_submit = lambda _: apply_filters()
+    phone = widgets.phone
     for dropdown in dropdowns:
         widgets.style_field(dropdown)
-        dropdown.width = 170
+        dropdown.width = 140 if phone else 170
+    apply_button = ft.FilledButton("Apply", icon=ft.Icons.FILTER_ALT_OUTLINED, height=44, on_click=lambda _: apply_filters())
+    clear_button = ft.TextButton("Clear", icon=ft.Icons.FILTER_ALT_OFF_OUTLINED, on_click=lambda _: clear_filters())
+    # A phone puts Apply and Clear under the search box.
+    search_row = (
+        ft.Column([ft.Row([widgets.labelled(search_field)]), ft.Row([apply_button, clear_button], spacing=8)], spacing=8)
+        if phone else
+        ft.Row([widgets.labelled(search_field), apply_button, clear_button], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    )
 
     filters_card = ft.Container(
         content=ft.Column(
             [
-                ft.Row(
-                    [
-                        widgets.labelled(search_field),
-                        ft.FilledButton("Apply", icon=ft.Icons.FILTER_ALT_OUTLINED, height=44, on_click=lambda _: apply_filters()),
-                        ft.TextButton("Clear", icon=ft.Icons.FILTER_ALT_OFF_OUTLINED, on_click=lambda _: clear_filters()),
-                    ],
-                    spacing=12,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
+                search_row,
                 ft.Row([widgets.labelled(dropdown) for dropdown in dropdowns], spacing=16, wrap=True, run_spacing=12),
             ],
             spacing=16,
             tight=True,
         ),
-        padding=20,
+        padding=12 if phone else 20,
         bgcolor=widgets.card_color(),
         border=ft.border.all(1, widgets.line_color()),
         border_radius=18,
@@ -81,11 +84,11 @@ def build_audit_logs_view(
     )
 
     table_container = ft.Container(
-        content=ft.Row([audit_logs_table], scroll=ft.ScrollMode.AUTO),
-        padding=12,
+        content=cards if phone and cards is not None else ft.Row([audit_logs_table], scroll=ft.ScrollMode.AUTO),
+        padding=0 if phone else 12,
         border_radius=18,
         bgcolor=widgets.card_color(),
-        border=ft.border.all(1, widgets.line_color()),
+        border=None if phone else ft.border.all(1, widgets.line_color()),
         expand=False,
     )
 
@@ -99,7 +102,7 @@ def build_audit_logs_view(
             spacing=14,
             tight=True,
         ),
-        padding=20,
+        padding=12 if phone else 20,
         bgcolor=widgets.card_color(),
         border=ft.border.all(1, widgets.line_color()),
         border_radius=18,
