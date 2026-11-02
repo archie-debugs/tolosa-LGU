@@ -144,6 +144,7 @@ from frontend.admin.documents import build_documents_view, format_date
 from frontend.admin.retention import RETENTION_KINDS, due_for_deletion, open_retention_dialog
 from frontend.admin.document_details import open_document_details
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
+from frontend.admin.screen import is_phone
 from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
@@ -4057,6 +4058,8 @@ def main(page: ft.Page, session=None):
                 border_radius=12,
             )
 
+        phone = is_phone(page)
+
         def section_title(icon, title, subtitle):
             return ft.Row(
                 [
@@ -4064,7 +4067,8 @@ def main(page: ft.Page, session=None):
                     ft.Column(
                         [
                             ft.Text(title, size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                            ft.Text(subtitle, size=12, color=ft.Colors.BLUE_GREY_600),
+                            # A phone leaves out the explanation.
+                            *([] if phone else [ft.Text(subtitle, size=12, color=ft.Colors.BLUE_GREY_600)]),
                         ],
                         spacing=1,
                         expand=True,
@@ -4075,6 +4079,8 @@ def main(page: ft.Page, session=None):
             )
 
         def metric_card(item):
+            if phone:
+                return TrackingWidgets(page).stat_card(item["title"], item["value"], item["detail"], item["icon"], item["accent"], col={"xs": 10})
             card = surface_card(
                 ft.Column(
                     [
@@ -4093,8 +4099,8 @@ def main(page: ft.Page, session=None):
                 ),
                 padding=18,
             )
-            # Five to a row on wide screens, two on tablets, one on phones.
-            card.col = {"xs": 10, "sm": 5, "lg": 2}
+            # Five to a row on wide screens, two on tablets and beside the sidebar on a sideways tablet.
+            card.col = {"xs": 10, "sm": 5, "xl": 2}
             return card
 
         def metric_grid(items):

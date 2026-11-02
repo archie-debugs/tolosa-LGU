@@ -3,14 +3,13 @@ import threading
 import time
 import traceback
 
+from frontend.admin.screen import DESKTOP, PHONE, screen_size
 from frontend.admin.tracking_ui import format_time
 
 # Nav items in this section are pinned to the bottom of the sidebar.
 FOOTER_SECTION = "Account"
 # Nav items in this section are opened from the profile menu instead of the sidebar.
 MENU_SECTION = "Menu"
-# Below this width the profile button shows only the initials.
-COMPACT_WIDTH = 600
 SIDEBAR_WIDTH = 250
 # The most characters of a nav label that fit beside its icon.
 NAV_LABEL_FITS = 20
@@ -101,8 +100,10 @@ def render_shell(
     account = account or {}
     selected_index = initial_selected_index
     shell_nav_items = list(nav_items)
-    # Below COMPACT_WIDTH the sidebar becomes a drawer opened from the profile bar.
-    compact = (getattr(page, "width", None) or 1200) < COMPACT_WIDTH
+    # Phones and upright tablets get the sidebar as a drawer opened from the profile bar;
+    # a phone's profile button shows only the initials.
+    size = screen_size(page)
+    compact = size != DESKTOP
     drawer_open = False
     is_dark = page.theme_mode == ft.ThemeMode.DARK
     try:
@@ -642,7 +643,7 @@ def render_shell(
             radius=16,
         )
         button = [avatar]
-        if not compact:
+        if size != PHONE:
             button += [
                 ft.Text(name, size=13, weight=ft.FontWeight.W_600, color=heading_color, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                 ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=20, color=muted),
@@ -778,15 +779,16 @@ def render_shell(
         page.add(layout())
 
     def page_resized(_=None):
-        nonlocal compact, drawer_open
-        now_compact = (getattr(page, "width", None) or 1200) < COMPACT_WIDTH
-        if now_compact == compact:
+        """Screens lay themselves out for the screen size, so a new size redraws the open one."""
+        nonlocal size, compact, drawer_open
+        now = screen_size(page)
+        if now == size:
             return
-        compact = now_compact
+        size = now
+        compact = size != DESKTOP
         drawer_open = False
-        build_profile_bar()
         show_layout()
-        page.update()
+        switch_view(selected_index)
 
     # Flet 0.28 names the resize event on_resized; other releases use on_resize.
     if hasattr(type(page), "on_resized"):

@@ -4,6 +4,8 @@ from datetime import date, datetime, timezone
 
 import flet as ft
 
+from frontend.admin.screen import is_phone
+
 # Served from the shared assets folder; banners show plain colour when it is missing.
 BANNER_IMAGE = "sb_tolosa_homepage.jpg"
 
@@ -152,6 +154,19 @@ def document_reference(item):
     ] if part)
 
 
+def compact_col(col):
+    """`col` for a ResponsiveRow child, made two to a row on a phone.
+
+    A full-width phone column (xs 10 or 12, matching the row's column count) is halved;
+    a narrower one is kept.
+    """
+    col = dict(col) if isinstance(col, dict) else {}
+    xs = col.get("xs", 12)
+    col["xs"] = xs // 2 if xs in (10, 12) else xs
+    col["sm"] = col["xs"]
+    return col
+
+
 class TrackingWidgets:
     """Controls styled for the current theme.
 
@@ -161,6 +176,11 @@ class TrackingWidgets:
 
     def __init__(self, page):
         self.page = page
+
+    @property
+    def phone(self):
+        """On a phone, screens are compact and leave out photos and explanations."""
+        return is_phone(self.page)
 
     def tone(self, light, dark):
         return dark if self.page.theme_mode == ft.ThemeMode.DARK else light
@@ -208,12 +228,12 @@ class TrackingWidgets:
                         ],
                         spacing=6,
                     ),
-                    ft.Text(str(value), size=26, weight=ft.FontWeight.BOLD, color=self.heading_color()),
-                    ft.Text(detail, size=11, color=self.muted_color()),
+                    ft.Text(str(value), size=20 if self.phone else 26, weight=ft.FontWeight.BOLD, color=self.heading_color()),
+                    *([] if self.phone else [ft.Text(detail, size=11, color=self.muted_color())]),
                 ],
                 spacing=4,
             ),
-            padding=14,
+            padding=10 if self.phone else 14,
             bgcolor=self.card_color(),
             border=ft.Border(
                 left=ft.BorderSide(4, accent),
@@ -246,6 +266,8 @@ class TrackingWidgets:
     def stat_card(self, title, value, detail, icon, color, col=None, tile=False, active=False):
         """A count with a coloured strip on its left. `tile` puts the icon in a tinted square;
         `active` tints the card, for a count that is filtering the list below it."""
+        if self.phone:
+            return self._compact_stat_card(title, value, icon, color, col, active)
         if tile:
             badge = ft.Container(
                 content=ft.Icon(icon, color=color, size=24),
@@ -259,7 +281,7 @@ class TrackingWidgets:
             content=ft.Column(
                 [
                     ft.Row(
-                        [badge, ft.Text(title, size=14, weight=ft.FontWeight.BOLD, color=self.heading_color(), expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)],
+                        [badge, ft.Text(title, size=14, weight=ft.FontWeight.BOLD, color=self.heading_color(), expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)],
                         spacing=14 if tile else 10,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
@@ -281,23 +303,56 @@ class TrackingWidgets:
             col=col,
         )
 
+    def _compact_stat_card(self, title, value, icon, color, col, active):
+        """A phone's stat card: the count and its name, two to a row (see compact_col)."""
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(icon, color=color, size=18),
+                    ft.Column(
+                        [
+                            ft.Text(str(value), size=18, weight=ft.FontWeight.BOLD, color=self.link_color()),
+                            ft.Text(title, size=11, color=self.body_color(), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                        ],
+                        spacing=0,
+                        expand=True,
+                    ),
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(10, 8, 8, 8),
+            bgcolor=ft.Colors.with_opacity(0.12 if active else 0.03, color),
+            border=ft.Border(
+                left=ft.BorderSide(3, color),
+                top=ft.BorderSide(1, self.line_color()),
+                right=ft.BorderSide(1, self.line_color()),
+                bottom=ft.BorderSide(1, self.line_color()),
+            ),
+            border_radius=10,
+            col=compact_col(col),
+        )
+
     def card_title(self, title, icon, subtitle=None, trailing=None):
         """A card's heading beside a round icon badge. `title` may be a Text, to change it later."""
-        heading = title if isinstance(title, ft.Text) else ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color=self.link_color())
-        lines = [heading, *([ft.Text(subtitle, size=12, color=self.muted_color())] if subtitle else [])]
+        phone = self.phone
+        heading = title if isinstance(title, ft.Text) else ft.Text(title, size=15 if phone else 17, weight=ft.FontWeight.BOLD, color=self.link_color())
+        # A phone leaves out the explanation under the heading.
+        lines = [heading, *([ft.Text(subtitle, size=12, color=self.muted_color())] if subtitle and not phone else [])]
         return ft.Row(
             [
                 ft.Container(
-                    content=ft.Icon(icon, size=24, color=self.accent()),
-                    width=50, height=50, border_radius=25,
+                    content=ft.Icon(icon, size=18 if phone else 24, color=self.accent()),
+                    width=34 if phone else 50, height=34 if phone else 50, border_radius=17 if phone else 25,
                     alignment=ft.Alignment(0, 0),
                     bgcolor=ft.Colors.with_opacity(0.10, self.accent()),
                 ),
                 ft.Column(lines, spacing=3, expand=True),
                 *([trailing] if trailing is not None else []),
             ],
-            spacing=16,
+            spacing=10 if phone else 16,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            wrap=phone and trailing is not None,
         )
 
     def empty_box(self, message, icon=ft.Icons.INFO, centered=False):
@@ -348,7 +403,10 @@ class TrackingWidgets:
         """A screen's blue heading banner, with the town hall on the right.
 
         `actions` are buttons placed at its bottom right; `corner` is one small control at its top right.
+        A phone gets a slim banner without the photo or subtitle, with the buttons on a row underneath.
         """
+        if self.phone:
+            return self._phone_banner(title, icon, actions, corner)
         blue = "#0D4FB0"
         layers = [
             ft.Container(
@@ -402,6 +460,31 @@ class TrackingWidgets:
             border_radius=16,
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
+
+    def _phone_banner(self, title, icon, actions, corner):
+        heading = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Icon(icon, size=20, color=ft.Colors.BLUE_700),
+                        width=36, height=36, border_radius=10,
+                        alignment=ft.Alignment(0, 0),
+                        bgcolor=ft.Colors.with_opacity(0.92, ft.Colors.WHITE),
+                    ),
+                    ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE, expand=True,
+                            max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                    *([corner] if corner is not None else []),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding(14, 10, 10, 10),
+            gradient=ft.LinearGradient(begin=ft.Alignment(-1, 0), end=ft.Alignment(1, 0), colors=["#0B47A3", "#1565C0"]),
+            border_radius=12,
+        )
+        if not actions:
+            return heading
+        return ft.Column([heading, ft.Row(actions, spacing=8, run_spacing=8, wrap=True)], spacing=8)
 
     def document_cell(self, item, expand=True):
         return ft.Column(

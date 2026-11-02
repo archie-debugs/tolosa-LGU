@@ -264,7 +264,7 @@ def build_documents_view(
             filtering_by_it = state["quick"] == key and key != "total"
             card = widgets.stat_card(
                 title, value, "Showing these" if filtering_by_it else detail, icon, color,
-                col={"xs": 12, "sm": 6, "md": 12 // len(cards)}, tile=True, active=filtering_by_it,
+                col={"xs": 12, "sm": 6, "xl": 12 // len(cards)}, tile=True, active=filtering_by_it,
             )
             card.on_click = lambda _, k=key: set_quick(k)
             card.ink = True
