@@ -406,7 +406,7 @@ def main(page: ft.Page, session=None):
         page_state["qr_authorization"] = qr_state
         page.data = page_state
         _render_qr_authorization_state(qr_state)
-        if not show_document_details({"id": document_id, "qr_token": qr_state.get("token")}):
+        if not show_document_details({"id": document_id, "qr_token": qr_state.get("token")}, allow_pass=True):
             qr_state["details_opened"] = False
             page_state["qr_authorization"] = qr_state
             page.data = page_state
@@ -1782,7 +1782,8 @@ def main(page: ft.Page, session=None):
             except Exception:
                 pass
 
-    def show_document_details(doc):
+    def show_document_details(doc, allow_pass=False):
+        """Open a document's details. Only the Office Dashboard and a QR scan may pass it on from there."""
         if is_employee() and not runtime_token:
             _return_to_login_after_qr_details_401()
             return False
@@ -1799,7 +1800,7 @@ def main(page: ft.Page, session=None):
                 can_download=has_permission("download_documents"),
                 can_print=has_permission("print_documents"),
                 can_change_stage=has_permission("change_measure_stage"),
-                open_pass=open_pass_document_dialog,
+                open_pass=open_pass_document_dialog if allow_pass else None,
                 open_edit=open_edit_document_dialog,
                 preview=preview_document_pdf,
                 download=download_document_attachment,
@@ -4415,7 +4416,7 @@ def main(page: ft.Page, session=None):
             can_view_details=has_permission("view_office_document_details"),
             can_open_in_transit=(current_user_role or "").strip().lower() == "super administrator",
             can_search=has_permission("search_office_documents"),
-            open_details=show_document_details,
+            open_details=lambda doc: show_document_details(doc, allow_pass=True),
             open_pass=open_pass_document_dialog,
             on_back=return_to_office_overview if selected_office else None,
         )
