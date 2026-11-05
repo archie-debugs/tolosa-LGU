@@ -74,3 +74,58 @@ def test_only_the_office_dashboard_and_a_qr_scan_open_details_that_can_pass():
     assert 'show_document_details({"id": document_id, "qr_token": qr_state.get("token")}, allow_pass=True)' in source
     assert "open_details=lambda doc: show_document_details(doc, allow_pass=True),\n            open_pass=open_pass_document_dialog," in source
     assert "open_pass=open_pass_document_dialog if allow_pass else None," in source
+
+
+class PhonePage(DummyPage):
+    def __init__(self):
+        super().__init__()
+        self.width = 390
+        self.controls = []
+
+    def clean(self):
+        self.controls = []
+
+    def add(self, *controls):
+        self.controls.extend(controls)
+
+
+SCANNED = {**HELD, "can": {"pass": True, "receive": True, "record_action": False}}
+
+
+def scanned_on_a_phone(open_pass, on_done=lambda: None):
+    page, dialog = PhonePage(), ft.AlertDialog()
+    open_document_details(page, dialog, lambda method, path, **kw: SCANNED, 7, normalize=lambda doc: doc,
+                          qr_token="tok", open_pass=open_pass, on_done=on_done)
+    return page, dialog
+
+
+def button(page, label):
+    return next(c for root in page.controls for c in walk(root)
+                if isinstance(c, ft.FilledButton) and (c.text == label or c.content == label))
+
+
+def test_a_scan_on_a_phone_fills_the_page_instead_of_opening_a_dialog():
+    page, dialog = scanned_on_a_phone(open_pass=lambda doc, **kw: None)
+
+    assert not dialog.open
+    for label in ("Receive", "Pass on", "Done"):
+        assert button(page, label)
+    assert button(page, "Receive").height == 48
+
+
+def test_done_leaves_the_scanned_document():
+    done = []
+    page, _ = scanned_on_a_phone(open_pass=lambda doc, **kw: None, on_done=lambda: done.append(True))
+
+    button(page, "Done").on_click(None)
+
+    assert done == [True]
+
+
+def test_passing_on_from_the_phone_page_reloads_it_afterwards():
+    calls = []
+    page, _ = scanned_on_a_phone(open_pass=lambda doc, **kw: calls.append((doc["id"], kw)))
+
+    button(page, "Pass on").on_click(None)
+
+    assert calls[0][0] == 7 and callable(calls[0][1]["on_passed"])
