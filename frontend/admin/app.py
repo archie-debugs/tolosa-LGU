@@ -1365,7 +1365,8 @@ def main(page: ft.Page, session=None):
         pass_document_dialog.open = False
         page.update()
 
-    def open_pass_document_dialog(document):
+    def open_pass_document_dialog(document, on_passed=None):
+        """`on_passed()` runs after a successful handoff; without it the document's details open again."""
         if not isinstance(document, dict):
             show_document_notice("No document selected for handoff.")
             return
@@ -1378,11 +1379,13 @@ def main(page: ft.Page, session=None):
             show_document_notice("This document cannot be passed because it is missing an ID.")
             return
 
+        # A phone's dialog is the screen width less the dialog's own margins.
+        dialog_width = min(440, (page.width or 1024) - 80)
         office_loading = ft.Text("Loading available offices...", size=12, color=ft.Colors.BLUE_GREY_600)
         office_error = ft.Text("", size=12, color=ft.Colors.RED_700)
         office_selector = ft.Dropdown(
             label="Receiving Office",
-            width=400,
+            width=dialog_width - 40,
             disabled=True,
             options=[],
             on_change=lambda _: submit_button.update() if False else None,
@@ -1529,7 +1532,10 @@ def main(page: ft.Page, session=None):
                     except Exception:
                         pass
                     try:
-                        show_document_details(document)
+                        if on_passed is not None:
+                            on_passed()
+                        else:
+                            show_document_details(document)
                     except Exception:
                         pass
                     return
@@ -1576,7 +1582,7 @@ def main(page: ft.Page, session=None):
                 tight=True,
             ),
             padding=8,
-            width=440,
+            width=dialog_width,
         )
         pass_document_dialog.actions = [
             ft.TextButton("Cancel", on_click=lambda _: close_pass_document_dialog()),
@@ -1813,6 +1819,23 @@ def main(page: ft.Page, session=None):
             except Exception:
                 pass
 
+    def leave_qr_document():
+        """Done with a scanned document: on to the account's usual workspace."""
+        clear_pending_qr_token()
+        if (current_user_role or "").strip().lower() == "sb member":
+            from frontend.sb_member.app import main as sb_member_main
+            sb_member_main(page, session={
+                "access_token": runtime_token,
+                "refresh_token": refresh_token,
+                "username": current_user,
+                "role": current_user_role,
+                "permissions": current_user_permissions,
+            })
+            return
+        nav_items[:] = build_nav_items()
+        initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
+        show_shell(initial_view, initial_selected_index=0)
+
     def show_document_details(doc, allow_pass=False):
         """Open a document's details. Only the Office Dashboard and a QR scan may pass it on from there."""
         if is_employee() and not runtime_token:
@@ -1836,6 +1859,8 @@ def main(page: ft.Page, session=None):
                 preview=preview_document_pdf,
                 download=download_document_attachment,
                 on_change=refresh_after_document_change,
+                # A phone that scanned the QR code gets the document as its own page.
+                on_done=leave_qr_document if doc.get("qr_token") and is_phone(page) else None,
             )
         except DetailsSessionExpired:
             _return_to_login_after_qr_details_401()

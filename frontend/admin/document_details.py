@@ -83,8 +83,12 @@ def open_document_details(
     preview=None,
     download=None,
     on_change=None,
+    on_done=None,
 ):
     """Load a document into `dialog` and open it; raises when it cannot be loaded.
+
+    With `on_done`, the details fill the page instead (a phone after a QR scan), with big
+    Receive / Pass on buttons and a Done button that calls `on_done()`.
 
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     The backend decides what the user's office can do now (receive, pass on, record an
@@ -126,6 +130,13 @@ def open_document_details(
         dialog.open = False
         page.update()
         callback(summary())
+
+    def pass_on(_):
+        if on_done is None:
+            close_then(open_pass)
+        else:
+            # The full-page details stay underneath the pass dialog and show the new location after.
+            open_pass(summary(), on_passed=lambda: reload())
 
     def reload(update=True):
         try:
@@ -243,16 +254,23 @@ def open_document_details(
             else:
                 buttons.append(ft.FilledButton("Receive", icon=ft.Icons.MOVE_TO_INBOX_OUTLINED, on_click=lambda _: set_state(confirming=True)))
         if can.get("pass") and open_pass:
-            buttons.append(ft.FilledButton("Pass on", icon=ft.Icons.SEND_OUTLINED, on_click=lambda _: close_then(open_pass)))
+            buttons.append(ft.FilledButton("Pass on", icon=ft.Icons.SEND_OUTLINED, on_click=pass_on))
         if can.get("record_action") and state["action"] is None:
             buttons.append(ft.OutlinedButton("Record action", icon=ft.Icons.TASK_ALT, on_click=lambda _: set_state(action="")))
         if has_pdf and (can_download or can_print) and preview:
             buttons.append(ft.OutlinedButton("Preview", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _: preview(summary())))
         if attachments and can_download and download:
             buttons.append(ft.OutlinedButton("Download", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=lambda _: download(summary())))
-        if can_edit and open_edit and not document.get("archived"):
+        if can_edit and open_edit and not document.get("archived") and on_done is None:
             buttons.append(ft.OutlinedButton("Edit", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda _: close_then(open_edit)))
-        return ft.Row(buttons, spacing=8, run_spacing=8, wrap=True) if buttons else None
+        if not buttons:
+            return None
+        if on_done is not None:
+            # Full width and tall enough to tap on a phone.
+            for button in buttons:
+                button.height = 48
+            return ft.Column(buttons, spacing=8, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+        return ft.Row(buttons, spacing=8, run_spacing=8, wrap=True)
 
     def action_panel():
         """Choose what was done, add a note, save."""
@@ -392,6 +410,9 @@ def open_document_details(
         render_sections(sections)
 
     def render_sections(sections):
+        if on_done is not None:
+            render_full_page(sections)
+            return
         mobile = (page.width or 1024) <= 600
         width = max(280, (page.width or 360) - 32) if mobile else 680
         dialog.title = ft.Text("Document details", color=widgets.heading_color())
@@ -401,12 +422,40 @@ def open_document_details(
             padding=ft.Padding(4, 0, 4, 0),
         )
 
+    def render_full_page(sections):
+        top_bar = ft.Row(
+            [
+                ft.Text("Scanned document", size=16, weight=ft.FontWeight.BOLD, color=widgets.heading_color(), expand=True),
+                ft.FilledButton("Done", icon=ft.Icons.CHECK, on_click=lambda _: on_done()),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        page.scroll = None  # the details column scrolls itself; see frontend/admin/admin_shell.py
+        page.clean()
+        page.add(
+            ft.Container(
+                content=ft.Column(
+                    [
+                        top_bar,
+                        ft.Divider(height=1, color=widgets.line_color()),
+                        ft.Column(sections, spacing=14, scroll=ft.ScrollMode.AUTO, expand=True),
+                    ],
+                    spacing=10,
+                    expand=True,
+                ),
+                padding=ft.Padding(16, 12, 16, 0),
+                bgcolor=widgets.card_color(),
+                expand=True,
+            )
+        )
+
     def stage_saved():
         changed()
         reload()
 
     fetch()
     render()
-    dialog.open = True
+    if on_done is None:
+        dialog.open = True
     page.update()
     return True
