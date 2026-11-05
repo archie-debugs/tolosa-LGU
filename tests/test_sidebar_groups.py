@@ -90,3 +90,13 @@ def test_leaving_a_group_closes_it():
     click(sidebar.tile("Dashboard"))
 
     assert "Ordinances" not in sidebar.labels()
+
+
+def test_signing_in_on_a_phone_stops_the_login_page_scrolling():
+    # The phone login page scrolls the whole page; the shell inside a scrolling page drew nothing.
+    page = DummyPage(width=390)
+    page.scroll = ft.ScrollMode.AUTO
+
+    render_shell(page, "ana", lambda: None, nav_items(), None)
+
+    assert page.scroll is None

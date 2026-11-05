@@ -803,6 +803,9 @@ def render_shell(
     build_nav()
     build_profile_bar()
 
+    # The phone login page scrolls the whole page; the shell fills the screen and scrolls its
+    # own content, and inside a scrolling page it has no height and draws nothing.
+    page.scroll = None
     page.horizontal_alignment = ft.CrossAxisAlignment.START
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.bgcolor = colors["canvas"]
