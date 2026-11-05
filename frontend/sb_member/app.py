@@ -22,6 +22,7 @@ if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
 
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.council_sessions import build_sessions_view
+from frontend.admin.screen import is_phone
 from frontend.theme import CANVAS, PRIMARY
 
 API_URL = os.getenv("SBMEM_BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
@@ -97,6 +98,12 @@ def main(page: ft.Page, session=None):
 
     def page_header(title, subtitle, icon, trailing=None):
         # The admin workspace's section_header: an icon badge beside the title.
+        if is_phone(page):
+            # A phone keeps the title and `trailing` only, like the admin screens' phone banners.
+            row = [ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900, expand=True)]
+            if trailing is not None:
+                row.append(trailing)
+            return card(ft.Row(row, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.padding.symmetric(horizontal=14, vertical=10))
         row = [
             ft.Container(content=ft.Icon(icon, color=PRIMARY, size=24), padding=10, bgcolor=ft.Colors.with_opacity(0.12, PRIMARY), border_radius=14),
             ft.Column([
@@ -204,10 +211,30 @@ def main(page: ft.Page, session=None):
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6), padding=30, alignment=ft.alignment.center)]
             else:
                 rows = []
+                cards = []
                 for document in visible_items:
                     actions = [ft.IconButton(ft.Icons.VISIBILITY_OUTLINED, tooltip="View document", icon_color=PRIMARY, on_click=lambda _, d=document: document_dialog(d))]
                     if can("download_documents") and document.get("attachments"):
                         actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color=ft.Colors.BLUE_GREY_600, on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
+                    # A phone gets each document as a card; the table's six columns don't fit.
+                    cards.append(ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Text(f"{document.get('tracking_number') or '-'} · No. {document.get('document_number') or '-'} / {document.get('series_year') or '-'}",
+                                        size=12, weight=ft.FontWeight.W_600, color=PRIMARY, expand=True),
+                                badge(document.get("status")),
+                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                            ft.Text(document.get("title") or "-", size=13, max_lines=3, overflow=ft.TextOverflow.ELLIPSIS),
+                            ft.Row([
+                                ft.Text(f"{document.get('document_type') or '-'} · {format_date(document.get('date'))}", size=11, color=ft.Colors.BLUE_GREY_600, expand=True),
+                                *actions,
+                            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ], spacing=4),
+                        padding=ft.Padding(12, 10, 4, 2),
+                        border=ft.Border(*([ft.BorderSide(1, "#e5edf6")] * 4)),
+                        border_radius=10,
+                        on_click=lambda _, d=document: document_dialog(d),
+                    ))
                     rows.append(ft.DataRow(cells=[
                         ft.DataCell(ft.Column([
                             ft.Text(document.get("document_number") or "-", size=12, weight=ft.FontWeight.W_600),
@@ -223,7 +250,7 @@ def main(page: ft.Page, session=None):
                         ft.DataCell(badge(document.get("status"))),
                         ft.DataCell(ft.Row(actions, spacing=0, tight=True)),
                     ]))
-                table_holder.controls = [ft.DataTable(
+                table_holder.controls = [ft.Column(cards, spacing=8)] if is_phone(page) else [ft.DataTable(
                     columns=[ft.DataColumn(ft.Text(label, size=11, weight=ft.FontWeight.BOLD)) for label in ["Document No. / ID", "Title", "Type", "Date", "Status", "Actions"]],
                     rows=rows,
                     column_spacing=32,
@@ -239,6 +266,10 @@ def main(page: ft.Page, session=None):
                 pagination_nav.controls.append(ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous", disabled=current_page_number == 1, icon_color="#94a3b8", on_click=lambda _: change_page(-1)))
                 start_page = max(1, current_page_number - 2)
                 end_page = min(total_page_count, current_page_number + 2)
+                if is_phone(page):
+                    # The page numbers don't fit beside the count on a phone.
+                    start_page, end_page = 1, 0
+                    pagination_nav.controls.append(ft.Text(f"{current_page_number} / {total_page_count}", size=12, color=ft.Colors.BLUE_GREY_600))
                 for number in range(start_page, end_page + 1):
                     selected = number == current_page_number
                     pagination_nav.controls.append(ft.Container(
@@ -398,7 +429,7 @@ def main(page: ft.Page, session=None):
             page_header("Good day, " + (user.get("full_name") or user.get("username", "Member")), "Your legislative document workspace", ft.Icons.DASHBOARD_OUTLINED),
             ft.Row([stat_card("Available Documents", data.get("total_documents", 0), ft.Icons.FOLDER_COPY_OUTLINED, PRIMARY)], spacing=12, wrap=True),
             card(ft.Column([ft.Row([ft.Text("Recently Added", size=15, weight=ft.FontWeight.BOLD), ft.TextButton("View all", on_click=lambda _: navigate("Documents"))], alignment=ft.MainAxisAlignment.SPACE_BETWEEN), ft.Divider(height=1), *(recent_rows or [ft.Text("No recent documents.", size=12, color=ft.Colors.BLUE_GREY_600)])], spacing=3)),
-            ft.Row([ft.FilledButton("View Documents", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: navigate("Documents")), ft.OutlinedButton("Search Documents", icon=ft.Icons.SEARCH, on_click=lambda _: navigate("Documents"))], spacing=10),
+            ft.Row([ft.FilledButton("View Documents", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: navigate("Documents")), ft.OutlinedButton("Search Documents", icon=ft.Icons.SEARCH, on_click=lambda _: navigate("Documents"))], spacing=10, run_spacing=8, wrap=True),
         ], spacing=16, tight=True)
 
     def sessions_view():

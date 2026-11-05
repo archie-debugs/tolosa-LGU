@@ -521,6 +521,9 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
     documents_section = ft.Column(
         [
             eyebrow("PUBLIC RECORDS"),
+            # A narrow screen puts the count under the heading; beside it, it runs off the edge.
+            ft.Column([ft.Text("Available Public Documents", size=22, weight=ft.FontWeight.BOLD, color=navy), result_count], spacing=4)
+            if narrow else
             ft.Row(
                 [ft.Text("Available Public Documents", size=24, weight=ft.FontWeight.BOLD, color=navy), result_count],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
