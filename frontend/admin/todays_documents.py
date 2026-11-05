@@ -77,7 +77,7 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
             alignment=ft.Alignment(0, 0),
             bgcolor=ft.Colors.with_opacity(0.10, accent()),
         )
-        lines = [heading, widgets.hint(subtitle)] if subtitle else [heading]
+        lines = [heading, widgets.hint(subtitle)] if subtitle and not widgets.phone else [heading]
         return ft.Row([badge, ft.Column(lines, spacing=4, expand=True)], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def empty_state(message):
@@ -377,37 +377,51 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
         search(None)
 
     search_field.on_submit = search
+    search_buttons = [
+        ft.FilledButton(
+            "Search", icon=ft.Icons.SEARCH, on_click=search, height=46,
+            style=ft.ButtonStyle(shape=ft.StadiumBorder(), padding=ft.Padding(28, 0, 28, 0), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+        ),
+        ft.TextButton("Clear", on_click=clear_search, style=ft.ButtonStyle(color=accent())),
+    ]
+    # A phone puts the buttons under the search box.
+    search_row = (
+        ft.Column([ft.Row([search_field]), ft.Row(search_buttons, spacing=8)], spacing=8)
+        if widgets.phone else
+        ft.Row([search_field, *search_buttons], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    )
     search_section.controls = [
         card_title(
             ft.Icons.ADD_CIRCLE, "Add a document",
             subtitle="All documents except archived ones, newest first. Archived documents are left out because SB Members cannot see them.",
         ),
-        ft.Row(
-            [
-                search_field,
-                ft.FilledButton(
-                    "Search", icon=ft.Icons.SEARCH, on_click=search, height=46,
-                    style=ft.ButtonStyle(shape=ft.StadiumBorder(), padding=ft.Padding(28, 0, 28, 0), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-                ),
-                ft.TextButton("Clear", on_click=clear_search, style=ft.ButtonStyle(color=accent())),
-            ],
-            spacing=12,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
+        search_row,
         results_column,
         ft.Row([results_summary, previous_results, next_results], alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER),
     ]
 
-    date_text.size = 19
+    date_text.size = 16 if widgets.phone else 19
     date_text.color = widgets.link_color()
     date_hint.size = 13
-    date_bar = ft.Row(
+    previous_day = ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=accent(), tooltip="Previous day", on_click=lambda _: go_to(state["date"] - timedelta(days=1)))
+    next_day = ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=accent(), tooltip="Next day", on_click=lambda _: go_to(state["date"] + timedelta(days=1)))
+    pick_button = boxed(ft.IconButton(ft.Icons.CALENDAR_MONTH, icon_color=accent(), tooltip="Pick a date", on_click=pick_date))
+    today_button = boxed(ft.TextButton("Today", icon=ft.Icons.TODAY, on_click=lambda _: go_to(state["today"]), style=ft.ButtonStyle(color=accent())))
+    # A phone puts the day on its own, with the day buttons in a row underneath.
+    date_bar = ft.Column(
         [
-            ft.IconButton(ft.Icons.CHEVRON_LEFT, icon_color=accent(), tooltip="Previous day", on_click=lambda _: go_to(state["date"] - timedelta(days=1))),
+            ft.Column([date_text, date_hint, upcoming_row], spacing=6),
+            ft.Row([previous_day, next_day, pick_button, today_button], spacing=8, wrap=True,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ],
+        spacing=10,
+    ) if widgets.phone else ft.Row(
+        [
+            previous_day,
             ft.Column([date_text, date_hint, upcoming_row], spacing=6, expand=True),
-            ft.IconButton(ft.Icons.CHEVRON_RIGHT, icon_color=accent(), tooltip="Next day", on_click=lambda _: go_to(state["date"] + timedelta(days=1))),
-            boxed(ft.IconButton(ft.Icons.CALENDAR_MONTH, icon_color=accent(), tooltip="Pick a date", on_click=pick_date)),
-            boxed(ft.TextButton("Today", icon=ft.Icons.TODAY, on_click=lambda _: go_to(state["today"]), style=ft.ButtonStyle(color=accent()))),
+            next_day,
+            pick_button,
+            today_button,
         ],
         spacing=10,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,

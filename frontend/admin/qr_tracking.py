@@ -194,7 +194,7 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
     )
     track_button = ft.FilledButton(
         "Track", icon=ft.Icons.SEARCH, on_click=lambda _: track(), height=52,
-        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE, padding=ft.Padding(26, 0, 26, 0)),
+        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE, padding=ft.Padding(14 if widgets.phone else 26, 0, 14 if widgets.phone else 26, 0)),
     )
 
     refresh(update=False)
@@ -226,14 +226,14 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
                             ),
                             padding=20,
                         ),
-                        col={"xs": 12, "lg": 7},
+                        col={"xs": 12, "xl": 7},
                     ),
                     ft.Container(
                         surface_card(
                             ft.Column([widgets.card_title("Recent activity", ft.Icons.SCHEDULE, trailing=updated_text), activity_list], spacing=16),
                             padding=20,
                         ),
-                        col={"xs": 12, "lg": 5},
+                        col={"xs": 12, "xl": 5},
                     ),
                 ],
                 spacing=16,

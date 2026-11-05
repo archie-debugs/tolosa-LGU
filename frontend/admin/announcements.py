@@ -124,6 +124,6 @@ def build_announcements_view(page, surface_card, api):
             ui.card_title("Homepage announcements", ft.Icons.CAMPAIGN_OUTLINED, subtitle="Shown on the public homepage from top to bottom. Save to publish your changes."),
             rows,
             message,
-            ft.Row([add_button, save_button], alignment=ft.MainAxisAlignment.END, spacing=12),
+            ft.Row([add_button, save_button], alignment=ft.MainAxisAlignment.END, spacing=12, run_spacing=8, wrap=True),
         ], spacing=18), padding=20),
     ], spacing=16)

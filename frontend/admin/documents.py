@@ -100,6 +100,7 @@ def build_documents_view(
 
     accent = widgets.accent()
     tint = widgets.tint()
+    phone = widgets.phone
     field_style = {
         "dense": True,
         "text_size": 14,
@@ -122,10 +123,11 @@ def build_documents_view(
         )
 
     def filter_box(control):
+        # Two filters to a line on a phone.
         return ft.Column(
-            [ft.Text(control.data, size=13, weight=ft.FontWeight.W_600, color=widgets.heading_color()), control],
-            spacing=6,
-            width=190,
+            [ft.Text(control.data, size=12 if phone else 13, weight=ft.FontWeight.W_600, color=widgets.heading_color()), control],
+            spacing=4 if phone else 6,
+            width=140 if phone else 190,
         )
 
     search_field = ft.TextField(
@@ -264,7 +266,7 @@ def build_documents_view(
             filtering_by_it = state["quick"] == key and key != "total"
             card = widgets.stat_card(
                 title, value, "Showing these" if filtering_by_it else detail, icon, color,
-                col={"xs": 12, "sm": 6, "md": 12 // len(cards)}, tile=True, active=filtering_by_it,
+                col={"xs": 12, "sm": 6, "xl": 12 // len(cards)}, tile=True, active=filtering_by_it,
             )
             card.on_click = lambda _, k=key: set_quick(k)
             card.ink = True
@@ -487,6 +489,41 @@ def build_documents_view(
         controls.append(ft.Row(actions, spacing=0, width=COLUMN_WIDTHS["actions"], alignment=ft.MainAxisAlignment.END))
         return widgets.list_row(controls, on_click=(lambda _, d=doc: open_details(d)) if can_view_details and open_details else None)
 
+    def document_card(doc):
+        """A phone's row: tracking number and status, the title, where it is, then its buttons."""
+        doc_id = doc.get("id")
+        status = doc.get("status")
+        top = [ft.Text(doc.get("tracking_number") or "-", size=13, weight=ft.FontWeight.BOLD, color=widgets.link_color(), expand=True)]
+        if status and status != "-":
+            top.append(widgets.chip(status, STATUS_COLORS.get(status, ft.Colors.INDIGO_600)))
+        if selectable:
+            top.insert(0, ft.Checkbox(value=doc_id in selection, on_change=lambda e, i=doc_id: toggle(i, e.control.value)))
+        where = location_cell(doc)
+        where.width = None
+        lines = [
+            ft.Row(top, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Text(doc.get("title") or "Untitled", size=13, color=widgets.heading_color(), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+            where,
+        ]
+        chips = badges(doc)
+        if chips:
+            lines.append(ft.Row(chips, spacing=6, run_spacing=6, wrap=True))
+        actions = []
+        if can_view_details and open_details:
+            actions.append(ft.TextButton("View", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=doc: open_details(d)))
+        more = menu_items(doc)
+        if more:
+            actions.append(ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="More actions", items=more))
+        if actions:
+            lines.append(ft.Row(actions, spacing=0, alignment=ft.MainAxisAlignment.END))
+        return ft.Container(
+            content=ft.Column(lines, spacing=4),
+            padding=ft.Padding(12, 10, 8, 4),
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=10,
+            on_click=(lambda _, d=doc: open_details(d)) if can_view_details and open_details else None,
+        )
+
     def render_pagination():
         current, total_pages = state["page"], state["total_pages"]
         controls = [
@@ -530,9 +567,12 @@ def build_documents_view(
         if loaded:
             first = (state["page"] - 1) * state["page_size"] + 1
             result_text.value = f"Showing {first}–{first + len(loaded) - 1} of {total} document{'s' if total != 1 else ''}"
-            # The sheet's columns don't fit a narrow window, so the table scrolls sideways there.
-            table = ft.Column([header_row()] + [document_row(doc) for doc in loaded], spacing=0, width=table_width())
-            rows_column.controls = [ft.Row([table], scroll=ft.ScrollMode.AUTO)]
+            if phone:
+                rows_column.controls = [ft.Column([document_card(doc) for doc in loaded], spacing=8)]
+            else:
+                # The sheet's columns don't fit a narrow window, so the table scrolls sideways there.
+                table = ft.Column([header_row()] + [document_row(doc) for doc in loaded], spacing=0, width=table_width())
+                rows_column.controls = [ft.Row([table], scroll=ft.ScrollMode.AUTO)]
         else:
             result_text.value = ""
             if filtering():
@@ -569,13 +609,16 @@ def build_documents_view(
             if archived else
             widgets.banner("Documents", "Every active legislative document, where it is, and what you can do with it.", ft.Icons.INVENTORY_2, actions=header_actions)
         )
-    kpi_card = surface_card(kpi_row, padding=18, expand=False)
+    kpi_card = surface_card(kpi_row, padding=10 if phone else 18, expand=False)
     list_card = surface_card(
         ft.Column(
             [
                 ft.Row(
                     [
                         search_field,
+                        # A phone keeps the search box wide with an icon-only button.
+                        ft.IconButton(ft.Icons.FILTER_ALT_OFF_OUTLINED, icon_color=accent, tooltip="Clear filters", on_click=clear_filters)
+                        if phone else
                         ft.TextButton("Clear filters", icon=ft.Icons.FILTER_ALT_OUTLINED, on_click=clear_filters, style=ft.ButtonStyle(color=accent)),
                     ],
                     spacing=12,
@@ -589,7 +632,7 @@ def build_documents_view(
             ],
             spacing=16,
         ),
-        padding=22,
+        padding=12 if phone else 22,
         expand=False,
     )
 

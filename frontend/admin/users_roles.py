@@ -193,6 +193,38 @@ def _user_actions_menu(user, open_view_user_dialog, open_edit_user_dialog, open_
     return ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="User actions", items=items)
 
 
+def _user_card(user, actions):
+    """A phone's row for a user: name, role and status, with the ⋮ menu."""
+    status = user.get("status", "Active")
+    office = user.get("department") or "-"
+    return ft.Container(
+        content=ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(user.get("full_name", "Unknown User"), size=14, weight=ft.FontWeight.W_600),
+                                ft.Text(user.get("username", "unknown"), size=11, color=ft.Colors.BLUE_GREY_600),
+                            ],
+                            spacing=1,
+                            expand=True,
+                        ),
+                        actions,
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
+                ft.Row([_role_badge(user.get("role", "Employee")), _account_status_cell(user, status)], spacing=6, run_spacing=6, wrap=True),
+                ft.Text(f"Office: {office} · Last login: {_format_timestamp(user.get('last_login'))}", size=11, color=ft.Colors.BLUE_GREY_600),
+            ],
+            spacing=6,
+        ),
+        padding=ft.Padding(12, 8, 4, 10),
+        border=ft.border.all(1, ft.Colors.with_opacity(0.2, ft.Colors.BLUE_GREY_400)),
+        border_radius=10,
+    )
+
+
 def build_users_roles_table(
     users_data,
     open_view_user_dialog,
@@ -200,7 +232,17 @@ def build_users_roles_table(
     open_reset_password_dialog,
     delete_user,
     unlock_user=None,
+    phone=False,
 ):
+    """The user accounts as a table, or on a `phone` as one card per user."""
+    if phone:
+        return ft.Column(
+            [
+                _user_card(user, _user_actions_menu(user, open_view_user_dialog, open_edit_user_dialog, open_reset_password_dialog, delete_user, unlock_user))
+                for user in users_data
+            ],
+            spacing=8,
+        )
     user_rows = []
     for user in users_data:
         full_name = user.get("full_name", "Unknown User")
@@ -267,7 +309,8 @@ def build_users_roles_table(
     )
 
 
-def build_offices_table(offices_data, open_edit_office_dialog, view_office_users):
+def build_offices_table(offices_data, open_edit_office_dialog, view_office_users, phone=False):
+    """The offices as a table, or on a `phone` as one line per office."""
     if not offices_data:
         return ft.Container(
             content=ft.Row(
@@ -288,6 +331,29 @@ def build_offices_table(offices_data, open_edit_office_dialog, view_office_users
                 ft.PopupMenuItem(content=ft.Text("View Users"), on_click=lambda _, item=office: view_office_users(item)),
             ],
         )
+        if phone:
+            rows.append(ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(office.get("name") or "-", size=14, weight=ft.FontWeight.W_600),
+                                ft.Text(f"Code {office.get('office_code') or '-'} · {office.get('user_count', 0)} users", size=11, color=ft.Colors.BLUE_GREY_600),
+                            ],
+                            spacing=1,
+                            expand=True,
+                        ),
+                        _status_badge("Active" if office.get("is_active") else "Inactive"),
+                        actions,
+                    ],
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(12, 6, 4, 6),
+                border=ft.border.all(1, ft.Colors.with_opacity(0.2, ft.Colors.BLUE_GREY_400)),
+                border_radius=10,
+            ))
+            continue
         rows.append(
             ft.DataRow(
                 cells=[
@@ -299,6 +365,8 @@ def build_offices_table(offices_data, open_edit_office_dialog, view_office_users
                 ]
             )
         )
+    if phone:
+        return ft.Column(rows, spacing=8)
     return ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("Office Name", weight=ft.FontWeight.BOLD, size=12)),
@@ -440,7 +508,8 @@ def build_users_roles_view(
     search_field.expand = True
     for control in (role_filter, status_filter, office_filter, permission_filter):
         widgets.style_field(control)
-        control.width = None
+        # Two filters to a line on a phone.
+        control.width = 140 if widgets.phone else None
     pill = ft.StadiumBorder()
 
     filter_card = surface_card(
@@ -448,7 +517,8 @@ def build_users_roles_view(
             [
                 ft.Row([widgets.labelled(search_field)]),
                 ft.Row(
-                    [widgets.labelled(control, width=width) for control, width in ((role_filter, 200), (status_filter, 200), (office_filter, 220), (permission_filter, 260))],
+                    [widgets.labelled(control, width=140 if widgets.phone else width)
+                     for control, width in ((role_filter, 200), (status_filter, 200), (office_filter, 220), (permission_filter, 260))],
                     spacing=16,
                     run_spacing=12,
                     wrap=True,
@@ -511,7 +581,7 @@ def build_users_roles_view(
                             subtitle="The offices documents are passed between, and the employees in each.",
                             trailing=ft.Row(office_actions, spacing=10, tight=True),
                         ),
-                        ft.Row([office_table], scroll=ft.ScrollMode.AUTO),
+                        office_table if widgets.phone else ft.Row([office_table], scroll=ft.ScrollMode.AUTO),
                     ],
                     spacing=16,
                 ),

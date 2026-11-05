@@ -231,8 +231,18 @@ def _primary_button(text, icon, on_click):
 
 
 def _upload_box(widgets, heading, hint, *buttons):
-    return ft.Container(
-        content=ft.Row(
+    # A phone puts the buttons under the file's name, so the name gets the full width.
+    if widgets.phone:
+        content = ft.Column(
+            [
+                ft.Row([ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, size=28, color=_accent(widgets)), ft.Column([heading, hint], spacing=2, expand=True)],
+                       spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row(list(buttons), spacing=8, run_spacing=8, wrap=True),
+            ],
+            spacing=10,
+        )
+    else:
+        content = ft.Row(
             [
                 ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, size=40, color=_accent(widgets)),
                 ft.Column([heading, hint], spacing=2, expand=True),
@@ -240,8 +250,10 @@ def _upload_box(widgets, heading, hint, *buttons):
             ],
             spacing=16,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        padding=ft.Padding(18, 16, 18, 16),
+        )
+    return ft.Container(
+        content=content,
+        padding=ft.Padding(12, 12, 12, 12) if widgets.phone else ft.Padding(18, 16, 18, 16),
         bgcolor=widgets.card_color(),
         border=ft.border.all(1.5, widgets.tone(ft.Colors.BLUE_100, ft.Colors.BLUE_GREY_700)),
         border_radius=12,
