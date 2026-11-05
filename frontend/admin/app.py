@@ -93,6 +93,20 @@ if hasattr(ft, 'Alignment') and hasattr(ft, 'alignment'):
                 ft.Padding = _padding
         except Exception:
             pass
+
+# Dialogs: Flutter keeps a dialog 40px from each side of the screen, a fifth of a phone's width.
+# Keep DIALOG_INSET instead; desktop dialogs are narrower than the screen, so they don't change.
+if hasattr(ft, "AlertDialog") and not getattr(ft.AlertDialog, "_phone_inset", False):
+    from frontend.admin.screen import DIALOG_INSET
+
+    class _AlertDialog(ft.AlertDialog):
+        _phone_inset = True
+
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("inset_padding", ft.padding.symmetric(horizontal=DIALOG_INSET, vertical=24))
+            super().__init__(*args, **kwargs)
+
+    ft.AlertDialog = _AlertDialog
 import requests
 import io
 import base64
@@ -144,7 +158,7 @@ from frontend.admin.documents import build_documents_view, format_date
 from frontend.admin.retention import RETENTION_KINDS, due_for_deletion, open_retention_dialog
 from frontend.admin.document_details import open_document_details
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
-from frontend.admin.screen import DESKTOP, is_phone, screen_size
+from frontend.admin.screen import DESKTOP, dialog_width, is_phone, screen_size
 from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
@@ -968,8 +982,12 @@ def main(page: ft.Page, session=None):
             )
 
         buttons = [ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous page", on_click=lambda _: advance_audit_page(-1), disabled=current_page <= 1)]
-        buttons += [page_button(page_num) for page_num in range(1, min(5, page_count) + 1)]
-        if page_count > 5:
+        if widgets.phone:
+            # The page numbers don't fit beside the arrows on a phone.
+            buttons.append(ft.Text(f"Page {current_page} of {page_count}", size=13, color=widgets.body_color()))
+        else:
+            buttons += [page_button(page_num) for page_num in range(1, min(5, page_count) + 1)]
+        if page_count > 5 and not widgets.phone:
             buttons.append(ft.Text("…", size=12, color=widgets.muted_color()))
             buttons.append(page_button(page_count))
         buttons.append(ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next page", on_click=lambda _: advance_audit_page(1), disabled=current_page >= page_count))
@@ -1379,13 +1397,12 @@ def main(page: ft.Page, session=None):
             show_document_notice("This document cannot be passed because it is missing an ID.")
             return
 
-        # A phone's dialog is the screen width less the dialog's own margins.
-        dialog_width = min(440, (page.width or 1024) - 80)
+        pass_width = dialog_width(page, 440)
         office_loading = ft.Text("Loading available offices...", size=12, color=ft.Colors.BLUE_GREY_600)
         office_error = ft.Text("", size=12, color=ft.Colors.RED_700)
         office_selector = ft.Dropdown(
             label="Receiving Office",
-            width=dialog_width - 40,
+            width=pass_width - 40,
             disabled=True,
             options=[],
             on_change=lambda _: submit_button.update() if False else None,
@@ -1582,7 +1599,7 @@ def main(page: ft.Page, session=None):
                 tight=True,
             ),
             padding=8,
-            width=dialog_width,
+            width=pass_width,
         )
         pass_document_dialog.actions = [
             ft.TextButton("Cancel", on_click=lambda _: close_pass_document_dialog()),
@@ -3056,7 +3073,8 @@ def main(page: ft.Page, session=None):
                     for labels in permission_groups.values()
                     for label in labels
                 )
-                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{selected_count} of {permission_count} permissions selected", size=12, color=widgets.muted_color())], spacing=12))
+                # wrap: on a phone the count goes under the checkbox instead of off the edge.
+                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{selected_count} of {permission_count} permissions selected", size=12, color=widgets.muted_color())], spacing=12, wrap=True, run_spacing=0))
                 for section_name, perms in permission_groups.items():
                     group_key = section_name
                     group_count = sum(create_permission_key(perm) in selected_create_permissions for perm in perms)
@@ -3753,7 +3771,7 @@ def main(page: ft.Page, session=None):
                     ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=16),
                     ft.Text("Control access to the features available to this employee.", size=12, color=ft.Colors.BLUE_GREY_600),
                     permission_search,
-                    ft.Row([master_check, permission_summary], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row([master_check, permission_summary], spacing=12, wrap=True, run_spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     permission_cards,
                 ], width=560, spacing=10, scroll=ft.ScrollMode.ALWAYS),
                 width=580,

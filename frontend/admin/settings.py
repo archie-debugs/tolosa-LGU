@@ -221,8 +221,11 @@ def _admin_link(ui, entry, open_page):
                 ft.Text(title, size=14, weight=ft.FontWeight.W_600, color=ui.link_color()),
                 ui.hint(description),
             ], spacing=2, expand=True),
+            # A phone keeps the width for the description; the arrow alone opens the page.
+            ft.IconButton(ft.Icons.ARROW_FORWARD, icon_color=ui.accent(), on_click=lambda _: open_page(label), tooltip=f"Open {label}")
+            if ui.phone else
             ft.OutlinedButton("Open", icon=ft.Icons.ARROW_FORWARD, on_click=lambda _: open_page(label), tooltip=f"Open {label}"),
-        ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=10 if ui.phone else 14, vertical_alignment=ft.CrossAxisAlignment.CENTER),
         padding=ft.Padding(10, 8, 10, 8),
         bgcolor=ui.tone("#F7FAFE", "#1B2430"),
         border=ft.border.all(1, ui.line_color()),
@@ -337,11 +340,12 @@ def _retention_card(page, ui, api):
 
         setattr(unit, DROPDOWN_EVENT, unit_changed)
         controls[document_type] = (amount, unit)
-        return ft.Row([
-            ft.Text(document_type, size=13, weight=ft.FontWeight.W_600, color=ui.heading_color(), width=LABEL_WIDTH),
-            _field(ui, "Keep for", amount, width=110),
-            _field(ui, "Unit", unit, width=160),
-        ], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.END)
+        name = ft.Text(document_type, size=13, weight=ft.FontWeight.W_600, color=ui.heading_color(), width=None if ui.phone else LABEL_WIDTH)
+        fields = [_field(ui, "Keep for", amount, width=110), _field(ui, "Unit", unit, width=160)]
+        if ui.phone:
+            # The type's name above its two fields, so the fields stay side by side.
+            return ft.Column([name, ft.Row(fields, spacing=12)], spacing=6)
+        return ft.Row([name, *fields], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.END)
 
     def save(_):
         months = {}

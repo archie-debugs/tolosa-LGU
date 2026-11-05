@@ -228,27 +228,30 @@ def build_analytics_view(
         for item in documents:
             status = str(item.get("status") or "-")
             meta = [part for part in (item.get("document_type"), item.get("current_office"), item.get("date_registered")) if part]
+            chips = [
+                *([widgets.chip(str(item["priority"]), ft.Colors.RED_700 if str(item["priority"]).lower() in {"high", "urgent"} else ft.Colors.BLUE_GREY_600)] if item.get("priority") else []),
+                widgets.chip(status, status_color(status)),
+            ]
+            text = [
+                ft.Text(item.get("tracking_number") or "-", size=13, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+                ft.Text(item.get("title") or "Untitled", size=13, color=widgets.body_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=item.get("title")),
+                widgets.hint(" · ".join(str(part) for part in meta)),
+            ]
+            # A phone puts the chips under the text and leaves out the icon, so the text keeps the width.
+            if widgets.phone:
+                text.append(ft.Row(chips, spacing=6))
             rows.append(
                 ft.Container(
                     content=ft.Row(
                         [
-                            ft.Container(
+                            *([] if widgets.phone else [ft.Container(
                                 content=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, color=widgets.accent(), size=20),
                                 width=40, height=40, border_radius=10,
                                 alignment=ft.Alignment(0, 0),
                                 bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.BLUE_700),
-                            ),
-                            ft.Column(
-                                [
-                                    ft.Text(item.get("tracking_number") or "-", size=13, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
-                                    ft.Text(item.get("title") or "Untitled", size=13, color=widgets.body_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, tooltip=item.get("title")),
-                                    widgets.hint(" · ".join(str(part) for part in meta)),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                            *([widgets.chip(str(item["priority"]), ft.Colors.RED_700 if str(item["priority"]).lower() in {"high", "urgent"} else ft.Colors.BLUE_GREY_600)] if item.get("priority") else []),
-                            widgets.chip(status, status_color(status)),
+                            )]),
+                            ft.Column(text, spacing=2, expand=True),
+                            *([] if widgets.phone else chips),
                         ],
                         spacing=14,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
