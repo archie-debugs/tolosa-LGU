@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 import flet as ft
 
+from frontend.admin.screen import dialog_width
 from frontend.admin.stage_panel import build_stage_section
 from frontend.admin.tracking_ui import TrackingWidgets, document_reference, format_elapsed, format_time, parse_time, remark_list, stage_color
 
@@ -413,8 +414,7 @@ def open_document_details(
         if on_done is not None:
             render_full_page(sections)
             return
-        mobile = (page.width or 1024) <= 600
-        width = max(280, (page.width or 360) - 32) if mobile else 680
+        width = dialog_width(page, 680)
         dialog.title = ft.Text("Document details", color=widgets.heading_color())
         dialog.content = ft.Container(
             content=ft.Column(sections, spacing=14, scroll=ft.ScrollMode.AUTO),

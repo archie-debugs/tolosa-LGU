@@ -311,8 +311,8 @@ class TrackingWidgets:
                     ft.Icon(icon, color=color, size=18),
                     ft.Column(
                         [
-                            ft.Text(str(value), size=18, weight=ft.FontWeight.BOLD, color=self.link_color()),
-                            ft.Text(title, size=11, color=self.body_color(), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                            ft.Text(str(value), size=20, weight=ft.FontWeight.BOLD, color=self.link_color()),
+                            ft.Text(title, size=12, color=self.body_color(), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
                         ],
                         spacing=0,
                         expand=True,

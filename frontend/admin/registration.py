@@ -8,6 +8,7 @@ from datetime import date
 import flet as ft
 
 from frontend.admin.definition_fields import DocumentTypeField
+from frontend.admin.screen import dialog_width
 from frontend.admin.tracking_ui import TrackingWidgets
 
 ALLOWED_EXTENSIONS = ("pdf", "doc", "docx")
@@ -356,10 +357,12 @@ class _Form:
         self.office.disabled = locked or self.options["office_locked"]
 
 
+# A form dialog's padding on each side on a phone (see _style_dialog).
+PHONE_DIALOG_PADDING = 16
+
+
 def _dialog_width(page, wide):
-    if (page.width or 1024) <= 600:
-        return max(280, (page.width or 360) - 32)
-    return 760 if wide else 680
+    return dialog_width(page, 760 if wide else 680, padding=PHONE_DIALOG_PADDING)
 
 
 def _style_dialog(dialog, widgets, title, content, actions, width, *, subtitle=None, icon=None, on_close=None):
@@ -367,34 +370,38 @@ def _style_dialog(dialog, widgets, title, content, actions, width, *, subtitle=N
     dialog.modal = True
     dialog.bgcolor = widgets.card_color()
     dialog.shape = ft.RoundedRectangleBorder(radius=18)
-    heading = ft.Text(title, size=20, weight=ft.FontWeight.BOLD, color=widgets.heading_color())
+    # A phone gets a smaller header without the subtitle, leaving the screen to the form.
+    phone = widgets.phone
+    heading = ft.Text(title, size=18 if phone else 20, weight=ft.FontWeight.BOLD, color=widgets.heading_color())
     if icon:
+        tile = 40 if phone else 56
         heading = ft.Row(
             [
                 ft.Container(
-                    content=ft.Icon(icon, color=ft.Colors.WHITE, size=28),
-                    width=56, height=56, border_radius=14,
+                    content=ft.Icon(icon, color=ft.Colors.WHITE, size=22 if phone else 28),
+                    width=tile, height=tile, border_radius=12 if phone else 14,
                     alignment=ft.Alignment(0, 0),
                     bgcolor=ft.Colors.BLUE_700,
                     border=ft.border.all(4, ft.Colors.with_opacity(0.15, ft.Colors.BLUE_700)),
                 ),
                 ft.Column(
                     [
-                        ft.Text(title, size=22, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
-                        *([ft.Text(subtitle, size=13, color=widgets.muted_color())] if subtitle else []),
+                        ft.Text(title, size=18 if phone else 22, weight=ft.FontWeight.BOLD, color=widgets.link_color()),
+                        *([ft.Text(subtitle, size=13, color=widgets.muted_color())] if subtitle and not phone else []),
                     ],
                     spacing=2,
                     expand=True,
                 ),
                 *([ft.IconButton(ft.Icons.CLOSE, icon_color=widgets.muted_color(), tooltip="Close", on_click=lambda _: on_close())] if on_close else []),
             ],
-            spacing=14,
+            spacing=10 if phone else 14,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
     dialog.title = heading
-    dialog.title_padding = ft.Padding(24, 20, 16, 8)
-    dialog.content_padding = ft.Padding(24, 8, 24, 8)
-    dialog.actions_padding = ft.Padding(24, 8, 24, 20)
+    side = PHONE_DIALOG_PADDING if phone else 24
+    dialog.title_padding = ft.Padding(side, 16 if phone else 20, side - 8, 8)
+    dialog.content_padding = ft.Padding(side, 8, side, 8)
+    dialog.actions_padding = ft.Padding(side, 8, side, 16 if phone else 20)
     dialog.content = ft.Container(content=content, width=width)
     dialog.actions = actions
     dialog.actions_alignment = ft.MainAxisAlignment.END

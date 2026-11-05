@@ -56,7 +56,9 @@ def build_announcements_view(page, surface_card, api):
                         content=ft.Text(str(index + 1), size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
                         width=28, height=28, border_radius=14, alignment=ft.Alignment(0, 0), bgcolor=ft.Colors.BLUE_700,
                     ),
-                    ft.Text(f"Announcement {index + 1}", size=14, weight=ft.FontWeight.BOLD, color=ui.link_color(), expand=True),
+                    # The badge already shows the number; a phone has no room to repeat it.
+                    ft.Text("Announcement" if ui.phone else f"Announcement {index + 1}", size=14, weight=ft.FontWeight.BOLD,
+                            color=ui.link_color(), expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                     ft.IconButton(icon=ft.Icons.ARROW_UPWARD, tooltip="Move up", icon_color=ui.accent(), disabled=index == 0,
                                   on_click=lambda _, i=index: move(i, -1)),
                     ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, tooltip="Move down", icon_color=ui.accent(), disabled=index == len(entries) - 1,

@@ -123,11 +123,13 @@ def build_documents_view(
         )
 
     def filter_box(control):
-        # Two filters to a line on a phone.
+        # Two filters to a line on a phone. A dropdown is as wide as its longest option, and
+        # the sort names ("Recently archived") push the arrow out of 140px, so Sort gets more.
+        phone_width = 200 if control is sort_filter else 140
         return ft.Column(
             [ft.Text(control.data, size=12 if phone else 13, weight=ft.FontWeight.W_600, color=widgets.heading_color()), control],
             spacing=4 if phone else 6,
-            width=140 if phone else 190,
+            width=phone_width if phone else 190,
         )
 
     search_field = ft.TextField(

@@ -506,10 +506,12 @@ def build_users_roles_view(
     search_field.prefix_icon = ft.Icons.SEARCH
     search_field.width = None
     search_field.expand = True
+    # A phone gives each filter the card's full width: a dropdown is as wide as its longest
+    # option, so a narrower box pushes the arrow outside it.
+    phone_width = (page.width or 0) - 72 if widgets.phone else None
     for control in (role_filter, status_filter, office_filter, permission_filter):
         widgets.style_field(control)
-        # Two filters to a line on a phone.
-        control.width = 140 if widgets.phone else None
+        control.width = phone_width
     pill = ft.StadiumBorder()
 
     filter_card = surface_card(
@@ -517,7 +519,7 @@ def build_users_roles_view(
             [
                 ft.Row([widgets.labelled(search_field)]),
                 ft.Row(
-                    [widgets.labelled(control, width=140 if widgets.phone else width)
+                    [widgets.labelled(control, width=phone_width or width)
                      for control, width in ((role_filter, 200), (status_filter, 200), (office_filter, 220), (permission_filter, 260))],
                     spacing=16,
                     run_spacing=12,
