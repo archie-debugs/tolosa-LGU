@@ -245,7 +245,16 @@ class TrackingWidgets:
             col=col or {"xs": 6, "md": 4, "xl": 2},
         )
 
-    def list_row(self, controls, on_click=None):
+    def list_row(self, controls, on_click=None, stack_on_phone=False):
+        """With `stack_on_phone`, a phone puts the text columns above a wrapping line of the
+        chips and buttons, instead of squeezing the text beside them."""
+        if stack_on_phone and self.phone:
+            text = [control for control in controls if isinstance(control, ft.Column)]
+            rest = [control for control in controls if not isinstance(control, ft.Column)]
+            for column in text:
+                column.expand = False  # expanding inside a Column would claim height, not width
+            controls = [ft.Column([*text, *([ft.Row(rest, spacing=8, run_spacing=6, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)] if rest else [])],
+                                  spacing=4, expand=True)]
         return ft.Container(
             content=ft.Row(controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding(4, 10, 4, 10),

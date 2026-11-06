@@ -72,7 +72,8 @@ def shell_colors(is_dark):
 
 
 def initials(name):
-    words = (name or "").split()
+    # Words like "(OIC)" or "-" would give a bracket or dash for an initial.
+    words = [word for word in (name or "").split() if word[0].isalpha()]
     if len(words) >= 2:
         return (words[0][0] + words[-1][0]).upper()
     return (words[0][:2] if words else "?").upper()

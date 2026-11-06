@@ -94,18 +94,18 @@ def build_office_queue_view(
 
     def return_step():
         """The reason field shown under an incoming row while it is being returned."""
-        return ft.Container(
-            ft.Row(
-                [
-                    return_reason,
-                    ft.FilledButton("Return to sender", icon=ft.Icons.UNDO, on_click=lambda _: return_confirmed()),
-                    ft.TextButton("Back", on_click=lambda _: set_confirming(None)),
-                ],
-                spacing=8,
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            ),
-            padding=ft.Padding(4, 0, 4, 10),
+        buttons = [
+            ft.FilledButton("Return to sender", icon=ft.Icons.UNDO, on_click=lambda _: return_confirmed()),
+            ft.TextButton("Back", on_click=lambda _: set_confirming(None)),
+        ]
+        # A phone puts the buttons under the reason; expanding in a Column would claim height.
+        return_reason.expand = not widgets.phone
+        content = (
+            ft.Column([return_reason, ft.Row(buttons, spacing=8)], spacing=6)
+            if widgets.phone else
+            ft.Row([return_reason, *buttons], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
         )
+        return ft.Container(content, padding=ft.Padding(4, 0, 4, 10))
 
     def cancel_controls(item):
         if not (can_pass and state["own_office"]):
@@ -173,7 +173,7 @@ def build_office_queue_view(
                 *receive_controls(item),
             ]
             button = view_button(item, in_transit=True)
-            rows.append(widgets.list_row(controls + ([button] if button else [])))
+            rows.append(widgets.list_row(controls + ([button] if button else []), stack_on_phone=True))
             if state["confirming"] == ("return", item.get("handoff_id")):
                 rows.append(return_step())
         if rows and can_receive and state["own_office"]:
@@ -204,7 +204,7 @@ def build_office_queue_view(
             if can_pass and state["own_office"] and open_pass:
                 controls.append(ft.OutlinedButton("Pass on", icon=ft.Icons.SEND_OUTLINED, on_click=lambda _, d=summary_of(item): open_pass(d)))
             button = view_button(item)
-            rows.append(widgets.list_row(controls + ([button] if button else [])))
+            rows.append(widgets.list_row(controls + ([button] if button else []), stack_on_phone=True))
         if not rows:
             message = "No held documents match your search." if (search_field.value or "").strip() else "This office holds no documents right now."
             rows = [widgets.empty(message)]
@@ -231,7 +231,7 @@ def build_office_queue_view(
                 *cancel_controls(item),
             ]
             button = view_button(item, in_transit=True)
-            rows.append(widgets.list_row(controls + ([button] if button else [])))
+            rows.append(widgets.list_row(controls + ([button] if button else []), stack_on_phone=True))
         outgoing_list.controls = rows or [widgets.empty("Everything this office sent has been received.")]
 
     def render_passed_on(items):
@@ -250,7 +250,7 @@ def build_office_queue_view(
                 ),
             ]
             button = view_button(item, in_transit=True)
-            rows.append(widgets.list_row(controls + ([button] if button else [])))
+            rows.append(widgets.list_row(controls + ([button] if button else []), stack_on_phone=True))
         passed_list.controls = rows or [widgets.empty("Nothing passed on yet.")]
 
     def render(payload):
@@ -261,8 +261,12 @@ def build_office_queue_view(
             if state["own_office"]
             else f"Monitoring {office.get('name') or 'this office'}. Read-only: receiving and passing on are done by the office itself."
         )
-        header_holder.content = section_header(
-            f"Office Dashboard · {office.get('name') or 'Your office'}", subtitle, ft.Icons.LOCATION_CITY_OUTLINED, ft.Colors.BLUE_700,
+        title = f"Office Dashboard · {office.get('name') or 'Your office'}"
+        header_holder.content = (
+            # A phone has room for the title beside the refresh button, not the icon and explanation.
+            ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=widgets.heading_color(), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+            if widgets.phone else
+            section_header(title, subtitle, ft.Icons.LOCATION_CITY_OUTLINED, ft.Colors.BLUE_700)
         )
         summary = payload.get("summary") or {}
         overdue_hours = payload.get("overdue_hours") or 24
@@ -310,19 +314,27 @@ def build_office_queue_view(
         load()
 
     load(update=False)
-    header_controls = [ft.Container(header_holder, expand=True), updated_text, ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=refresh)]
+    if widgets.phone:
+        header_controls = [ft.Container(header_holder, expand=True), ft.IconButton(ft.Icons.REFRESH, tooltip="Refresh", icon_color=widgets.accent(), on_click=refresh)]
+    else:
+        header_controls = [ft.Container(header_holder, expand=True), updated_text, ft.OutlinedButton("Refresh", icon=ft.Icons.REFRESH, on_click=refresh)]
+
+    def explain(text):
+        """A card's explanation; a phone leaves it out."""
+        return [] if widgets.phone else [widgets.hint(text)]
+
     view = ft.Column(
         [
             *([ft.TextButton("All offices", icon=ft.Icons.ARROW_BACK, on_click=lambda _: on_back())] if on_back else []),
             ft.Row(header_controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             notice_text,
             kpi_row,
-            surface_card(ft.Column([incoming_title, widgets.hint("Oldest first. Scan a document's QR code once it is physically in your office to receive it, or return it if it was not meant for you."), incoming_list], spacing=6), padding=18),
+            surface_card(ft.Column([incoming_title, *explain("Oldest first. Scan a document's QR code once it is physically in your office to receive it, or return it if it was not meant for you."), incoming_list], spacing=6), padding=18),
             surface_card(
                 ft.Column(
                     [
                         holding_title,
-                        widgets.hint("Documents in this office's custody. Pass one on to send it to another office."),
+                        *explain("Documents in this office's custody. Pass one on to send it to another office."),
                         *([ft.Row([search_field, ft.FilledButton("Search", icon=ft.Icons.SEARCH, on_click=lambda _: load(page_number=1), height=44)], spacing=8)] if can_search else []),
                         holding_list,
                         ft.Row([previous_button, page_label, next_button], alignment=ft.MainAxisAlignment.END),
@@ -333,8 +345,8 @@ def build_office_queue_view(
             ),
             ft.ResponsiveRow(
                 [
-                    ft.Container(surface_card(ft.Column([outgoing_title, widgets.hint("Oldest first, so the longest waits are on top. Cancel a handoff that went to the wrong office."), outgoing_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
-                    ft.Container(surface_card(ft.Column([passed_title, widgets.hint("Received by another office. Track where each one goes next."), passed_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
+                    ft.Container(surface_card(ft.Column([outgoing_title, *explain("Oldest first, so the longest waits are on top. Cancel a handoff that went to the wrong office."), outgoing_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
+                    ft.Container(surface_card(ft.Column([passed_title, *explain("Received by another office. Track where each one goes next."), passed_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
                     ft.Container(surface_card(ft.Column([widgets.title("Recent activity"), activity_list], spacing=6), padding=18), col={"xs": 12, "lg": 6}),
                 ],
                 spacing=16,
