@@ -192,3 +192,22 @@ def test_every_registration_path_saves_the_category(client):
     assert confirmed["registered"] == 1, confirmed
     bulk = client.get(f"/documents/{confirmed['documents'][0]['id']}", headers=headers).json()
     assert bulk["category"] == "Health"
+
+
+def test_viewing_the_qr_after_the_address_changes_does_not_mark_the_document_updated(client, monkeypatch):
+    # The details dialog loads the QR image. When the server's address has changed since the
+    # QR link was stored, the link is refreshed, but that is not an edit of the document.
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://192.168.1.8:8001")
+    headers = headers_for(client, "admin")
+    document_id = register(client, headers).json()["id"]
+    with SessionLocal() as db:
+        doc = db.get(models.Document, document_id)
+        before = doc.updated_at
+
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://192.168.1.20:8001")
+    assert client.get(f"/documents/{document_id}/qr-image", headers=headers).status_code == 200
+
+    with SessionLocal() as db:
+        doc = db.get(models.Document, document_id)
+        assert doc.qr_code_value.startswith("http://192.168.1.20:8001/qr/")
+        assert doc.updated_at == before

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, U
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi import Query
-from sqlalchemy import Integer, String, cast, exc, exists, func, or_, select, text
+from sqlalchemy import Integer, String, cast, exc, exists, func, or_, select, text, update
 from sqlalchemy.orm import Session
 from .. import models, schemas, stages
 from ..database import get_db
@@ -2227,7 +2227,13 @@ def get_document_qr_image(document_id: int, db: Session = Depends(get_db), curre
 
     payload = _compute_qr_payload(doc)
     if doc.qr_code_value != payload:
-        doc.qr_code_value = payload
+        # The server's address changed since the link was stored. Refreshing it is housekeeping,
+        # not an edit, so updated_at keeps its value instead of taking the model's onupdate.
+        db.execute(
+            update(models.Document)
+            .where(models.Document.id == doc.id)
+            .values(qr_code_value=payload, updated_at=models.Document.updated_at)
+        )
         db.commit()
     image_path = _ensure_qr_png(doc, payload)
     if not os.path.exists(image_path):
