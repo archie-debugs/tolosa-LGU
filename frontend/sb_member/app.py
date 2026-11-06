@@ -46,11 +46,11 @@ def main(page: ft.Page, session=None):
         # The shell's Night mode sets the page theme before it rebuilds the screen.
         return night if page.theme_mode == ft.ThemeMode.DARK else light
 
-    def api(method, path, **kwargs):
+    def api(method, path, base_url=API_URL, **kwargs):
         headers = kwargs.pop("headers", {})
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        response = requests.request(method, f"{API_URL}{path}", headers=headers, timeout=15, **kwargs)
+        response = requests.request(method, f"{base_url}{path}", headers=headers, timeout=15, **kwargs)
         if response.status_code == 401 and token and render_generation:
             # The session was revoked or signed out elsewhere: back to the homepage to sign in again.
             logout()
@@ -434,7 +434,8 @@ def main(page: ft.Page, session=None):
 
     def sessions_view():
         # Read only: SB Members see the sessions and attendance the Secretariat records.
-        return build_sessions_view(page, card, api, can_manage=False)
+        # Council sessions are served by the main backend only, not the SB Member backend.
+        return build_sessions_view(page, card, lambda method, path, **kwargs: api(method, path, base_url=MAIN_BACKEND_URL, **kwargs), can_manage=False)
 
     def account_view():
         profile_rows = []

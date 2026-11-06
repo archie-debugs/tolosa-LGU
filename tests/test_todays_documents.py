@@ -400,3 +400,36 @@ def test_upcoming_days_with_lists_are_summarised():
         {"date": later.isoformat(), "count": 2, "hidden": 1},
     ]
     assert client.get("/todays-documents/upcoming", headers=headers_for("clerk")).status_code == 403
+
+
+def test_sb_member_sessions_screen_reads_sessions_from_the_main_backend(monkeypatch):
+    # Council sessions are served only by the main backend, not the SB Member backend.
+    import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
+    import frontend.sb_member.app as sb_app
+    from tests.test_account_menu_ui import click, clickable
+
+    reset_db()
+    sb_client, main_client = TestClient(sb_member_app), TestClient(main.app)
+    urls = []
+
+    def route(method, url, **kwargs):
+        urls.append(url)
+        if url.startswith(sb_app.MAIN_BACKEND_URL):
+            client, path = main_client, url[len(sb_app.MAIN_BACKEND_URL):]
+        else:
+            client, path = sb_client, url.replace(sb_app.API_URL, "")
+        return client.request(method, path, headers=kwargs.get("headers"), params=kwargs.get("params"), json=kwargs.get("json"))
+
+    monkeypatch.setattr(sb_app.requests, "request", route)
+    member_token = headers_for("member")["Authorization"].split(" ", 1)[1]
+    page = DummyPage()
+    sb_app.main(page, session={"access_token": member_token, "username": "member", "permissions": ["view_documents"]})
+
+    sessions_tile = next(c for c in _walk(page.controls[0]) if getattr(c, "on_click", None) and clickable(c)
+                         and "Sessions" in visible_texts(c))
+    click(sessions_tile)
+
+    texts = page_texts(page)
+    assert "Not Found" not in texts
+    assert "No term yet. Add the SB term under Members & Committees first." in texts
+    assert f"{sb_app.MAIN_BACKEND_URL}/council/terms" in urls
