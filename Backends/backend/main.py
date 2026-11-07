@@ -30,6 +30,7 @@ from .routes.council import router as council_router
 from .routes.council_sessions import router as council_sessions_router
 from .routes.order_of_business import router as order_of_business_router
 from .routes.measure_stages import router as measure_stages_router
+from .routes.print_list import router as print_list_router
 
 refresh_development_public_urls()
 
@@ -102,6 +103,7 @@ app.include_router(council_router)
 app.include_router(council_sessions_router)
 app.include_router(order_of_business_router)
 app.include_router(measure_stages_router)
+app.include_router(print_list_router)
 
 
 @app.on_event("startup")
