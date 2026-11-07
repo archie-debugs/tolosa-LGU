@@ -83,7 +83,7 @@ def _is_allowed_file(filename: str, content_type: str | None) -> tuple[bool, lis
 
 
 def _require_upload_permission(user):
-    """Registering documents, or uploading an MOA as a temporary document for SB Members."""
+    """Registering documents, or uploading a MOA as a temporary document for SB Members."""
     if not user_has_permission(user, "set_documents_for_sb_members"):
         require_permission(user, "register_documents")
 
