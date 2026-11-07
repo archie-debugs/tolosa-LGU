@@ -21,13 +21,13 @@ from sqlalchemy.orm import Session
 
 from .. import models, stages
 from ..auth_jwt import create_download_token, decode_download_token
-from ..authentication import ensure_active_user, get_current_user
+from ..authentication import ensure_active_user, get_current_user, reject_sb_members
 from ..core import lgu_today, require_permission
 from ..database import get_db
 from ..tracking_numbers import DOCUMENT_TYPES, TYPE_PLURALS, standard_document_type
 from .documents import _public_base_url
 
-router = APIRouter(prefix="/print-list", tags=["print-list"])
+router = APIRouter(prefix="/print-list", tags=["print-list"], dependencies=[Depends(reject_sb_members)])
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
           "September", "October", "November", "December"]

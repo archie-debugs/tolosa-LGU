@@ -190,7 +190,7 @@ def test_a_revoked_sb_member_is_sent_back_to_the_homepage(monkeypatch):
 
     target = session_of(client, admin, "member")
     assert client.post(f"/auth/sessions/{target['session_id']}/revoke", headers=admin).status_code == 200
-    click(sidebar_tile(page, "Documents"))
+    click(sidebar_tile(page, "Today's Documents"))
 
     shown = [t for control in page.controls for t in texts(control)]
     assert "Member Workspace" not in shown

@@ -1,5 +1,4 @@
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -8,7 +7,6 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
 load_dotenv()
@@ -82,47 +80,6 @@ def _safe_document(doc: models.Document, db: Session) -> dict[str, Any]:
     }
 
 
-def _document_query(
-    db: Session,
-    *,
-    search: str | None,
-    document_type: str | None,
-    year: str | None,
-    status: str | None,
-):
-    query = db.query(models.Document).filter(models.Document.archived.is_(False))
-    if search:
-        like = f"%{search.strip().lower()}%"
-        query = query.filter(
-            or_(
-                models.Document.tracking_number.ilike(like),
-                models.Document.document_number.ilike(like),
-                cast(models.Document.series_year, String).ilike(like),
-                models.Document.title.ilike(like),
-                models.Document.document_type.ilike(like),
-                models.Document.description.ilike(like),
-                models.Document.category.ilike(like),
-                models.Document.author.ilike(like),
-            )
-        )
-    if document_type:
-        query = query.filter(models.Document.document_type == document_type)
-    if status:
-        query = query.filter(models.Document.status == status)
-    if year and year.isdigit() and len(year) == 4:
-        start = datetime(int(year), 1, 1, tzinfo=timezone.utc)
-        end = datetime(int(year) + 1, 1, 1, tzinfo=timezone.utc)
-        query = query.filter(
-            or_(
-                models.Document.series_year == int(year),
-                models.Document.series_year.is_(None)
-                & (models.Document.created_at >= start)
-                & (models.Document.created_at < end),
-            )
-        )
-    return query.order_by(models.Document.created_at.desc())
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "sb-member"}
@@ -174,50 +131,31 @@ def todays_documents(db: Session = Depends(get_db), current_user: models.User = 
     return {"date": today.isoformat(), "items": items}
 
 
-@app.get("/documents")
-def list_documents(
-    search: str | None = Query(default=None),
-    document_type: str | None = Query(default=None),
-    year: str | None = Query(default=None),
-    status: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=10, ge=1, le=100),
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_sb_member),
-):
-    require_sb_permission(current_user, "view_documents")
-    if search and search.strip():
-        require_sb_permission(current_user, "search_documents")
-    query = _document_query(db, search=search, document_type=document_type, year=year, status=status)
-    total = query.count()
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    docs = query.offset((page - 1) * page_size).limit(page_size).all()
-    return {
-        "items": [_safe_document(doc, db) for doc in docs],
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
-    }
+def _set_for_today(db: Session, document_id: int) -> models.Document:
+    """A document members may open: one employees set for today, on the day's list or as temporary."""
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.archived:
+        raise HTTPException(status_code=403, detail="Archived documents are not available to SB Members")
+    today = lgu_today()
+    set_today = (
+        db.query(models.TodaysDocument.id).filter_by(document_id=document_id, scheduled_for=today).first()
+        or db.query(models.TemporaryDocument.id).filter_by(document_id=document_id, scheduled_for=today).first()
+    )
+    if not set_today:
+        raise HTTPException(status_code=403, detail="SB Members can only open the documents set for them today")
+    return doc
 
 
 @app.get("/documents/{document_id}")
 def get_document(document_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
     require_sb_permission(current_user, "view_documents")
-    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if doc.archived:
-        raise HTTPException(status_code=403, detail="Archived documents are not available to SB Members")
-    return _safe_document(doc, db)
+    return _safe_document(_set_for_today(db, document_id), db)
 
 
 def _member_attachment_path(db: Session, document_id: int, attachment_id: int) -> tuple[Path, models.Attachment]:
-    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if doc.archived:
-        raise HTTPException(status_code=403, detail="Archived documents are not available to SB Members")
+    _set_for_today(db, document_id)
     attachment = db.query(models.Attachment).filter(
         models.Attachment.id == attachment_id,
         models.Attachment.document_id == document_id,
@@ -300,14 +238,6 @@ def download_moa_by_link(entry_id: int, download_token: str = Query(...), db: Se
     require_sb_permission(user, "download_documents")
     path, entry = _todays_moa(db, entry_id)
     return FileResponse(str(path), filename=entry.original_filename or "moa", media_type=entry.mime_type or "application/octet-stream")
-
-
-@app.get("/dashboard")
-def dashboard(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
-    require_sb_permission(current_user, "view_documents")
-    total = db.query(func.count(models.Document.id)).filter(models.Document.archived.is_(False)).scalar() or 0
-    recent = db.query(models.Document).filter(models.Document.archived.is_(False)).order_by(models.Document.created_at.desc()).limit(5).all()
-    return {"total_documents": total, "recent_documents": [_safe_document(doc, db) for doc in recent]}
 
 
 if __name__ == "__main__":

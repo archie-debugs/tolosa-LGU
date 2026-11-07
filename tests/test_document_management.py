@@ -7,7 +7,7 @@ import Backends.backend.main as main
 import Backends.backend.routes.documents as documents_routes
 import Backends.SBmem_backend.main as sb_member_main
 from Backends.backend import models
-from Backends.backend.core import get_password_hash
+from Backends.backend.core import get_password_hash, lgu_today
 from Backends.backend.database import SessionLocal, engine
 from tests.registration_fields import FILLED
 
@@ -100,6 +100,14 @@ def test_sb_member_download_is_a_browser_link_and_respects_archiving(client, mon
     attachment_id = document["attachments"][0]["id"]
     sb_client = TestClient(sb_member_main.app)
     member = headers_for(client, "member")
+
+    # Members open only what is set for them today.
+    assert sb_client.post(f"/documents/{document['id']}/attachments/{attachment_id}/download-token", headers=member).status_code == 403
+    assert sb_client.get(f"/documents/{document['id']}", headers=member).status_code == 403
+    with SessionLocal() as db:
+        db.add(models.TodaysDocument(scheduled_for=lgu_today(), document_id=document["id"]))
+        db.commit()
+    assert sb_client.get(f"/documents/{document['id']}", headers=member).status_code == 200
 
     response = sb_client.post(f"/documents/{document['id']}/attachments/{attachment_id}/download-token", headers=member)
     assert response.status_code == 200, response.text
@@ -211,3 +219,13 @@ def test_viewing_the_qr_after_the_address_changes_does_not_mark_the_document_upd
         doc = db.get(models.Document, document_id)
         assert doc.qr_code_value.startswith("http://192.168.1.20:8001/qr/")
         assert doc.updated_at == before
+
+
+def test_sb_members_cannot_read_documents_through_the_main_backend(client):
+    document = register(client, headers_for(client, "admin")).json()
+    member = headers_for(client, "member")
+    assert client.get("/documents", headers=member).status_code == 403
+    assert client.get(f"/documents/{document['id']}", headers=member).status_code == 403
+    assert client.post("/print-list/link", headers=member, json={"year": 2026}).status_code == 403
+    assert client.get("/notifications", headers=member).json() == {"unread": 0, "items": []}
+    assert client.get("/documents", headers=headers_for(client, "admin")).status_code == 200

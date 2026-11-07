@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..authentication import get_current_user
-from ..core import LGU_TIMEZONE, lgu_today, user_has_permission
+from ..core import LGU_TIMEZONE, lgu_today, normalize_user_role, user_has_permission
 from ..database import get_db
 from ..retention import RETENTION_WARNING_DAYS, documents_due
 from .documents import QR_TRACKING_OVERDUE_HOURS
@@ -197,6 +197,9 @@ def list_notifications(db: Session = Depends(get_db), current_user: models.User 
     """What needs the user's attention: their office's work, or system-wide problems for full-access users without an office."""
     now = datetime.now(timezone.utc)
     today = lgu_today()
+    if normalize_user_role(current_user.role) == "SB Member":
+        # SB Members see only the documents set for them, in the SB Member app.
+        return {"unread": 0, "items": []}
     if current_user.office_id is not None:
         items = _office_items(db, current_user, now, today)
     elif user_has_permission(current_user, "view_document_details"):
