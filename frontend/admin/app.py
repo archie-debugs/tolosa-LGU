@@ -4101,8 +4101,8 @@ def main(page: ft.Page, session=None):
         users_total = user_metrics.get("total", fallback_users_total)
         users_active = user_metrics.get("active", fallback_users_active)
         users_inactive = user_metrics.get("inactive", fallback_users_inactive)
-        users_employees = sum(1 for user in user_management_data if user.get("role") == "Employee")
-        users_sb_members = sum(1 for user in user_management_data if user.get("role") == "SB Member")
+        users_employees = user_metrics.get("employees", sum(1 for user in user_management_data if user.get("role") == "Employee"))
+        users_sb_members = user_metrics.get("sb_members", sum(1 for user in user_management_data if user.get("role") == "SB Member"))
         summary_items = [
             {"title": "Total Documents", "value": str
             (total_docs), "detail": "Active + archived documents", "icon": ft.Icons.DESCRIPTION_OUTLINED, "accent": ft.Colors.BLUE_700},

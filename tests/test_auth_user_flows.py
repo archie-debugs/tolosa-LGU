@@ -1920,6 +1920,21 @@ def test_system_health_report_is_admin_only_and_reports_components():
     assert blocked.status_code == 403
 
 
+def test_analytics_overview_counts_users_by_role():
+    reset_db()
+    client = TestClient(main.app)
+    super_headers = bearer_headers(client, "superuser", "pw123")
+    with SessionLocal() as db:
+        db.add(models.User(username="member1", hashed_password="x", role="SB Member", status="Active", is_active=True))
+        db.commit()
+
+    response = client.get("/analytics/overview", headers=super_headers)
+    assert response.status_code == 200, response.text
+    users = response.json()["users"]
+    assert users["employees"] == 2
+    assert users["sb_members"] == 1
+
+
 def test_analytics_reports_support_filters_and_csv_export():
     reset_db()
     client = TestClient(main.app)
