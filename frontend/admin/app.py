@@ -172,6 +172,7 @@ from frontend.admin.users_roles import (
 from frontend.admin.registration import PickerFiles, open_multiple_register_dialog, open_register_dialog
 # The Register Document form's look, shared by the account and office forms.
 from frontend.admin.registration import _Notice, _dialog_width, _field_style, _labelled, _primary_button, _section, _style_dialog
+from frontend.admin.print_list import open_print_list_dialog
 from frontend.admin.office_dashboard import build_office_overview_view, build_office_queue_view
 from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.announcements import build_announcements_view
@@ -1252,6 +1253,9 @@ def main(page: ft.Page, session=None):
     registration_files = PickerFiles(page, registration_picker)
     current_file_picker_context = None
 
+    print_list_dialog = ft.AlertDialog()
+    page.overlay.append(print_list_dialog)
+
     change_password_dialog = ft.AlertDialog()
     page.overlay.append(change_password_dialog)
 
@@ -2205,6 +2209,7 @@ def main(page: ft.Page, session=None):
             archive=confirm_delete_document,
             archive_selected=open_documents_bulk_archive_dialog,
             qr_labels=open_qr_label_download_dialog,
+            print_list=lambda: open_print_list_dialog(page, print_list_dialog, backend_api, document_type=document_type),
             document_type=document_type,
         )
         return view

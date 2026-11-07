@@ -68,6 +68,7 @@ def build_documents_view(
     archive=None,
     archive_selected=None,
     qr_labels=None,
+    print_list=None,
     archived=False,
     can_restore=False,
     can_delete=False,
@@ -594,6 +595,12 @@ def build_documents_view(
     if can_import and open_bulk_register and not archived:
         header_actions.append(ft.OutlinedButton(
             "Multiple registration", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: open_bulk_register(), height=44,
+            style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLUE_800, side=ft.BorderSide(1, ft.Colors.WHITE), padding=ft.Padding(18, 0, 18, 0)),
+        ))
+
+    if can_print and print_list and not archived:
+        header_actions.append(ft.OutlinedButton(
+            "Print list", icon=ft.Icons.PRINT_OUTLINED, on_click=lambda _: print_list(), height=44,
             style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLUE_800, side=ft.BorderSide(1, ft.Colors.WHITE), padding=ft.Padding(18, 0, 18, 0)),
         ))
 
