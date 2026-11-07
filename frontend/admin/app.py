@@ -1837,21 +1837,16 @@ def main(page: ft.Page, session=None):
                 pass
 
     def leave_qr_document():
-        """Done with a scanned document: on to the account's usual workspace."""
+        """Done with a scanned document: the phone waits for the next scan. A scan is only for
+        receiving and passing on, so it never opens the workspace; logging in normally does."""
+        from frontend.admin.scan_home import build_scan_home
+
         clear_pending_qr_token()
-        if (current_user_role or "").strip().lower() == "sb member":
-            from frontend.sb_member.app import main as sb_member_main
-            sb_member_main(page, session={
-                "access_token": runtime_token,
-                "refresh_token": refresh_token,
-                "username": current_user,
-                "role": current_user_role,
-                "permissions": current_user_permissions,
-            })
-            return
-        nav_items[:] = build_nav_items()
-        initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
-        show_shell(initial_view, initial_selected_index=0)
+        profile = load_current_profile()
+        page.scroll = None
+        page.clean()
+        page.add(build_scan_home(page, username=current_user, office=profile.get("office"), on_logout=logout_user))
+        page.update()
 
     def show_document_details(doc, allow_pass=False):
         """Open a document's details. Only the Office Dashboard and a QR scan may pass it on from there."""

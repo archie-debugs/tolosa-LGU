@@ -129,3 +129,53 @@ def test_passing_on_from_the_phone_page_reloads_it_afterwards():
     button(page, "Pass on").on_click(None)
 
     assert calls[0][0] == 7 and callable(calls[0][1]["on_passed"])
+
+
+WITH_FILE = {**SCANNED, "document": {**SCANNED["document"], "document_type": "Ordinance",
+             "attachments": [{"id": 3, "original_filename": "ordinance.pdf", "mime_type": "application/pdf"}]}}
+
+
+def scanned_with_file(monkeypatch, payload=WITH_FILE):
+    import frontend.admin.document_details as details
+
+    stage_calls = []
+    monkeypatch.setattr(details, "build_stage_section", lambda page, api, document_id, *, can_change, on_saved: stage_calls.append(can_change) or ft.Text("stage"))
+    page, dialog = PhonePage(), ft.AlertDialog()
+    open_document_details(page, dialog, lambda method, path, **kw: payload, 7, normalize=lambda doc: doc,
+                          qr_token="tok", open_pass=lambda doc, **kw: None, on_done=lambda: None,
+                          can_download=True, can_print=True, can_edit=True, can_change_stage=True,
+                          preview=lambda doc: None, download=lambda doc: None, open_edit=lambda doc: None,
+                          load_qr_image=lambda document_id: None)
+    return page, stage_calls
+
+
+def labels(page):
+    controls = [c for root in page.controls for c in walk(root)]
+    buttons = [c.text if isinstance(getattr(c, "text", None), str) else getattr(c, "content", None)
+               for c in controls if isinstance(c, (ft.FilledButton, ft.OutlinedButton, ft.TextButton))]
+    return buttons, [c.value for c in controls if isinstance(c, ft.Text)]
+
+
+def test_a_scan_is_only_for_receiving_and_passing_so_the_file_cannot_be_opened(monkeypatch):
+    page, stage_calls = scanned_with_file(monkeypatch)
+
+    buttons, _ = labels(page)
+    for label in ("Preview", "Download", "Edit"):
+        assert label not in buttons
+    assert stage_calls == [False]  # the stage is shown, not changed, from a scan
+
+
+def test_a_scan_shows_the_action_first_and_the_details_only_on_request(monkeypatch):
+    page, _ = scanned_with_file(monkeypatch)
+
+    buttons, texts = labels(page)
+    assert "Receive" in buttons and "Pass on" in buttons
+    assert "Document type" not in texts
+    assert "View full details" in buttons
+
+    next(c for root in page.controls for c in walk(root)
+         if isinstance(c, ft.TextButton) and (c.text == "View full details" or c.content == "View full details")).on_click(None)
+
+    buttons, texts = labels(page)
+    assert "Document type" in texts and "Hide details" in buttons
+    assert "Download" not in buttons and "Preview" not in buttons
