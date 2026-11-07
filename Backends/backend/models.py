@@ -531,6 +531,33 @@ class TodaysDocument(Base):
     added_by = relationship("User", foreign_keys=[added_by_id])
 
 
+class TemporaryDocument(Base):
+    """A document set for SB Members for one day only: an ordinance from the system or an uploaded MOA.
+
+    After its day it is archived (worked out from scheduled_for, nothing moves) and is due for
+    deletion TEMPORARY_KEEP_DAYS later, or on kept_until when someone keeps it longer.
+    """
+
+    __tablename__ = "temporary_documents"
+    __table_args__ = (UniqueConstraint("scheduled_for", "document_id", name="uq_temporary_documents_date_document"),)
+
+    id = Column(Integer, primary_key=True)
+    scheduled_for = Column(Date, nullable=False, index=True)
+    # Set for an ordinance; the MOA columns are set instead for an uploaded file.
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=True, index=True)
+    title = Column(String, nullable=True)
+    original_filename = Column(String, nullable=True)
+    stored_path = Column(String, nullable=True)
+    mime_type = Column(String, nullable=True)
+    size = Column(Integer, nullable=True)
+    kept_until = Column(Date, nullable=True)
+    added_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    document = relationship("Document", foreign_keys=[document_id])
+    added_by = relationship("User", foreign_keys=[added_by_id])
+
+
 class DocumentStageChange(Base):
     """One entry in a measure's stage history. Never edited or deleted: a mistake gets a new
     entry with is_correction and a reason (docs/adr/0003)."""

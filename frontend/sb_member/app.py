@@ -128,7 +128,10 @@ def main(page: ft.Page, session=None):
         # The app runs in the member's browser: hand that browser a download link, since a
         # file saved here would land on the machine running the app, not the member's.
         try:
-            payload = api("POST", f"/documents/{document['id']}/attachments/{attachment['id']}/download-token")
+            # An MOA set for today has no document; its link comes from the temporary document.
+            path = (f"/temporary-documents/{document['temporary_id']}/download-token" if document.get("kind") == "MOA"
+                    else f"/documents/{document['id']}/attachments/{attachment['id']}/download-token")
+            payload = api("POST", path)
             page.launch_url(payload["download_url"])
             notify(f"Downloading {attachment['filename']} in your browser")
         except Exception as exc:
@@ -356,12 +359,21 @@ def main(page: ft.Page, session=None):
         last_ids = None
 
         def document_row(index, document):
-            actions = [ft.OutlinedButton("Open", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=document: document_dialog(d))]
+            moa = document.get("kind") == "MOA"
+            actions = [] if moa else [ft.OutlinedButton("Open", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=document: document_dialog(d))]
             if can("download_documents") and document.get("attachments"):
-                actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color=ft.Colors.BLUE_GREY_600, on_click=lambda _, d=document: download_document(d, d["attachments"][0])))
+                download = lambda _, d=document: download_document(d, d["attachments"][0])
+                actions.append(
+                    ft.OutlinedButton("Download", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=download) if moa else
+                    ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color=ft.Colors.BLUE_GREY_600, on_click=download)
+                )
+            reference = (
+                f"MOA · {document['attachments'][0]['filename']}" if moa else
+                f"{document.get('document_type') or 'Document'} · No. {document.get('document_number') or '-'} / {document.get('series_year') or '-'} · {document.get('tracking_number') or '-'}"
+            )
             details = [
                 ft.Text(document.get("title") or "Untitled", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_900),
-                ft.Text(f"{document.get('document_type') or 'Document'} · No. {document.get('document_number') or '-'} / {document.get('series_year') or '-'} · {document.get('tracking_number') or '-'}", size=11, color=ft.Colors.BLUE_GREY_600),
+                ft.Text(reference, size=11, color=ft.Colors.BLUE_GREY_600),
             ]
             if document.get("note"):
                 details.append(ft.Text(document["note"], size=12, italic=True, color="#1d4ed8"))
@@ -380,7 +392,7 @@ def main(page: ft.Page, session=None):
                 return
             items = payload.get("items", [])
             date_line.value = format_date(payload.get("date"))
-            snapshot = [(item["id"], item.get("note")) for item in items]
+            snapshot = [(item["id"], item.get("temporary_id"), item.get("note")) for item in items]
             if snapshot != last_ids:
                 last_ids = snapshot
                 if items:

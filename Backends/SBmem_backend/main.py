@@ -19,6 +19,7 @@ from Backends.backend.authentication import ensure_active_user, get_current_user
 from Backends.backend.lan import refresh_development_public_urls
 from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, lgu_today, normalize_permissions, normalize_user_role
 from Backends.backend.database import get_db
+from Backends.backend.routes.temporary_documents import moa_path
 
 refresh_development_public_urls()
 
@@ -142,7 +143,11 @@ def me(current_user: models.User = Depends(get_current_sb_member)):
 
 @app.get("/todays-documents")
 def todays_documents(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
-    """The documents employees set for today, in their order, so members need not search."""
+    """The documents employees set for today, in their order, so members need not search.
+
+    Today's temporary documents (ordinances and MOAs) follow, in the same list: members are not
+    told which ones are temporary. An MOA has no document id; it carries `temporary_id` instead.
+    """
     require_sb_permission(current_user, "view_documents")
     today = lgu_today()
     entries = (
@@ -152,10 +157,21 @@ def todays_documents(db: Session = Depends(get_db), current_user: models.User = 
         .order_by(models.TodaysDocument.position.asc(), models.TodaysDocument.id.asc())
         .all()
     )
-    return {
-        "date": today.isoformat(),
-        "items": [{**_safe_document(entry.document, db), "note": entry.note} for entry in entries],
-    }
+    items = [{**_safe_document(entry.document, db), "note": entry.note} for entry in entries]
+    listed = {item["id"] for item in items}
+    temporary = db.query(models.TemporaryDocument).filter(models.TemporaryDocument.scheduled_for == today).order_by(models.TemporaryDocument.id).all()
+    for entry in temporary:
+        doc = entry.document
+        if doc is not None:
+            if not doc.archived and doc.id not in listed:
+                listed.add(doc.id)
+                items.append({**_safe_document(doc, db), "note": None})
+        else:
+            items.append({
+                "id": None, "temporary_id": entry.id, "kind": "MOA", "title": entry.title, "document_type": "MOA", "note": None,
+                "attachments": [{"id": entry.id, "filename": entry.original_filename, "mime_type": entry.mime_type, "size": entry.size}],
+            })
+    return {"date": today.isoformat(), "items": items}
 
 
 @app.get("/documents")
@@ -253,6 +269,37 @@ def download_by_link(document_id: int, attachment_id: int, download_token: str =
     get_current_sb_member(user)
     require_sb_permission(user, "download_documents")
     return _attachment_response(*_member_attachment_path(db, document_id, attachment_id))
+
+
+def _todays_moa(db: Session, entry_id: int) -> tuple[Path, models.TemporaryDocument]:
+    """A temporary MOA members may download: only on its own day."""
+    entry = db.query(models.TemporaryDocument).filter(models.TemporaryDocument.id == entry_id).first()
+    if entry is None or entry.document_id is not None or entry.scheduled_for != lgu_today():
+        raise HTTPException(status_code=404, detail="File not found")
+    return moa_path(entry), entry
+
+
+@app.post("/temporary-documents/{entry_id}/download-token")
+def create_moa_download_link(entry_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    require_sb_permission(current_user, "download_documents")
+    _todays_moa(db, entry_id)
+    token = create_download_token({"sub": current_user.username, "temporary_document_id": entry_id})
+    return {"download_url": f"{_public_url()}/temporary-documents/{entry_id}/download?download_token={quote(token, safe='')}"}
+
+
+@app.get("/temporary-documents/{entry_id}/download")
+def download_moa_by_link(entry_id: int, download_token: str = Query(...), db: Session = Depends(get_db)):
+    payload = decode_download_token(download_token)
+    if payload.get("temporary_document_id") != entry_id:
+        raise HTTPException(status_code=403, detail="Link does not match this file")
+    user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Link user not found")
+    ensure_active_user(user)
+    get_current_sb_member(user)
+    require_sb_permission(user, "download_documents")
+    path, entry = _todays_moa(db, entry_id)
+    return FileResponse(str(path), filename=entry.original_filename or "moa", media_type=entry.mime_type or "application/octet-stream")
 
 
 @app.get("/dashboard")

@@ -3979,6 +3979,9 @@ def main(page: ft.Page, session=None):
             open_retention([item])
         elif item.get("kind") in RETENTION_KINDS:
             open_retention([item], title="Due for deletion soon", intro="Its retention period ends soon. Delete it now, or keep it longer.")
+        elif item.get("kind") in ("temporary_due", "temporary_soon"):
+            # Its archive card, with Keep and Delete, is on Documents for SB Members.
+            show_shell(todays_documents_page(), initial_selected_index=next((i for i, nav in enumerate(nav_items) if nav[1] == "Documents for SB Members"), 0))
         else:
             show_document_details({"id": item.get("document_id")})
 
@@ -4004,6 +4007,7 @@ def main(page: ft.Page, session=None):
         return build_todays_documents_view(
             page, backend_api, surface_card,
             open_details=show_document_details if has_permission("view_document_details") else None,
+            files=registration_files,
         )
 
     def users_role_page():

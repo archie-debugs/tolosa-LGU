@@ -25,9 +25,13 @@ def picked_date(value):
     return value if isinstance(value, date) else None
 
 
-def build_todays_documents_view(page, api, surface_card, today=None, open_details=None):
+def build_todays_documents_view(page, api, surface_card, today=None, open_details=None, files=None):
     """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
-    `open_details(document)` opens a document's details, when the user may see them."""
+    `open_details(document)` opens a document's details, when the user may see them.
+    `files` is a PickerFiles for uploading temporary MOAs."""
+    # Imported here: temporary_documents uses document_label from this module.
+    from frontend.admin.temporary_documents import TemporaryDocuments
+
     widgets = TrackingWidgets(page)
     today = today or date.today()
     state = {
@@ -270,6 +274,7 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
             state["items"] = []
             notify(f"Unable to load the list: {exc}", error=True)
         load_upcoming()
+        temporary.load(state["date"], state["today"])
         render(update)
 
     def go_to(day):
@@ -427,6 +432,7 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
+    temporary = TemporaryDocuments(page, api, widgets, files, card_title, empty_state, open_details=open_details)
     fetch_documents(1)
     load(update=False, keep_notice=True)
     return ft.Column(
@@ -435,6 +441,8 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
             surface_card(date_bar, padding=ft.Padding(14, 18, 18, 18)),
             surface_card(ft.Column([card_title(ft.Icons.DESCRIPTION_OUTLINED, "On this day's list", counts_text), notice_row, list_column], spacing=12), padding=20),
             surface_card(search_section, padding=20),
+            surface_card(temporary.day_card, padding=20),
+            surface_card(temporary.archive_card, padding=20),
         ],
         spacing=16,
     )

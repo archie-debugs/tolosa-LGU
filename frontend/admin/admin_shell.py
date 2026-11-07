@@ -513,6 +513,8 @@ def render_shell(
         "overdue": (ft.Icons.EVENT_BUSY_OUTLINED, ft.Colors.RED_700),
         "retention_due": (ft.Icons.AUTO_DELETE_OUTLINED, ft.Colors.RED_700),
         "retention_soon": (ft.Icons.AUTO_DELETE_OUTLINED, ft.Colors.AMBER_800),
+        "temporary_due": (ft.Icons.HOURGLASS_BOTTOM, ft.Colors.RED_700),
+        "temporary_soon": (ft.Icons.HOURGLASS_BOTTOM, ft.Colors.AMBER_800),
     }
 
     def refresh_notifications():
