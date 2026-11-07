@@ -82,6 +82,12 @@ def _is_allowed_file(filename: str, content_type: str | None) -> tuple[bool, lis
     return (len(errors) == 0), errors
 
 
+def _require_upload_permission(user):
+    """Registering documents, or uploading an MOA as a temporary document for SB Members."""
+    if not user_has_permission(user, "set_documents_for_sb_members"):
+        require_permission(user, "register_documents")
+
+
 @router.put("/uploads/tmp/{tmp_name}")
 async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Query(default=None), upload_token: str | None = Query(default=None), db: Session = Depends(get_db)):
     """Accept raw PUT uploads from the browser FilePicker.upload() into TEMP_UPLOAD_DIR.
@@ -125,7 +131,7 @@ async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Q
                 raise HTTPException(status_code=401, detail="Upload token user not found")
             ensure_active_user(auth_user)
             # enforce permission for resolved user
-            require_permission(auth_user, "register_documents")
+            _require_upload_permission(auth_user)
         else:
             # fallback to Authorization/JWT path
             auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
@@ -140,7 +146,7 @@ async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Q
             else:
                 if not auth_user:
                     raise HTTPException(status_code=401, detail="Not authenticated")
-                require_permission(auth_user, "register_documents")
+                _require_upload_permission(auth_user)
     except HTTPException:
         raise
     except Exception:
@@ -253,7 +259,7 @@ def create_tmp_uploads(payload: dict = Body(...), db: Session = Depends(get_db),
     """Create server-side temporary upload entries and return per-file upload URLs with short-lived upload tokens.
     Payload: {"files": [{"filename": "...", "size": 123}, ...]}
     """
-    require_permission(current_user, "register_documents")
+    _require_upload_permission(current_user)
     files = payload.get("files") or []
     if not isinstance(files, list) or not files:
         raise HTTPException(status_code=400, detail="files list required")

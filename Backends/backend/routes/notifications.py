@@ -17,6 +17,7 @@ from ..core import LGU_TIMEZONE, lgu_today, user_has_permission
 from ..database import get_db
 from ..retention import RETENTION_WARNING_DAYS, documents_due
 from .documents import QR_TRACKING_OVERDUE_HOURS
+from .temporary_documents import due_on as temporary_due_on
 
 router = APIRouter()
 
@@ -25,6 +26,8 @@ RECENT_REGISTRATION_DAYS = 7
 # How long a received, cancelled or returned handoff stays in the other office's notifications.
 RECENT_CLOSED_HANDOFF_DAYS = 7
 MAX_ITEMS = 30
+# How long before its date an archived temporary document shows up as due for deletion soon.
+TEMPORARY_WARNING_DAYS = 7
 
 
 def _aware(value):
@@ -153,6 +156,29 @@ def _retention_items(db, now):
     return items
 
 
+def _temporary_items(db, today):
+    """Archived temporary documents due for deletion (priority) or due within TEMPORARY_WARNING_DAYS."""
+    items = []
+    for entry in db.query(models.TemporaryDocument).filter(models.TemporaryDocument.scheduled_for < today):
+        due = temporary_due_on(entry)
+        if due > today + timedelta(days=TEMPORARY_WARNING_DAYS):
+            continue
+        doc = entry.document
+        overdue = due <= today
+        kind = "temporary_due" if overdue else "temporary_soon"
+        day, local_day = entry.scheduled_for.strftime("%b %d"), due.strftime("%b %d, %Y")
+        message = (f"Temporary document for {day}: its 30 days ended {local_day}. Delete it or keep it 30 more days."
+                   if overdue else f"Temporary document for {day} is due for deletion on {local_day}.")
+        items.append({
+            "id": f"{kind}:{entry.id}", "kind": kind, "temporary_document_id": entry.id,
+            "document_id": doc.id if doc else None, "tracking_number": doc.tracking_number if doc else "MOA",
+            "title": doc.title if doc else entry.title, "message": message,
+            "at": _day_start(due if overdue else due - timedelta(days=TEMPORARY_WARNING_DAYS)).isoformat(),
+            "priority": overdue,
+        })
+    return items
+
+
 def _system_items(db, now, today):
     items = []
     for handoff in _pending_handoffs(db):
@@ -179,6 +205,8 @@ def list_notifications(db: Session = Depends(get_db), current_user: models.User 
         items = []
     if user_has_permission(current_user, "delete_documents"):
         items += _retention_items(db, now)
+    if user_has_permission(current_user, "set_documents_for_sb_members"):
+        items += _temporary_items(db, today)
     items.sort(key=lambda item: item["at"], reverse=True)
     # Priority items come first and are never cut off by MAX_ITEMS.
     priority = [item for item in items if item.get("priority")]
