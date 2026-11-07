@@ -128,7 +128,7 @@ def main(page: ft.Page, session=None):
         # The app runs in the member's browser: hand that browser a download link, since a
         # file saved here would land on the machine running the app, not the member's.
         try:
-            # An MOA set for today has no document; its link comes from the temporary document.
+            # A MOA set for today has no document; its link comes from the temporary document.
             path = (f"/temporary-documents/{document['temporary_id']}/download-token" if document.get("kind") == "MOA"
                     else f"/documents/{document['id']}/attachments/{attachment['id']}/download-token")
             payload = api("POST", path)

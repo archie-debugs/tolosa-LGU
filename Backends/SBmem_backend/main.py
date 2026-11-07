@@ -146,7 +146,7 @@ def todays_documents(db: Session = Depends(get_db), current_user: models.User = 
     """The documents employees set for today, in their order, so members need not search.
 
     Today's temporary documents (ordinances and MOAs) follow, in the same list: members are not
-    told which ones are temporary. An MOA has no document id; it carries `temporary_id` instead.
+    told which ones are temporary. A MOA has no document id; it carries `temporary_id` instead.
     """
     require_sb_permission(current_user, "view_documents")
     today = lgu_today()

@@ -75,7 +75,7 @@ def test_ordinance_search_lists_ordinances_only_and_adds_one_for_the_day():
 def test_an_moa_is_picked_titled_uploaded_and_saved_for_the_day():
     cards, calls = build()
     cards.load(TODAY, TODAY)
-    find(cards.day_card, "OutlinedButton", "Upload an MOA").on_click(None)
+    find(cards.day_card, "OutlinedButton", "Upload a MOA").on_click(None)
     find(cards.day_card, "OutlinedButton", "Choose file…").on_click(None)
     assert cards.title_field.value == "MOA health"
     cards.title_field.value = "MOA with the Health Office"

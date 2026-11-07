@@ -287,7 +287,7 @@ class TemporaryDocuments:
             self.add_column.controls = [
                 ft.Row([
                     self.mode_button("ordinance", "Add an ordinance", ft.Icons.GAVEL),
-                    self.mode_button("moa", "Upload an MOA", ft.Icons.UPLOAD_FILE),
+                    self.mode_button("moa", "Upload a MOA", ft.Icons.UPLOAD_FILE),
                 ], spacing=8, wrap=True),
                 *(self.ordinance_area() if self.state["mode"] == "ordinance" else self.moa_area()),
             ]
