@@ -81,6 +81,21 @@ def get_current_user(token: str | None = Depends(oauth2_scheme), db: Session = D
     return authenticate_access_token(db, token)
 
 
+def reject_sb_members(token: str | None = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> None:
+    """SB Members open only the documents set for them, through the SB Member service.
+
+    Routes without a token (public QR scans, download links) pass; a bad token is left to the route.
+    """
+    if not token:
+        return
+    try:
+        user = authenticate_access_token(db, token)
+    except HTTPException:
+        return
+    if (getattr(user, "role", None) or "").strip().lower() == "sb member":
+        raise HTTPException(status_code=403, detail="SB Members can only open the documents set for them in the SB Member app")
+
+
 def get_current_user_for_user_management(token: str | None = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> models.User:
     """Like get_current_user, but answers a missing, unknown or inactive account with 403."""
     try:

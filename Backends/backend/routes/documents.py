@@ -14,7 +14,7 @@ from .. import models, schemas, stages
 from ..database import get_db
 from ..core import LGU_TIMEZONE, UPLOAD_DIR, lgu_today, TEMP_UPLOAD_DIR, normalize_user_role, record_audit_log, require_permission, user_has_permission
 from ..auth_jwt import create_download_token, create_preview_token, decode_download_token, decode_preview_token
-from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user
+from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user, reject_sb_members
 from .measure_stages import add_stage_change, registration_stage, stage_summary
 from ..retention import MAX_EXTENSION_MONTHS, extend_retention, retain_until
 from .settings import retention_months
@@ -33,7 +33,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Depends(reject_sb_members)])
 public_qr_router = APIRouter(tags=["public-qr"])
 
 QR_IMAGE_DIR = os.path.join(UPLOAD_DIR, "qr")
