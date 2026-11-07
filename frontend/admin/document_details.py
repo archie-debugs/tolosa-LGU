@@ -89,7 +89,9 @@ def open_document_details(
     """Load a document into `dialog` and open it; raises when it cannot be loaded.
 
     With `on_done`, the details fill the page instead (a phone after a QR scan), with big
-    Receive / Pass on buttons and a Done button that calls `on_done()`.
+    Receive / Pass on buttons and a Done button that calls `on_done()`. A scan is only for
+    receiving and passing on: the file cannot be previewed or downloaded, the stage is shown but
+    not changed, and the details stay folded until asked for.
 
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     The backend decides what the user's office can do now (receive, pass on, record an
@@ -103,15 +105,17 @@ def open_document_details(
     A measure's stage section comes from frontend/admin/stage_panel.py.
     """
     widgets = TrackingWidgets(page)
+    scan = on_done is not None
     # "extras" are the QR image and stage section, loaded once the office may open the document.
-    state = {"payload": None, "confirming": False, "action": None, "notice": ("", False), "extras": None}
+    # "full" unfolds the details on the scan page.
+    state = {"payload": None, "confirming": False, "action": None, "notice": ("", False), "extras": None, "full": False}
 
     def fetch():
         state["payload"] = api("GET", f"/documents/{document_id}/overview")
         if state["extras"] is None and not (state["payload"].get("document") or {}).get("tracking_only"):
             state["extras"] = (
-                load_qr_image(document_id) if load_qr_image else None,
-                build_stage_section(page, api, document_id, can_change=can_change_stage, on_saved=stage_saved),
+                load_qr_image(document_id) if load_qr_image and not scan else None,
+                build_stage_section(page, api, document_id, can_change=can_change_stage and not scan, on_saved=stage_saved),
             )
 
     def notify(message, error=False):
@@ -258,15 +262,15 @@ def open_document_details(
             buttons.append(ft.FilledButton("Pass on", icon=ft.Icons.SEND_OUTLINED, on_click=pass_on))
         if can.get("record_action") and state["action"] is None:
             buttons.append(ft.OutlinedButton("Record action", icon=ft.Icons.TASK_ALT, on_click=lambda _: set_state(action="")))
-        if has_pdf and (can_download or can_print) and preview:
+        if has_pdf and (can_download or can_print) and preview and not scan:
             buttons.append(ft.OutlinedButton("Preview", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _: preview(summary())))
-        if attachments and can_download and download:
+        if attachments and can_download and download and not scan:
             buttons.append(ft.OutlinedButton("Download", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=lambda _: download(summary())))
-        if can_edit and open_edit and not document.get("archived") and on_done is None:
+        if can_edit and open_edit and not document.get("archived") and not scan:
             buttons.append(ft.OutlinedButton("Edit", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda _: close_then(open_edit)))
         if not buttons:
             return None
-        if on_done is not None:
+        if scan:
             # Full width and tall enough to tap on a phone.
             for button in buttons:
                 button.height = 48
@@ -377,6 +381,7 @@ def open_document_details(
                 *([ft.Text(message, size=12, color=ft.Colors.RED_700 if error else ft.Colors.GREEN_700)] if message else []),
                 *([buttons] if buttons else []),
                 *trail,
+                *([next_scan_hint()] if scan else []),
             ])
             return
         qr_base64, stage_section = state["extras"] or (None, None)
@@ -394,24 +399,48 @@ def open_document_details(
             if qr_base64
             else grid
         )
-        sections = [
+        actions = [
             header(document),
             location_banner(payload.get("location") or {}, events),
             *([ft.Text(message, size=12, color=ft.Colors.RED_700 if error else ft.Colors.GREEN_700)] if message else []),
             *([buttons] if buttons else []),
             *([widgets.hint(PASS_FROM_DASHBOARD)] if can.get("pass") and not open_pass else []),
             *([action_panel()] if can.get("record_action") and state["action"] is not None else []),
+        ]
+        if scan and not state["full"]:
+            if not buttons:
+                actions.append(widgets.hint("There is nothing for your office to do with this document right now."))
+            render_sections([*actions, details_toggle(), next_scan_hint()])
+            return
+        sections = [
+            *actions,
+            *([details_toggle()] if scan else []),
             ft.Divider(height=1, color=widgets.line_color()),
             body,
             *([text_block("Description", document["description"])] if document.get("description") else []),
             *([ft.Column([widgets.hint("Remarks"), remark_list(widgets, remarks)], spacing=6)] if remarks else []),
             *([ft.Divider(height=1, color=widgets.line_color()), stage_section] if stage_section else []),
             *trail,
+            *([next_scan_hint()] if scan else []),
         ]
         render_sections(sections)
 
+    def details_toggle():
+        full = state["full"]
+        return ft.TextButton(
+            "Hide details" if full else "View full details",
+            icon=ft.Icons.EXPAND_LESS if full else ft.Icons.EXPAND_MORE,
+            on_click=lambda _: set_state(full=not full),
+        )
+
+    def next_scan_hint():
+        return ft.Container(
+            content=widgets.hint("To scan the next document, point your phone's camera at its QR label."),
+            padding=ft.Padding(0, 4, 0, 16),
+        )
+
     def render_sections(sections):
-        if on_done is not None:
+        if scan:
             render_full_page(sections)
             return
         width = dialog_width(page, 680)
@@ -455,7 +484,7 @@ def open_document_details(
 
     fetch()
     render()
-    if on_done is None:
+    if not scan:
         dialog.open = True
     page.update()
     return True
