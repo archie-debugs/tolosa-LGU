@@ -220,6 +220,8 @@ def get_analytics_overview(
         "inactive": db.query(func.count(models.User.id)).filter(
             or_(models.User.is_active.is_(False), models.User.status != "Active")
         ).scalar() or 0,
+        "employees": db.query(func.count(models.User.id)).filter(models.User.role == "Employee").scalar() or 0,
+        "sb_members": db.query(func.count(models.User.id)).filter(models.User.role == "SB Member").scalar() or 0,
     }
 
     processing_days = []
