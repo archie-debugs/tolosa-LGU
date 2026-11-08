@@ -126,7 +126,13 @@ def _option(label):
     return ft.dropdown.Option(label)
 
 
-FOOTER_TEXT = "#c9d3dd"
+
+def _display_date(value) -> str:
+    """An ISO date as "Nov 06, 2026"; anything else (already formatted, or empty) as given."""
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%b %d, %Y")
+    except (TypeError, ValueError):
+        return str(value or "-")
 
 
 def _stage_date(value) -> str:
@@ -140,13 +146,31 @@ def _status(document, muted="#5d6b7a") -> ft.Control:
     """A measure shows its stage and the day it got there; other documents are just public."""
     stage = (document or {}).get("stage") or {}
     since = _stage_date(stage.get("entered_on"))
-    lines = [ft.Text(stage.get("stage") or "Public", size=13, weight=ft.FontWeight.BOLD, color="#1f6b3a")]
+    green = "#1f8a4c"
+    lines = [
+        ft.Container(
+            ft.Text(stage.get("stage") or "Public", size=12, weight=ft.FontWeight.BOLD, color=green),
+            bgcolor=ft.Colors.with_opacity(0.12, green),
+            border_radius=20,
+            padding=ft.Padding(10, 3, 10, 3),
+        )
+    ]
     if since:
-        lines.append(ft.Text(f"since {since}", size=12, color=muted, no_wrap=True))
+        lines.append(ft.Text(f"since {since}", size=11, color=muted, no_wrap=True))
     return ft.Container(
-        content=ft.Column(lines, spacing=1, tight=True),
+        content=ft.Column(lines, spacing=4, tight=True),
         tooltip="\n".join(f"{item['stage']}: {_stage_date(item['date'])}" for item in stage.get("dates") or []) or None,
     )
+
+
+def _reference(document) -> str:
+    """ "No. 5, s. 2026", leaving out whichever part the document lacks."""
+    parts = []
+    if document.get("document_number"):
+        parts.append(f"No. {document['document_number']}")
+    if document.get("series_year"):
+        parts.append(f"s. {document['series_year']}")
+    return ", ".join(parts)
 
 
 def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Column:
@@ -163,7 +187,7 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
     width = getattr(page, "width", None) or 1400
     narrow = width < NARROW_WIDTH
 
-    # The homepage's colours (frontend/Frontend_Homepage/page.py), so the two pages read as one site.
+    # The homepage's colours and shapes (frontend/Frontend_Homepage/page.py), so the two pages read as one site.
     navy = theme.NAVY if not is_dark else theme.NIGHT_INK
     label_blue = theme.PRIMARY if not is_dark else "#8cb8f0"
     ink = theme.INK if not is_dark else theme.NIGHT_INK
@@ -171,8 +195,8 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
     line = theme.BORDER if not is_dark else theme.NIGHT_BORDER
     surface = "#ffffff" if not is_dark else theme.NIGHT_SURFACE
     canvas = theme.CANVAS if not is_dark else theme.NIGHT_CANVAS
-    header_row = "#e9eef4" if not is_dark else theme.NIGHT_BLUE
-    stripe = "#fafbfc" if not is_dark else None
+    tint = ft.Colors.with_opacity(0.06 if not is_dark else 0.16, theme.PRIMARY)
+    soft_shadow = ft.BoxShadow(blur_radius=18, offset=ft.Offset(0, 6), color=ft.Colors.with_opacity(0.08 if not is_dark else 0.3, "#0c4279"))
     side = 16 if narrow else 56
 
     def go_home(_=None, section=None):
@@ -218,10 +242,10 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
             on_click=on_click,
             height=height,
             style=ft.ButtonStyle(
-                color=navy,
+                color=label_blue,
                 bgcolor=surface,
-                side=ft.BorderSide(1, navy),
-                shape=ft.RoundedRectangleBorder(radius=2),
+                side=ft.BorderSide(1, line),
+                shape=ft.RoundedRectangleBorder(radius=10),
                 padding=ft.Padding(14, 0, 14, 0),
             ),
         )
@@ -231,152 +255,267 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
         if not (document.get("has_pdf") and document.get("id")):
             return ft.Text("No PDF on file", size=12, color=muted, italic=True, no_wrap=True)
         return outlined_button(
-            "View PDF", None,
+            "View PDF", ft.Icons.PICTURE_AS_PDF_OUTLINED,
             lambda _, document_id=document["id"]: page.launch_url(public_pdf_url(document_id)) if page is not None else None,
-            height=34,
+            height=36,
         )
 
-    def footer_link(label, on_click):
-        # A plain clickable text: a TextButton centres short labels in its minimum width.
-        return ft.Container(ft.Text(label, size=13, color=FOOTER_TEXT), on_click=on_click, padding=ft.Padding(0, 3, 0, 3))
-
-    def gov_link(label, url):
-        return footer_link(label, lambda _: page.launch_url(url) if page is not None else None)
-
-    # The GOVPH-style strip over every government site.
-    gov_bar = ft.Container(
-        content=ft.Row(
-            [ft.Text("GOVPH", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE, style=ft.TextStyle(letter_spacing=1))]
-            + [ft.Text(label, size=12, color="#dddddd") for label in ("Republic of the Philippines", "Province of Leyte", "Municipality of Tolosa")],
-            spacing=18,
-            wrap=True,
-        ),
-        bgcolor="#1b1b1b",
-        padding=ft.Padding(side, 6, side, 6),
-    )
-
-    masthead = ft.Container(
-        content=ft.Row(
-            [
-                theme.seal(60 if narrow else 78),
-                ft.Column(
-                    [
-                        ft.Text("REPUBLIC OF THE PHILIPPINES  ·  PROVINCE OF LEYTE", size=11, color=muted, style=ft.TextStyle(letter_spacing=2)),
-                        ft.Text("Sangguniang Bayan of Tolosa", size=22 if narrow else 28, weight=ft.FontWeight.BOLD, color=navy),
-                        ft.Text("Office of the Municipal Legislative Council", size=14, color=muted),
-                    ],
-                    spacing=2,
-                    tight=True,
-                    expand=True,
-                ),
-            ],
-            spacing=18,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        bgcolor=surface,
-        padding=ft.Padding(side, 18, side, 18),
-        border=ft.border.only(bottom=ft.BorderSide(4, theme.ACCENT)),
-    )
-
-    def nav_item(label, on_click=None, active=False, visible=True):
+    def card(content, padding=0):
         return ft.Container(
-            content=ft.Text(label.upper(), size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE, style=ft.TextStyle(letter_spacing=0.5)),
-            padding=ft.Padding(18, 13, 18, 13),
-            bgcolor=theme.PRIMARY if active else None,
-            border=ft.border.only(bottom=ft.BorderSide(3, theme.ACCENT)) if active else None,
-            on_click=on_click,
-            ink=True,
-            visible=visible,
+            content=content,
+            bgcolor=surface,
+            border=ft.border.all(1, line),
+            border_radius=14,
+            shadow=soft_shadow,
+            padding=padding,
+            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        )
+
+    def icon_badge(icon, size=40):
+        return ft.Container(
+            content=ft.Icon(icon, color=label_blue, size=size * 0.5),
+            width=size, height=size, border_radius=size / 2,
+            alignment=ft.Alignment(0, 0),
+            bgcolor=ft.Colors.with_opacity(0.12, theme.PRIMARY),
+        )
+
+    def eyebrow(text):
+        return ft.Text(text, size=11, color=label_blue, weight=ft.FontWeight.BOLD, style=ft.TextStyle(letter_spacing=1.5))
+
+    # The homepage's white navigation bar, with Public Records marked as the current page.
+    def visual_link(label, on_click=None, active=False):
+        return ft.Column(
+            [
+                ft.TextButton(text=label, on_click=on_click, style=ft.ButtonStyle(color=navy if active else ink, padding=ft.Padding(12, 8, 12, 8))),
+                ft.Container(width=22, height=3, border_radius=2, bgcolor=label_blue if active else None),
+            ],
+            spacing=0,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            tight=True,
         )
 
     navigation = ft.Container(
-        content=ft.Row(
+        content=ft.ResponsiveRow(
+            [
+                ft.Container(content=ft.Container(theme.brand(on_blue=is_dark), on_click=go_home), col={"xs": 12, "lg": 3}),
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            visual_link("Home", go_home),
+                            visual_link("About", to_section("about-section")),
+                            visual_link("Public Records", active=True),
+                            visual_link("Announcements", to_section("announcements-section")),
+                            visual_link("Contact", to_section("contact-section")),
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=2,
+                        wrap=True,
+                    ),
+                    col={"xs": 12, "lg": 6},
+                    visible=not narrow,
+                ),
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.IconButton(
+                                icon=(ft.Icons.LIGHT_MODE if is_dark else ft.Icons.DARK_MODE),
+                                icon_color=navy,
+                                tooltip=("Switch to light mode" if is_dark else "Switch to night mode"),
+                                on_click=toggle_night_mode,
+                            ),
+                            ft.TextButton("Home", on_click=go_home, visible=narrow, style=ft.ButtonStyle(color=label_blue, padding=ft.Padding(12, 8, 12, 8))),
+                            ft.TextButton("Login", on_click=open_login, style=ft.ButtonStyle(color=label_blue, padding=ft.Padding(12, 8, 12, 8))),
+                        ],
+                        alignment=ft.MainAxisAlignment.END,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=8,
+                        wrap=True,
+                    ),
+                    col={"xs": 12, "lg": 3},
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor=surface,
+        padding=ft.Padding(24 if narrow else 40, 10, 24 if narrow else 40, 10),
+        shadow=ft.BoxShadow(blur_radius=12, color=ft.Colors.with_opacity(0.08, "#0c4279"), offset=ft.Offset(0, 3)),
+    )
+
+    # A short version of the homepage's hero: the same gradient, eyebrow and heading styles.
+    header = ft.Container(
+        content=ft.Column(
             [
                 ft.Row(
                     [
-                        nav_item("Home", go_home),
-                        # On a phone, Home reaches the homepage's other sections.
-                        nav_item("About", to_section("about-section"), visible=not narrow),
-                        nav_item("Public Documents", active=True),
-                        nav_item("Announcements", to_section("announcements-section"), visible=not narrow),
-                        nav_item("Contact", to_section("contact-section"), visible=not narrow),
+                        ft.TextButton("Home", on_click=go_home, style=ft.ButtonStyle(color=label_blue, padding=ft.Padding(0, 0, 0, 0))),
+                        ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=muted),
+                        ft.Text("Public Documents", size=13, color=muted),
                     ],
-                    spacing=0,
-                    wrap=True,
-                    expand=True,
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                ft.IconButton(
-                    icon=(ft.Icons.LIGHT_MODE if is_dark else ft.Icons.DARK_MODE),
-                    icon_color=ft.Colors.WHITE,
-                    tooltip=("Switch to light mode" if is_dark else "Switch to night mode"),
-                    on_click=toggle_night_mode,
+                eyebrow("PUBLIC RECORDS"),
+                ft.Text("Public Documents", size=28 if narrow else 34, weight=ft.FontWeight.BOLD, color=navy),
+                ft.Container(
+                    ft.Text(
+                        "Browse and search the ordinances, resolutions and other records the Sangguniang Bayan of Tolosa has made public.",
+                        size=15,
+                        color=muted,
+                    ),
+                    width=640,
                 ),
-                nav_item("Login", open_login),
+                theme.accent_bar(),
             ],
-            spacing=0,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=8,
         ),
-        bgcolor=theme.NAVY if not is_dark else theme.NIGHT_BLUE,
-        padding=ft.Padding(max(side - 18, 0), 0, max(side - 18, 0), 0),
+        gradient=ft.LinearGradient(
+            begin=ft.Alignment(-1, -1),
+            end=ft.Alignment(1, 1),
+            colors=["#F8FBFF", "#E4EEFB"] if not is_dark else [theme.NIGHT_CANVAS, theme.NIGHT_BLUE],
+        ),
+        padding=ft.Padding(side, 24, side, 32),
     )
 
     def labelled(label, control):
-        return ft.Column([ft.Text(label.upper(), size=12, weight=ft.FontWeight.BOLD, color=muted), control], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+        return ft.Column([ft.Text(label, size=12, weight=ft.FontWeight.W_600, color=ink), control], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
-    field_style = dict(border_color="#9aa7b5" if not is_dark else line, border_radius=2, bgcolor=surface, filled=True)
-    search_field = ft.TextField(hint_text="e.g. ORD-000007, market", content_padding=ft.Padding(10, 10, 10, 10), focused_border_color=navy, **field_style)
-    dropdown_style = dict(field_style, filled=False)  # a filled Dropdown is grey on Flet 0.28
-    type_filter = ft.Dropdown(value="All Types", options=[_option("All Types"), _option("Ordinance"), _option("Resolution")], **dropdown_style)
-    year_filter = ft.Dropdown(value="All Years", options=[_option("All Years"), _option("2026"), _option("2025")], **dropdown_style)
-    search_button = ft.FilledButton(
-        "Search", height=40,
-        style=ft.ButtonStyle(bgcolor=theme.NAVY, color=ft.Colors.WHITE, shape=ft.RoundedRectangleBorder(radius=2)),
+    field_style = dict(border_color=line, focused_border_color=label_blue, border_radius=10, text_size=14)
+    search_field = ft.TextField(
+        hint_text="e.g. RES-000002, market",
+        prefix_icon=ft.Icons.SEARCH,
+        content_padding=ft.Padding(12, 12, 12, 12),
+        bgcolor=surface,
+        filled=True,
+        **field_style,
     )
-    clear_button = outlined_button("Clear filters", None, None)
+    # A filled Dropdown is grey on Flet 0.28.
+    type_filter = ft.Dropdown(value="All Types", options=[_option("All Types"), _option("Ordinance"), _option("Resolution")], **field_style)
+    year_filter = ft.Dropdown(value="All Years", options=[_option("All Years"), _option("2026"), _option("2025")], **field_style)
+    search_button = theme.primary_button("Search", icon=ft.Icons.SEARCH, height=44)
+    clear_button = outlined_button("Clear filters", ft.Icons.FILTER_ALT_OFF_OUTLINED, None, height=44)
 
-    def boxed(title, content):
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Container(
-                        ft.Text(title.upper(), size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE, style=ft.TextStyle(letter_spacing=0.5)),
-                        bgcolor=theme.NAVY if not is_dark else theme.NIGHT_BLUE,
-                        padding=ft.Padding(14, 10, 14, 10),
-                    ),
-                    ft.Container(content, padding=14),
-                ],
-                spacing=0,
-                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
-            ),
-            bgcolor=surface,
-            border=ft.border.all(1, line),
-        )
-
-    search_panel = boxed(
-        "Search records",
+    search_panel = card(
         ft.Column(
-            [labelled("Keyword or number", search_field), labelled("Document type", type_filter), labelled("Series year", year_filter), search_button, clear_button],
+            [
+                ft.Row(
+                    [
+                        icon_badge(ft.Icons.MANAGE_SEARCH),
+                        ft.Column(
+                            [
+                                ft.Text("Search records", size=16, weight=ft.FontWeight.BOLD, color=navy),
+                                ft.Text("Narrow the list by keyword, type or year.", size=12, color=muted),
+                            ],
+                            spacing=1,
+                            tight=True,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=12,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Divider(height=8, color=line),
+                labelled("Keyword or number", search_field),
+                labelled("Document type", type_filter),
+                labelled("Series year", year_filter),
+                ft.Container(height=2),
+                search_button,
+                clear_button,
+            ],
             spacing=12,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
+        padding=20,
     )
 
     result_count = ft.Text(size=13, color=muted)
-    data_table = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text(label, size=12, weight=ft.FontWeight.BOLD, color=ink, style=ft.TextStyle(letter_spacing=0.4)))
-            for label in ("DOCUMENT NO.", "TITLE", "TYPE", "DATE", "STATUS", "")
-        ],
-        column_spacing=20, horizontal_margin=12, heading_row_height=46, data_row_min_height=64, data_row_max_height=96,
-        heading_row_color=header_row,
-        border=ft.border.only(top=ft.BorderSide(1, line)),
-        horizontal_lines=ft.border.BorderSide(1, line),
+
+    # Rows rather than a DataTable: a DataTable only grows as wide as its columns, so its lines
+    # stopped short of the card's right edge. Every column but the title has a fixed width.
+    column_widths = {"number": 150, "type": 110, "date": 120, "status": 140, "action": 120}
+    min_table_width = 900
+
+    def table_row(number, title, kind, when, status, action, bgcolor=None, height=None, last=False):
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Container(number, width=column_widths["number"]),
+                    ft.Container(title, expand=True),
+                    ft.Container(kind, width=column_widths["type"]),
+                    ft.Container(when, width=column_widths["date"]),
+                    ft.Container(status, width=column_widths["status"]),
+                    ft.Container(action, width=column_widths["action"], alignment=ft.Alignment.CENTER_RIGHT),
+                ],
+                spacing=16,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=bgcolor,
+            height=height,
+            padding=ft.Padding(20, 14, 20, 14) if height is None else ft.Padding(20, 0, 20, 0),
+            border=None if last else ft.border.only(bottom=ft.BorderSide(1, line)),
+        )
+
+    def heading(label):
+        return ft.Text(label, size=11, weight=ft.FontWeight.BOLD, color=muted, style=ft.TextStyle(letter_spacing=1))
+
+    table_header = table_row(
+        heading("DOCUMENT NO."), heading("TITLE"), heading("TYPE"), heading("DATE"), heading("STATUS"), heading(""),
+        bgcolor=tint, height=44,
     )
+    table_rows = ft.Column(spacing=0)
+
+    def type_chip(kind):
+        return ft.Container(
+            ft.Text(kind or "-", size=12, weight=ft.FontWeight.W_600, color=label_blue),
+            bgcolor=ft.Colors.with_opacity(0.10, theme.PRIMARY),
+            border_radius=20,
+            padding=ft.Padding(10, 3, 10, 3),
+        )
+
+    def document_row(document, last):
+        number_lines = [ft.Text(document.get("tracking_number") or document.get("number") or "-", size=13, weight=ft.FontWeight.BOLD, color=label_blue, no_wrap=True)]
+        if _reference(document):
+            number_lines.append(ft.Text(_reference(document), size=11, color=muted))
+        return table_row(
+            ft.Column(number_lines, spacing=2, tight=True),
+            ft.Container(
+                ft.Text(document.get("title") or "-", size=14, weight=ft.FontWeight.W_500, color=ink, max_lines=3, overflow=ft.TextOverflow.ELLIPSIS),
+                tooltip=document.get("title"),
+            ),
+            ft.Row([type_chip(document.get("type"))], tight=True),
+            ft.Text(_display_date(document.get("date")), size=13, color=ink, no_wrap=True),
+            _status(document, muted),
+            view_button(document),
+            last=last,
+        )
+
+    def empty_state():
+        return ft.Container(
+            content=ft.Column(
+                [
+                    icon_badge(ft.Icons.FOLDER_OPEN_OUTLINED, size=56),
+                    ft.Text("No documents found", size=16, weight=ft.FontWeight.BOLD, color=navy),
+                    ft.Text("Try a different keyword, or clear the filters to see every public document.", size=13, color=muted, text_align=ft.TextAlign.CENTER),
+                ],
+                spacing=8,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                tight=True,
+            ),
+            padding=ft.Padding(16, 48, 16, 48),
+            alignment=ft.Alignment.CENTER,
+        )
+
     page_size = 10
     current_page = 1
-    page_indicator = ft.Text(size=13, color=navy)
-    previous_button = outlined_button("‹ Previous", None, None, height=34)
-    next_button = outlined_button("Next ›", None, None, height=34)
+    page_indicator = ft.Text(size=13, color=muted)
+    previous_button = outlined_button("Previous", ft.Icons.CHEVRON_LEFT, None, height=36)
+    next_button = outlined_button("Next", ft.Icons.CHEVRON_RIGHT, None, height=36)
+    pagination = ft.Container(
+        ft.Row([previous_button, page_indicator, next_button], alignment=ft.MainAxisAlignment.CENTER, spacing=12),
+        padding=14,
+        border=ft.border.only(top=ft.BorderSide(1, line)),
+    )
 
     def render_documents(_, reset_page=False):
         nonlocal current_page
@@ -394,36 +533,21 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
         total_pages = max(1, payload.get("total_pages", 1))
         current_page = min(current_page, total_pages)
         first_document = ((current_page - 1) * page_size + 1) if total_documents else 0
-        data_table.rows = [
-            ft.DataRow(
-                color=stripe if index % 2 else None,
-                cells=[
-                    ft.DataCell(ft.Column(
-                        [
-                            ft.Text(document.get("tracking_number") or document.get("number") or "-", size=13, weight=ft.FontWeight.BOLD, color=navy, no_wrap=True),
-                            ft.Text(f"No. {document.get('document_number') or '-'}, s. {document.get('series_year') or '-'}", size=11, color=muted),
-                        ],
-                        spacing=2,
-                        tight=True,
-                    )),
-                    ft.DataCell(ft.Container(
-                        ft.Text(document["title"], size=14, color=ink, max_lines=3, overflow=ft.TextOverflow.ELLIPSIS),
-                        width=330,
-                        tooltip=document["title"],
-                    )),
-                    ft.DataCell(ft.Text(document["type"], size=14, color=ink)),
-                    ft.DataCell(ft.Text(document["date"], size=14, color=ink, no_wrap=True)),
-                    ft.DataCell(_status(document, muted)),
-                    ft.DataCell(view_button(document)),
-                ],
-            )
+        table_rows.controls = [
+            document_row(document, last=index == len(visible_documents) - 1)
             for index, document in enumerate(visible_documents)
-        ]
+        ] or [empty_state()]
+        table_header.visible = bool(visible_documents)
         last_document = min(first_document + len(visible_documents) - 1, total_documents) if total_documents else 0
-        result_count.value = f"Showing {first_document}-{last_document} of {total_documents} documents"
+        result_count.value = (
+            f"Showing {first_document}–{last_document} of {total_documents} document{'s' if total_documents != 1 else ''}"
+            if total_documents else "No matching documents"
+        )
         page_indicator.value = f"Page {current_page} of {total_pages}"
         previous_button.disabled = current_page <= 1
         next_button.disabled = current_page >= total_pages
+        # One page needs no paging controls.
+        pagination.visible = total_pages > 1
         if page is not None:
             page.update()
 
@@ -453,128 +577,138 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
     search_field.value = search
     render_documents(None, reset_page=True)
 
-    register = ft.Container(
-        content=ft.Column(
+    # The results card's rough width (ResponsiveRow: 9/12 from 992px, 8/12 from 768px, full below).
+    panel_share = 9 / 12 if width >= 992 else 8 / 12 if width >= 768 else 1
+    panel_width = (width - 2 * side) * panel_share - 24
+    table = ft.Column([table_header, table_rows], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+    if panel_width >= min_table_width:
+        table_area = table  # wide enough: the table fills the card
+    else:
+        table.width = min_table_width  # too narrow: keep the columns readable and scroll sideways
+        table_area = ft.Row([table], scroll=ft.ScrollMode.AUTO)
+
+    register = card(
+        ft.Column(
             [
                 ft.Container(
-                    ft.Row([result_count, ft.Text("Newest first", size=13, color=muted)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    padding=ft.Padding(14, 10, 14, 10),
+                    ft.Row(
+                        [
+                            ft.Row(
+                                [
+                                    icon_badge(ft.Icons.DESCRIPTION_OUTLINED),
+                                    ft.Column(
+                                        [ft.Text("Documents", size=16, weight=ft.FontWeight.BOLD, color=navy), result_count],
+                                        spacing=1,
+                                        tight=True,
+                                    ),
+                                ],
+                                spacing=12,
+                                tight=True,
+                            ),
+                            ft.Row(
+                                [ft.Icon(ft.Icons.SORT, size=16, color=muted), ft.Text("Newest first", size=13, color=muted)],
+                                spacing=4,
+                                tight=True,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        wrap=True,
+                    ),
+                    padding=ft.Padding(20, 16, 20, 16),
+                    border=ft.border.only(bottom=ft.BorderSide(1, line)),
                 ),
-                ft.Row([ft.Container(content=data_table, width=900)], scroll=ft.ScrollMode.AUTO),
-                ft.Container(
-                    ft.Row([previous_button, page_indicator, next_button], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
-                    padding=12,
-                ),
+                table_area,
+                pagination,
             ],
             spacing=0,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
-        bgcolor=surface,
-        border=ft.border.all(1, line),
-    )
-
-    breadcrumb = ft.Row(
-        [
-            ft.TextButton("Home", on_click=go_home, style=ft.ButtonStyle(color=label_blue, padding=ft.Padding(0, 0, 0, 0))),
-            ft.Text("›  Public Documents", size=13, color=muted),
-        ],
-        spacing=4,
     )
 
     body = ft.Container(
-        content=ft.Column(
+        content=ft.ResponsiveRow(
             [
-                breadcrumb,
-                ft.Container(
-                    ft.Text("Public Documents", size=26, weight=ft.FontWeight.BOLD, color=navy),
-                    border=ft.border.only(bottom=ft.BorderSide(2, navy)),
-                    padding=ft.Padding(0, 0, 0, 8),
-                ),
-                ft.Container(height=8),
-                ft.ResponsiveRow(
-                    [
-                        ft.Container(search_panel, col={"xs": 12, "md": 4, "lg": 3}),
-                        ft.Container(register, col={"xs": 12, "md": 8, "lg": 9}),
-                    ],
-                    spacing=24,
-                    run_spacing=20,
-                    vertical_alignment=ft.CrossAxisAlignment.START,
-                ),
+                ft.Container(search_panel, col={"xs": 12, "md": 4, "lg": 3}),
+                ft.Container(register, col={"xs": 12, "md": 8, "lg": 9}),
             ],
-            spacing=6,
+            spacing=24,
+            run_spacing=20,
+            vertical_alignment=ft.CrossAxisAlignment.START,
         ),
         bgcolor=canvas,
-        padding=ft.Padding(side, 12, side, 40),
+        padding=ft.Padding(side, 28, side, 48),
     )
 
-    def footer_heading(text):
-        return ft.Text(text.upper(), size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE, style=ft.TextStyle(letter_spacing=1))
+    # The homepage's footer.
+    def footer_link(label, on_click):
+        return ft.TextButton(label, on_click=on_click, style=ft.ButtonStyle(color=theme.ON_BLUE, padding=ft.Padding(6, 4, 6, 4)))
 
     footer = ft.Container(
         content=ft.ResponsiveRow(
             [
                 ft.Container(
-                    ft.Row(
+                    content=ft.Column(
                         [
-                            theme.seal(52),
-                            ft.Column(
-                                [
-                                    footer_heading("Sangguniang Bayan of Tolosa"),
-                                    ft.Text("Municipal Hall, Tolosa, Leyte", size=13, color=FOOTER_TEXT),
-                                    ft.Text("Legislative Document Tracking Management System", size=13, color=FOOTER_TEXT),
-                                    ft.Container(height=6),
-                                    ft.Text("All content is in the public domain unless otherwise stated.", size=12, color=FOOTER_TEXT),
-                                ],
-                                spacing=2,
-                                expand=True,
+                            theme.brand(subtitle="Municipality of Tolosa", on_blue=True, seal_size=40),
+                            ft.Text("Legislative Document Tracking Management System", size=12, color=theme.ON_BLUE_MUTED),
+                        ],
+                        spacing=10,
+                    ),
+                    col={"xs": 12, "md": 4},
+                ),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [ft.Icon(ft.Icons.PLACE_OUTLINED, size=16, color=theme.ACCENT), ft.Text("Municipal Hall, Tolosa, Leyte", size=13, color=theme.ON_BLUE, weight=ft.FontWeight.W_600)],
+                                spacing=6,
                             ),
+                            ft.Text("For public information and legislative concerns, visit the Municipal Hall.", size=12, color=theme.ON_BLUE_MUTED),
                         ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        spacing=6,
                     ),
-                    col={"xs": 12, "md": 6},
+                    col={"xs": 12, "md": 4},
                 ),
                 ft.Container(
-                    ft.Column(
+                    content=ft.Column(
                         [
-                            footer_heading("About GOVPH"),
-                            gov_link("The Republic of the Philippines", "https://www.gov.ph"),
-                            gov_link("Open Data Portal", "https://data.gov.ph"),
-                            gov_link("Official Gazette", "https://www.officialgazette.gov.ph"),
+                            ft.Row(
+                                [
+                                    footer_link("Home", go_home),
+                                    footer_link("About", to_section("about-section")),
+                                    footer_link("Public Documents", lambda _: content_scroll.scroll_to(offset=0, duration=400)),
+                                    footer_link("Announcements", to_section("announcements-section")),
+                                ],
+                                spacing=0,
+                                wrap=True,
+                                alignment=ft.MainAxisAlignment.END,
+                            ),
+                            ft.Text("© Municipality of Tolosa. All rights reserved.", size=11, color=theme.ON_BLUE_MUTED, text_align=ft.TextAlign.RIGHT),
                         ],
-                        spacing=2,
+                        spacing=6,
+                        horizontal_alignment=ft.CrossAxisAlignment.END,
                     ),
-                    col={"xs": 12, "sm": 6, "md": 3},
-                ),
-                ft.Container(
-                    ft.Column(
-                        [
-                            footer_heading("This site"),
-                            footer_link("Home", go_home),
-                            footer_link("Public Documents", lambda _: content_scroll.scroll_to(offset=0, duration=400)),
-                            footer_link("Announcements", to_section("announcements-section")),
-                            footer_link("Contact", to_section("contact-section")),
-                        ],
-                        spacing=2,
-                    ),
-                    col={"xs": 12, "sm": 6, "md": 3},
+                    col={"xs": 12, "md": 4},
                 ),
             ],
-            spacing=24,
+            spacing=28,
             run_spacing=20,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        bgcolor="#1b2733",
+        gradient=theme.blue_band_gradient(),
         padding=ft.Padding(side, 28, side, 28),
     )
 
     content_scroll = ft.Column(
-        [masthead, navigation, body, footer],
+        [header, body, footer],
         spacing=0,
         expand=True,
         scroll=ft.ScrollMode.AUTO,
     )
 
     return ft.Column(
-        [gov_bar, content_scroll],
+        [navigation, content_scroll],
         spacing=0,
         expand=True,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
