@@ -3,6 +3,7 @@ import threading
 import time
 import traceback
 
+from frontend import navigation
 from frontend.admin.screen import DESKTOP, PHONE, screen_size
 from frontend.admin.tracking_ui import format_time
 
@@ -99,8 +100,12 @@ def render_shell(
     `notifications` adds a bell: {"load": () -> {"unread", "items"}, "seen": () -> None, "open": item -> None}.
     """
     account = account or {}
-    selected_index = initial_selected_index
     shell_nav_items = list(nav_items)
+    # A reload of /app/<screen> opens that screen, unless the caller asked for a particular one.
+    wanted = navigation.route_screen(getattr(page, "route", None))
+    if initial_selected_index == 0 and wanted:
+        initial_selected_index = next((i for i, item in enumerate(shell_nav_items) if navigation.slug(item[1]) == wanted), 0)
+    selected_index = initial_selected_index
     # Phones and upright tablets get the sidebar as a drawer opened from the profile bar;
     # a phone's profile button shows only the initials.
     size = screen_size(page)
@@ -215,10 +220,16 @@ def render_shell(
     # SWITCH VIEW
     # =========================================================
 
-    def switch_view(index: int):
+    def show_address(index):
+        """Give the open screen its address, so the phone's Back can return to it."""
+        navigation.set_address(page, navigation.screen_route(shell_nav_items[index][1]))
+
+    def switch_view(index: int, remember: bool = True):
         nonlocal selected_index
 
         selected_index = index
+        if remember:
+            show_address(index)
         open_groups.clear()
         if group_of(index):
             open_groups.add(group_of(index))
@@ -478,6 +489,7 @@ def render_shell(
     # =========================================================
 
     profile_bar = ft.Container(padding=ft.Padding(left=8, top=4, right=8, bottom=4))
+    refreshing = ft.ProgressBar(visible=False, height=3)
 
     def open_menu_view(label):
         index = next((i for i, item in enumerate(shell_nav_items) if item[1] == label), None)
@@ -738,7 +750,8 @@ def render_shell(
         bgcolor=colors["canvas"],
         border=None,
         border_radius=0,
-        content=ft.Column([profile_bar, notifications_panel, content_holder], expand=True, spacing=4),
+        content=ft.Column([navigation.pull_to_refresh(profile_bar, lambda: pull_refresh()), refreshing, notifications_panel, content_holder],
+                          expand=True, spacing=4),
     )
     scrim = ft.Container(
         left=0, top=0, right=0, bottom=0,
@@ -789,10 +802,38 @@ def render_shell(
         main_panel.padding = ft.Padding(top=12, left=16, right=16, bottom=0)
         content_holder.padding = ft.Padding(left=0 if compact else 16, top=4, right=0 if compact else 16, bottom=16)
 
+    shell_root = []
+
     def show_layout():
         fit_gutters()
         page.clean()
-        page.add(layout())
+        shell_root[:] = [layout()]
+        page.add(shell_root[0])
+
+    def phone_back(route):
+        """The phone's Back: close a dialog or the menu, else the screen before; never leave the workspace."""
+        if not shell_root or shell_root[0] not in (getattr(page, "controls", None) or []):
+            return False  # signed out: the public pages handle it
+        target = next((i for i, item in enumerate(shell_nav_items) if navigation.slug(item[1]) == navigation.route_screen(route)), None)
+        if navigation.close_open_dialog(page) or drawer_open or notifications_panel.visible:
+            set_drawer(False)
+            notifications_panel.visible = False
+            show_address(selected_index)
+            page.update()
+        elif target is not None:
+            if target != selected_index:
+                switch_view(target, remember=False)
+        else:
+            show_address(selected_index)  # the first screen: stay
+        return True
+
+    def pull_refresh():
+        """Pulling the top bar down reloads the open screen's data, like pull-to-refresh."""
+        refreshing.visible = True
+        page.update()
+        switch_view(selected_index, remember=False)
+        refreshing.visible = False
+        page.update()
 
     def page_resized(_=None):
         """Screens lay themselves out for the screen size, so a new size redraws the open one."""
@@ -818,6 +859,11 @@ def render_shell(
 
     build_nav()
     build_profile_bar()
+    navigation.install(page, workspace=phone_back)
+    if not getattr(page, "workspace_back_stop", False):
+        # A first address before the screens' own, so Back on the first screen lands here and stays.
+        navigation.set_address(page, navigation.APP_PREFIX)
+        page.workspace_back_stop = True
 
     # The phone login page scrolls the whole page; the shell fills the screen and scrolls its
     # own content, and inside a scrolling page it has no height and draws nothing.
