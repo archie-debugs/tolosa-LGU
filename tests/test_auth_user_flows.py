@@ -340,7 +340,7 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
         if index == 1:
             first_content = content
         (temp_upload_dir / f"{tmp_name}.meta.json").write_text(
-            json.dumps({"original_filename": filename}),
+            json.dumps({"username": "superuser", "original_filename": filename}),
             encoding="utf-8",
         )
         tmp_names.append(tmp_name)
@@ -378,7 +378,7 @@ def test_bulk_registration_creates_original_1994_batch_with_separate_metadata(tm
     duplicate_name = "duplicate.pdf"
     (temp_upload_dir / duplicate_name).write_bytes(first_content)
     (temp_upload_dir / f"{duplicate_name}.meta.json").write_text(
-        json.dumps({"original_filename": "ORDINANCE No.01 Series 1994 DUPLICATE.pdf"}),
+        json.dumps({"username": "superuser", "original_filename": "ORDINANCE No.01 Series 1994 DUPLICATE.pdf"}),
         encoding="utf-8",
     )
     duplicate_response = client.post(
@@ -506,7 +506,7 @@ def test_bulk_registration_requires_explicit_per_file_years(tmp_path, monkeypatc
         tmp_name = f"bulk-{file_count}-{index}.pdf"
         (temp_upload_dir / tmp_name).write_bytes(f"%PDF-1.4\nunique-{file_count}-{index}\n%%EOF".encode())
         (temp_upload_dir / f"{tmp_name}.meta.json").write_text(
-            json.dumps({"original_filename": f"ORDINANCE No.{index:02d} Series 2026.pdf"}),
+            json.dumps({"username": "superuser", "original_filename": f"ORDINANCE No.{index:02d} Series 2026.pdf"}),
             encoding="utf-8",
         )
         tmp_names.append(tmp_name)
@@ -546,7 +546,7 @@ def test_bulk_registration_rejects_any_missing_legislative_year(tmp_path, monkey
     for tmp_name in tmp_names:
         (temp_upload_dir / tmp_name).write_bytes(b"%PDF-1.4 unique")
         (temp_upload_dir / f"{tmp_name}.meta.json").write_text(
-            json.dumps({"original_filename": tmp_name}),
+            json.dumps({"username": "superuser", "original_filename": tmp_name}),
             encoding="utf-8",
         )
 

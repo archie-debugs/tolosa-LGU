@@ -82,6 +82,15 @@ def _is_allowed_file(filename: str, content_type: str | None) -> tuple[bool, lis
     return (len(errors) == 0), errors
 
 
+def _tmp_meta(safe_name: str) -> dict:
+    """A temporary upload's metadata (uploader, original name); empty when there is none."""
+    try:
+        with open(os.path.join(TEMP_UPLOAD_DIR, f"{safe_name}.meta.json"), "r", encoding="utf-8") as mf:
+            return json.load(mf)
+    except Exception:
+        return {}
+
+
 def _require_upload_permission(user):
     """Registering documents, or uploading a MOA as a temporary document for SB Members."""
     if not user_has_permission(user, "set_documents_for_sb_members"):
@@ -151,6 +160,9 @@ async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Q
         raise
     except Exception:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    existing_meta = _tmp_meta(os.path.basename(tmp_name))
+    if existing_meta and existing_meta.get("username") != getattr(auth_user, "username", None):
+        raise HTTPException(status_code=403, detail="This upload belongs to someone else")
     try:
         safe_name = os.path.basename(tmp_name)
         if not safe_name:
@@ -297,7 +309,8 @@ def create_tmp_uploads(payload: dict = Body(...), db: Session = Depends(get_db),
 
         upload_url = f"/documents/uploads/tmp/{quote(tmp_name)}?upload_token={upload_token}"
         # return full absolute URL
-        full_url = f"{os.getenv('BACKEND_URL', 'http://127.0.0.1:8001').rstrip('/')}" + upload_url
+        # The browser sends the file, so the link must be the address it reaches, not 127.0.0.1.
+        full_url = _public_base_url() + upload_url
         results.append({"filename": filename, "ok": True, "tmp_name": tmp_name, "upload_url": full_url, "upload_token": upload_token})
 
     return {"files": results}
@@ -386,14 +399,13 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
         if not os.path.exists(tmp_path):
             failed.append({"index": idx, "tmp_name": safe_name, "filename": safe_name, "reason": "Temporary file not found"})
             continue
-        original_filename = safe_name
+        meta = _tmp_meta(safe_name)
+        # Only the person who uploaded the file may register it.
+        if meta.get("username") != current_user.username:
+            failed.append({"index": idx, "tmp_name": safe_name, "filename": safe_name, "reason": "Temporary file not found"})
+            continue
+        original_filename = os.path.basename(meta.get("original_filename") or safe_name)
         try:
-            meta_path = os.path.join(TEMP_UPLOAD_DIR, f"{safe_name}.meta.json")
-            try:
-                with open(meta_path, "r", encoding="utf-8") as mf:
-                    original_filename = os.path.basename(json.load(mf).get("original_filename") or safe_name)
-            except Exception:
-                pass
 
             with open(tmp_path, "rb") as fh:
                 content = fh.read()
@@ -533,6 +545,8 @@ def validate_bulk_register(files: list[UploadFile] = File(...), db: Session = De
                 tmp_path = os.path.join(TEMP_UPLOAD_DIR, safe_name)
                 with open(tmp_path, "wb") as fh:
                     fh.write(content)
+                with open(f"{tmp_path}.meta.json", "w", encoding="utf-8") as mf:
+                    json.dump({"tmp_name": safe_name, "original_filename": os.path.basename(filename), "username": current_user.username}, mf)
                 results.append({"index": idx, "filename": filename, "valid": True, "size": size, "tmp_name": safe_name})
             else:
                 invalid_count += 1
@@ -3512,16 +3526,19 @@ def permanently_delete_document(document_id: int, db: Session = Depends(get_db),
     tracking_number = doc.tracking_number
     title = doc.title
     attachments = db.query(models.Attachment).filter(models.Attachment.document_id == doc.id).all()
+    stored_paths = [attachment.stored_path for attachment in attachments if attachment.stored_path]
     for attachment in attachments:
-        try:
-            if attachment.stored_path and os.path.exists(attachment.stored_path):
-                os.remove(attachment.stored_path)
-        except Exception:
-            pass
         db.delete(attachment)
 
     db.delete(doc)
     db.commit()
+    # Only now: if the delete had failed, the document would still need its files.
+    for path in stored_paths:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
     record_audit_log(
         db,
         actor=getattr(current_user, "username", "System"),
