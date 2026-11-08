@@ -182,7 +182,7 @@ def build_documents_view(
         if archived:
             result["archived"] = "true"
         if document_type:
-            result["document_type"] = document_type
+            result["page_type"] = document_type
         if can_search and (search_field.value or "").strip():
             result["search"] = search_field.value.strip()
         if can_filter:

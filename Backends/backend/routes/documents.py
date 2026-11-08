@@ -1820,6 +1820,7 @@ def list_documents(
     search: str | None = Query(default=None),
     status: str | None = None,
     document_type: str | None = None,
+    page_type: str | None = Query(default=None, description="A type's own page: its counts and filter values cover only that type"),
     category: str | None = None,
     current_office: str | None = None,
     year: str | None = None,
@@ -1845,6 +1846,8 @@ def list_documents(
         query = query.filter(models.Document.archived.is_(archived))
     else:
         query = query.filter(models.Document.archived.is_(False))
+    if page_type:
+        query = query.filter(models.Document.document_type == page_type)
     in_transit = exists().where(
         models.DocumentHandoff.document_id == models.Document.id,
         models.DocumentHandoff.status == "Pending Receipt",
@@ -1870,6 +1873,8 @@ def list_documents(
         available_year_query = available_year_query.filter(models.Document.archived.is_(archived))
     else:
         available_year_query = available_year_query.filter(models.Document.archived.is_(False))
+    if page_type:
+        available_year_query = available_year_query.filter(models.Document.document_type == page_type)
     oldest_year = available_year_query.scalar()
     current_year = datetime.now(timezone.utc).year
     available_years = list(range(oldest_year, current_year + 1)) if oldest_year else [current_year]
