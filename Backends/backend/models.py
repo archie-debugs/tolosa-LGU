@@ -364,7 +364,7 @@ class DocumentHandoff(Base):
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     sending_office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False)
     receiving_office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False)
-    sending_employee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
+    sending_employee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     sent_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     status = Column(String(50), nullable=False, default="Pending Receipt")
     # Set when a pending handoff ends without receipt: the sender cancels it or the receiver returns it.
@@ -465,7 +465,7 @@ class DocumentReceipt(Base):
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     office_id = Column(Integer, ForeignKey("offices.id", ondelete="CASCADE"), nullable=False, index=True)
     handoff_id = Column(Integer, ForeignKey("document_handoffs.id", ondelete="SET NULL"), nullable=True)
-    confirmed_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False, index=True)
+    confirmed_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(String, nullable=False, default="Received", index=True)
     confirmed_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)

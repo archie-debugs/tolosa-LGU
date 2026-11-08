@@ -24,7 +24,7 @@ from ..core import (
     require_permission,
     require_user_management_permission,
 )
-from ..authentication import get_current_user, get_current_user_for_user_management, oauth2_scheme
+from ..authentication import get_current_user, get_current_user_for_user_management, oauth2_scheme, session_user
 from ..auth_jwt import create_access_token, create_refresh_token, decode_access_token, decode_refresh_token
 from .council import POSITIONS as COUNCIL_POSITIONS
 
@@ -40,6 +40,8 @@ class UserUpdate(BaseModel):
     status: str
     permissions: list[str] = []
     sb_position: str | None = None
+    # Only used when the username changes: the admin is asked whether to sign the user out.
+    log_out_everywhere: bool = False
 
 
 class PasswordReset(BaseModel):
@@ -310,6 +312,7 @@ def update_user(
     previous_role = normalize_user_role(user.role)
     previous_permissions = normalize_permissions(user.permissions)
     previous_office_id = user.office_id
+    previous_username = user.username
     user.full_name = payload.full_name.strip()
     user.username = payload.username.strip()
     user.email = payload.email.strip()
@@ -321,6 +324,8 @@ def update_user(
     user.is_active = normalized_status == "Active"
     if not user.is_active:
         _revoke_user_sessions(db, user.id, "account_deactivated")
+    elif user.username != previous_username and payload.log_out_everywhere:
+        _revoke_user_sessions(db, user.id, "username_changed")
     db.commit()
     if previous_office_id != user.office_id:
         record_audit_log(
@@ -787,7 +792,7 @@ def refresh_access_token(
     if not username:
         raise HTTPException(status_code=401, detail="Refresh token invalid")
 
-    user = db.query(models.User).filter(models.User.username == username).first()
+    user = session_user(db, payload) or db.query(models.User).filter(models.User.username == username).first()
     session_id = payload.get("session_id")
     session = db.query(models.UserSession).filter(
         models.UserSession.session_id == session_id,

@@ -3733,6 +3733,33 @@ def main(page: ft.Page, session=None):
                 None,
             )
             payload["office_id"] = selected_office.get("id") if selected_office else None
+            old_username = user.get("username") or ""
+            if payload["username"] == old_username:
+                send_user_update(payload)
+                return
+
+            def answer(log_out_everywhere):
+                close_dialog(log_out_dialog)
+                send_user_update({**payload, "log_out_everywhere": log_out_everywhere})
+
+            log_out_dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Log this user out of all devices?"),
+                content=ft.Text(
+                    f"The username changes from {old_username} to {payload['username']}. "
+                    "Log them out of every device where they are signed in now? "
+                    "Either way, they sign in with the new username from now on."
+                ),
+                actions=[
+                    ft.TextButton("Keep them signed in", on_click=lambda _: answer(False)),
+                    ft.Button("Log out everywhere", on_click=lambda _: answer(True), bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
+                ],
+            )
+            page.overlay.append(log_out_dialog)
+            log_out_dialog.open = True
+            page.update()
+
+        def send_user_update(payload):
             try:
                 response = http.put(
                     f"{BACKEND_URL}/auth/users/{user.get('id')}",

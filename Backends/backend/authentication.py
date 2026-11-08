@@ -47,6 +47,16 @@ def validate_registered_session(db: Session, payload: dict, user: models.User) -
     session.last_activity = now
 
 
+def session_user(db: Session, payload: dict) -> models.User | None:
+    """The account a token's session belongs to. The session, not the username in the token,
+    says whose it is, so renaming a user does not sign them out."""
+    session_id = payload.get("session_id")
+    if not session_id:
+        return None
+    session = db.query(models.UserSession).filter(models.UserSession.session_id == session_id).first()
+    return session.user if session else None
+
+
 def ensure_active_user(user: models.User | None) -> models.User:
     if not user:
         raise AccountNotAuthenticated("User not found")
@@ -72,7 +82,7 @@ def authenticate_access_token(db: Session, token: str | None) -> models.User:
     username = payload.get("sub")
     if not username:
         raise AccountNotAuthenticated("Invalid token payload")
-    user = ensure_active_user(db.query(models.User).filter(models.User.username == username).first())
+    user = ensure_active_user(session_user(db, payload) or db.query(models.User).filter(models.User.username == username).first())
     validate_registered_session(db, payload, user)
     return user
 
