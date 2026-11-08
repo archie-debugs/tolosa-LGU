@@ -157,3 +157,11 @@ def test_retention_periods_are_editable_per_type(client):
 
     for bad in ({"Memo": 5}, {"Resolution": 0}, {"Resolution": "ten"}, {"Resolution": 1201}):
         assert client.put("/system-settings", json={"settings": {"retention_months": bad}}, headers=headers).status_code == 400
+
+
+def test_the_details_of_an_archived_document_say_when_it_is_due_for_deletion(client):
+    doc_id = archived("LTR-000001", NOW - timedelta(days=30))
+    listed = next(item for item in client.get("/documents", params={"archived": "true"}, headers=headers_for(client, "admin")).json()["items"] if item["id"] == doc_id)
+    details = client.get(f"/documents/{doc_id}/overview", headers=headers_for(client, "admin")).json()["document"]
+    assert datetime.fromisoformat(details["retain_until"]) == datetime.fromisoformat(listed["retain_until"].replace("Z", "+00:00"))
+    assert details["retain_until"]

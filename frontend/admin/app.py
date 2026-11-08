@@ -1877,6 +1877,12 @@ def main(page: ft.Page, session=None):
                 open_edit=open_edit_document_dialog,
                 preview=preview_document_pdf,
                 download=download_document_attachment,
+                print_document=print_document_pdf,
+                replace_file=open_replace_attachment_dialog,
+                archive=confirm_delete_document if has_permission("archive_documents") else None,
+                restore=confirm_restore_archived_document if has_permission("restore_documents") else None,
+                keep_or_delete=keep_or_delete_archived if has_permission("delete_documents") else None,
+                delete_permanently=confirm_permanent_delete_archived_document if has_permission("delete_documents") else None,
                 on_change=refresh_after_document_change,
                 # A phone that scanned the QR code gets the document as its own page.
                 on_done=leave_qr_document if doc.get("qr_token") and is_phone(page) else None,
@@ -1936,6 +1942,7 @@ def main(page: ft.Page, session=None):
             "current_office_id": doc.get("current_office_id"),
             "is_public": bool(doc.get("is_public", False)),
             "archived": bool(doc.get("archived", False)),
+            "retain_until": doc.get("retain_until"),
         }
 
     def delete_document_record(document_id):

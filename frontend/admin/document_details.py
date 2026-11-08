@@ -84,6 +84,12 @@ def open_document_details(
     open_edit=None,
     preview=None,
     download=None,
+    print_document=None,
+    replace_file=None,
+    archive=None,
+    restore=None,
+    keep_or_delete=None,
+    delete_permanently=None,
     on_change=None,
     on_done=None,
 ):
@@ -98,6 +104,9 @@ def open_document_details(
     The backend decides what the user's office can do now (receive, pass on, record an
     action); the `can_*` flags only cover what the user's permissions allow.
     `can_change_visibility` adds Make public / Make private (not on a scan or an archived document).
+    `print_document`, `replace_file` and `archive` (active documents) and `restore`, `keep_or_delete`
+    and `delete_permanently` (archived ones) each take the document; pass only those the user may do.
+    Each one but Print closes the details first, as it opens its own dialog.
     `qr_token` is set when the document was opened by scanning its QR code; receiving needs it.
     `open_pass` is given only where passing is done (the Office Dashboard and a QR scan); elsewhere an
     office that may pass the document is pointed to the Office Dashboard instead.
@@ -282,8 +291,22 @@ def open_document_details(
             public = bool(document.get("is_public"))
             buttons.append(ft.OutlinedButton("Make private" if public else "Make public", icon=ft.Icons.PUBLIC_OFF if public else ft.Icons.PUBLIC,
                                              on_click=lambda _: set_public(not public)))
-        if can_edit and open_edit and not document.get("archived") and not scan:
+        if has_pdf and can_print and print_document and not scan:
+            buttons.append(ft.OutlinedButton("Print", icon=ft.Icons.PRINT_OUTLINED, on_click=lambda _: print_document(summary())))
+        archived = bool(document.get("archived"))
+        if can_edit and open_edit and not archived and not scan:
             buttons.append(ft.OutlinedButton("Edit", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda _: close_then(open_edit)))
+        if not scan:
+            danger = ft.ButtonStyle(color=ft.Colors.RED_700)
+            for label, icon, handler, shown, style in (
+                ("Replace file", ft.Icons.UPLOAD_FILE, replace_file, can_edit and attachments and not archived, None),
+                ("Archive", ft.Icons.ARCHIVE_OUTLINED, archive, not archived, None),
+                ("Restore", ft.Icons.UNARCHIVE_OUTLINED, restore, archived, None),
+                ("Keep longer or delete", ft.Icons.MORE_TIME, keep_or_delete, archived and document.get("retain_until"), None),
+                ("Delete permanently", ft.Icons.DELETE_FOREVER_OUTLINED, delete_permanently, archived, danger),
+            ):
+                if handler and shown:
+                    buttons.append(ft.OutlinedButton(label, icon=icon, style=style, on_click=lambda _, h=handler: close_then(h)))
         if not buttons:
             return None
         if scan:

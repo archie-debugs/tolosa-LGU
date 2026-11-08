@@ -419,6 +419,12 @@ def build_documents_view(
         selection_bar.border_radius = 10
         selection_bar.bgcolor = ft.Colors.with_opacity(0.10, ft.Colors.BLUE_700)
 
+    # Clicking a row opens its details, which hold every action; only rows that can't open keep a menu.
+    opens_details = bool(can_view_details and open_details)
+
+    def select_box(doc_id):
+        return ft.Checkbox(value=doc_id in selection, on_change=lambda e, i=doc_id: toggle(i, e.control.value))
+
     def header_row():
         ids = {doc.get("id") for doc in loaded if doc.get("id") is not None}
         cells = []
@@ -427,7 +433,8 @@ def build_documents_view(
         columns = (
             ("Document", COLUMN_WIDTHS["document"]), ("Type", COLUMN_WIDTHS["type"]), ("Referred to", COLUMN_WIDTHS["referred"]),
             ("Action", COLUMN_WIDTHS["action"]), ("Status", COLUMN_WIDTHS["status"]), ("Remarks", None),
-            ("Archived" if archived else "Where it is", COLUMN_WIDTHS["where"]), ("Registered", COLUMN_WIDTHS["registered"]), ("", COLUMN_WIDTHS["actions"]),
+            ("Archived" if archived else "Where it is", COLUMN_WIDTHS["where"]), ("Registered", COLUMN_WIDTHS["registered"]),
+            *([] if opens_details else [("", COLUMN_WIDTHS["actions"])]),
         )
         for text, width in columns:
             label = widgets.hint(text.upper())
@@ -449,7 +456,7 @@ def build_documents_view(
 
     def table_width():
         """At least wide enough for every column; wider when the window allows, so Remarks gets the room."""
-        fixed = sum(COLUMN_WIDTHS.values()) + REMARKS_MIN_WIDTH + 12 * (len(COLUMN_WIDTHS) + (1 if selectable else 0)) + (40 if selectable else 0) + 8
+        fixed = sum(COLUMN_WIDTHS.values()) - (COLUMN_WIDTHS["actions"] if opens_details else 0) + REMARKS_MIN_WIDTH + 12 * (len(COLUMN_WIDTHS) + (1 if selectable else 0)) + (40 if selectable else 0) + 8
         return max(fixed, (page.width or 1280) - CHROME_WIDTH)
 
     def document_row(doc):
@@ -470,10 +477,7 @@ def build_documents_view(
         chips = badges(doc)
         if chips:
             details.append(ft.Row(chips, spacing=6, wrap=True))
-        controls = []
-        if selectable:
-            controls.append(ft.Checkbox(value=doc_id in selection, on_change=lambda e, i=doc_id: toggle(i, e.control.value)))
-        controls += [
+        controls = [
             ft.Column(details, spacing=4, width=COLUMN_WIDTHS["document"]),
             text_cell(doc.get("document_type"), COLUMN_WIDTHS["type"]),
             text_cell(doc.get("assigned_to"), COLUMN_WIDTHS["referred"]),
@@ -483,14 +487,16 @@ def build_documents_view(
             location_cell(doc),
             ft.Column([ft.Text(format_date(doc.get("date_registered") if doc.get("date_registered") not in (None, "-") else doc.get("date_received")), size=12, color=widgets.body_color()), widgets.hint(f"Updated {format_date(doc.get('last_updated'))}")], spacing=3, width=COLUMN_WIDTHS["registered"]),
         ]
-        actions = []
-        if can_view_details and open_details:
-            actions.append(ft.IconButton(ft.Icons.VISIBILITY_OUTLINED, tooltip="View details", on_click=lambda _, d=doc: open_details(d)))
-        more = menu_items(doc)
-        if more:
-            actions.append(ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="More actions", items=more))
-        controls.append(ft.Row(actions, spacing=0, width=COLUMN_WIDTHS["actions"], alignment=ft.MainAxisAlignment.END))
-        return widgets.list_row(controls, on_click=(lambda _, d=doc: open_details(d)) if can_view_details and open_details else None)
+        if not opens_details:
+            more = menu_items(doc)
+            menu = [ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="More actions", items=more)] if more else []
+            controls.append(ft.Row(menu, spacing=0, width=COLUMN_WIDTHS["actions"], alignment=ft.MainAxisAlignment.END))
+        if not selectable:
+            return widgets.list_row(controls, on_click=(lambda _, d=doc: open_details(d)) if opens_details else None)
+        # The checkbox sits outside the clickable part, so ticking it only selects the row.
+        opener = ft.Container(ft.Row(controls, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER), expand=True,
+                              on_click=(lambda _, d=doc: open_details(d)) if opens_details else None, ink=opens_details)
+        return widgets.list_row([select_box(doc_id), opener])
 
     def document_card(doc):
         """A phone's row: tracking number and status, the title, where it is, then its buttons."""
@@ -499,8 +505,6 @@ def build_documents_view(
         top = [ft.Text(doc.get("tracking_number") or "-", size=13, weight=ft.FontWeight.BOLD, color=widgets.link_color(), expand=True)]
         if status and status != "-":
             top.append(widgets.chip(status, STATUS_COLORS.get(status, ft.Colors.INDIGO_600)))
-        if selectable:
-            top.insert(0, ft.Checkbox(value=doc_id in selection, on_change=lambda e, i=doc_id: toggle(i, e.control.value)))
         where = location_cell(doc)
         where.width = None
         lines = [
@@ -511,20 +515,17 @@ def build_documents_view(
         chips = badges(doc)
         if chips:
             lines.append(ft.Row(chips, spacing=6, run_spacing=6, wrap=True))
-        actions = []
-        if can_view_details and open_details:
-            actions.append(ft.TextButton("View", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=doc: open_details(d)))
-        more = menu_items(doc)
+        more = [] if opens_details else menu_items(doc)
         if more:
-            actions.append(ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="More actions", items=more))
-        if actions:
-            lines.append(ft.Row(actions, spacing=0, alignment=ft.MainAxisAlignment.END))
+            lines.append(ft.Row([ft.PopupMenuButton(icon=ft.Icons.MORE_VERT, tooltip="More actions", items=more)], spacing=0, alignment=ft.MainAxisAlignment.END))
+        opener = ft.Container(ft.Column(lines, spacing=4), expand=True,
+                              on_click=(lambda _, d=doc: open_details(d)) if opens_details else None)
+        # The checkbox sits outside the tappable part, so ticking it only selects the card.
         return ft.Container(
-            content=ft.Column(lines, spacing=4),
+            content=ft.Row([select_box(doc_id), opener], spacing=4, vertical_alignment=ft.CrossAxisAlignment.START) if selectable else opener,
             padding=ft.Padding(12, 10, 8, 4),
             border=ft.border.all(1, widgets.line_color()),
             border_radius=10,
-            on_click=(lambda _, d=doc: open_details(d)) if can_view_details and open_details else None,
         )
 
     def render_pagination():

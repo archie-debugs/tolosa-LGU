@@ -3375,6 +3375,9 @@ def document_overview(document_id: int, db: Session = Depends(get_db), current_u
     holds = _office_holds_document(db, doc, office_id)
     if full_access:
         document = _serialize_document(doc)
+        if doc.archived:
+            until = retain_until(doc, retention_months(db))
+            document["retain_until"] = until.isoformat() if until else None
     elif not holds:
         # Not received yet, or passed on: the office may track it but not open it.
         document = _office_tracking_document(doc)
