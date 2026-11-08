@@ -8,6 +8,7 @@ import requests
 import flet as ft
 
 from frontend import theme
+from frontend.responsive import redraw_on_resize
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
     ft.Colors = ft.colors
@@ -352,7 +353,7 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         bgcolor=surface,
-        padding=ft.Padding(24 if narrow else 40, 10, 24 if narrow else 40, 10),
+        padding=ft.Padding(16 if narrow else 40, 10, 16 if narrow else 40, 10),
         shadow=ft.BoxShadow(blur_radius=12, color=ft.Colors.with_opacity(0.08, "#0c4279"), offset=ft.Offset(0, 3)),
     )
 
@@ -720,9 +721,11 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
         scroll=ft.ScrollMode.AUTO,
     )
 
-    return ft.Column(
+    view = ft.Column(
         [navigation, content_scroll],
         spacing=0,
         expand=True,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
     )
+    redraw_on_resize(page, view, lambda: build_public_portal(page, search=search))
+    return view

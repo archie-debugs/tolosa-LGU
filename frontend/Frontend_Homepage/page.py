@@ -4,6 +4,7 @@ import flet as ft
 import requests
 from frontend.admin.app import main as admin_main
 from frontend import theme
+from frontend.responsive import redraw_on_resize
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 
@@ -185,7 +186,7 @@ def build_homepage_view(page=None):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         bgcolor=surface,
-        padding=ft.Padding(40, 10, 40, 10),
+        padding=ft.Padding(16, 10, 16, 10) if narrow else ft.Padding(40, 10, 40, 10),
         shadow=ft.BoxShadow(blur_radius=12, color=ft.Colors.with_opacity(0.08, "#0c4279"), offset=ft.Offset(0, 3)),
     )
 
@@ -298,7 +299,7 @@ def build_homepage_view(page=None):
             ),
         ]
     # The text is the one unpositioned layer, so it sets the hero's height and the photo fills in behind it.
-    hero_layers.append(ft.Container(hero_text, width=width, padding=ft.Padding(24, 32, 24, 32) if narrow else ft.Padding(56, 52, 56, 48)))
+    hero_layers.append(ft.Container(hero_text, width=width, padding=ft.Padding(16, 32, 16, 32) if narrow else ft.Padding(56, 52, 56, 48)))
     hero = ft.Container(content=ft.Stack(hero_layers), gradient=hero_background)
 
     def announcement_row(item):
@@ -482,8 +483,10 @@ def build_homepage_view(page=None):
         scroll=ft.ScrollMode.AUTO,
     )
 
-    return ft.Column(
+    view = ft.Column(
         [navigation, content_scroll],
         spacing=0,
         expand=True,
     )
+    redraw_on_resize(page, view, lambda: build_homepage_view(page))
+    return view

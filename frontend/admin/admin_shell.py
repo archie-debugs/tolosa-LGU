@@ -777,7 +777,20 @@ def render_shell(
         main_panel.left = main_panel.top = main_panel.right = main_panel.bottom = None
         return ft.Row([sidebar_panel, main_panel], expand=True, spacing=0, vertical_alignment=ft.CrossAxisAlignment.START)
 
+    def fit_gutters():
+        """Phones and tablets keep one 16 px margin each side, so the content gets the screen; desktops keep their own."""
+        # Only a phone or tablet changes the page's own margin; a desktop gets back whatever it had.
+        if compact and not hasattr(page, "shell_desktop_padding"):
+            page.shell_desktop_padding = getattr(page, "padding", None)
+            page.padding = 0
+        elif not compact and hasattr(page, "shell_desktop_padding"):
+            page.padding = page.shell_desktop_padding
+            del page.shell_desktop_padding
+        main_panel.padding = ft.Padding(top=12, left=16, right=16, bottom=0)
+        content_holder.padding = ft.Padding(left=0 if compact else 16, top=4, right=0 if compact else 16, bottom=16)
+
     def show_layout():
+        fit_gutters()
         page.clean()
         page.add(layout())
 
