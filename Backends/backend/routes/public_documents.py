@@ -119,9 +119,9 @@ def list_public_documents(
 
 
 @router.get("/{document_id:int}/pdf")
-def public_document_pdf(document_id: int, db: Session = Depends(get_db)):
-    """A public document's PDF, opened in the viewer's browser. Private, archived and
-    file-less documents are all "not found", so nothing about them is revealed."""
+def public_document_pdf(document_id: int, download: bool = False, db: Session = Depends(get_db)):
+    """A public document's PDF, opened in the viewer's browser, or saved with `?download=1`.
+    Private, archived and file-less documents are all "not found", so nothing about them is revealed."""
     attachment = _public_pdf(db, document_id)
     if attachment is None:
         raise HTTPException(status_code=404, detail="No public PDF for this document")
@@ -129,7 +129,7 @@ def public_document_pdf(document_id: int, db: Session = Depends(get_db)):
         attachment.stored_path,
         filename=attachment.original_filename,
         media_type="application/pdf",
-        content_disposition_type="inline",
+        content_disposition_type="attachment" if download else "inline",
     )
 
 
