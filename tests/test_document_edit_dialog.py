@@ -51,8 +51,13 @@ def texts(control):
     return [c.value for c in walk(control) if isinstance(c, ft.Text) and c.value and c.visible is not False]
 
 
+def name(control):
+    """A field's name: drawn above it and kept in `data`, or its own label."""
+    return str(control.label or control.data or "")
+
+
 def field(dialog, label):
-    return next(c for c in walk(dialog.content) if isinstance(c, (ft.TextField, ft.Dropdown)) and c.label == label)
+    return next(c for c in walk(dialog.content) if isinstance(c, (ft.TextField, ft.Dropdown)) and name(c).lower() == label.lower())
 
 
 def picks(dialog):
@@ -100,8 +105,8 @@ def test_dialog_offers_only_the_three_types_so_another_type_must_be_replaced():
 def test_dialog_has_no_office_field_and_points_to_pass():
     dialog = open_dialog(FakeApi())
 
-    labels = [c.label for c in walk(dialog.content) if isinstance(c, (ft.TextField, ft.Dropdown))]
-    assert not any("Office" in (label or "") for label in labels)
+    labels = [name(c) for c in walk(dialog.content) if isinstance(c, (ft.TextField, ft.Dropdown))]
+    assert not any("Office" in label for label in labels)
     assert any("Records Office" in text and "Pass" in text for text in texts(dialog.content))
 
 

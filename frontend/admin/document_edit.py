@@ -3,7 +3,10 @@
 import flet as ft
 
 from frontend.admin.definition_fields import CategoryField, DocumentTypeField
-from frontend.admin.registration import ACTIONS_REQUIRED, PRIORITIES, STATUSES, error_detail
+from frontend.admin.registration import (
+    ACTIONS_REQUIRED, PRIORITIES, STATUSES, _Notice, _dialog_width, _field_style, _labelled, _primary_button, _section,
+    _style_dialog, error_detail,
+)
 from frontend.admin.tracking_ui import DUE_DATE_HINT, TrackingWidgets, parse_due_date, remark_list
 
 def _text(value):
@@ -35,22 +38,25 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     `api(method, path, **kwargs)` returns the JSON body or raises with the backend's detail.
     """
     ui = TrackingWidgets(page)
-    title = ft.TextField(label="Title", value=_text(document.get("title")))
-    number = ft.TextField(label="Document Number", value=_text(document.get("document_number")), width=220)
-    year = ft.TextField(label="Series Year", value=_text(document.get("series_year")), width=140)
-    description = ft.TextField(label="Description", value=_text(document.get("description")), multiline=True, min_lines=2, max_lines=3)
-    priority = ft.Dropdown(label="Priority", width=180, options=[ft.dropdown.Option(p) for p in PRIORITIES], value=document.get("priority") or "Medium")
-    assigned_to = ft.TextField(label="Referred To", value=_text(document.get("assigned_to")), width=280)
-    status = ft.Dropdown(label="Status", width=180, options=[ft.dropdown.Option(s) for s in _choices(STATUSES, document.get("status"))],
-                         value=_text(document.get("status")) or "Approved")
-    action_required = ft.Dropdown(label="Action Required", width=180, options=[ft.dropdown.Option(a) for a in _choices(ACTIONS_REQUIRED, document.get("action_required"))],
-                                  value=_text(document.get("action_required")) or None)
-    author = ft.TextField(label="Author", value=_text(document.get("author")), width=280)
-    due_date = ft.TextField(label="Due date", hint_text="YYYY-MM-DD (optional)", value=_text(document.get("due_date")), width=180)
+    style = _field_style(ui)
+    # `data` names each field, since its name is drawn above it rather than as its label.
+    title = ft.TextField(data="Title", hint_text="Title of the document", value=_text(document.get("title")), **style)
+    number = ft.TextField(data="Document Number", hint_text="e.g. 01-2026", value=_text(document.get("document_number")), **style)
+    year = ft.TextField(data="Series Year", hint_text="e.g. 2026", value=_text(document.get("series_year")), **style)
+    description = ft.TextField(data="Description", hint_text="What the document is about (optional)", value=_text(document.get("description")),
+                               multiline=True, min_lines=2, max_lines=3, **style)
+    priority = ft.Dropdown(data="Priority", options=[ft.dropdown.Option(p) for p in PRIORITIES], value=document.get("priority") or "Medium", **style)
+    assigned_to = ft.TextField(data="Referred To", hint_text="e.g. SB Secretary, Vice Mayor…", value=_text(document.get("assigned_to")), **style)
+    status = ft.Dropdown(data="Status", options=[ft.dropdown.Option(s) for s in _choices(STATUSES, document.get("status"))],
+                         value=_text(document.get("status")) or "Approved", **style)
+    action_required = ft.Dropdown(data="Action Required", options=[ft.dropdown.Option(a) for a in _choices(ACTIONS_REQUIRED, document.get("action_required"))],
+                                  value=_text(document.get("action_required")) or None, **style)
+    author = ft.TextField(data="Author", hint_text="Enter author name...", value=_text(document.get("author")), **style)
+    due_date = ft.TextField(data="Due date", hint_text="YYYY-MM-DD (optional)", value=_text(document.get("due_date")), **style)
     # Earlier remarks are kept and shown; whatever is typed here is added as a new one.
-    new_remark = ft.TextField(label="New remark", hint_text="Leave empty to keep the remarks as they are",
-                              multiline=True, min_lines=2, max_lines=3)
-    message = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
+    new_remark = ft.TextField(data="New remark", hint_text="Leave empty to keep the remarks as they are",
+                              multiline=True, min_lines=2, max_lines=3, **style)
+    message = _Notice()
 
     try:
         reference = api("GET", "/documents/edit-options")
@@ -58,9 +64,8 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
         reference = {}
     remarks = _remark_history(api, document)
     # Document details passes its display record, where a missing value is "-".
-    document_type = DocumentTypeField(label="Document Type", width=280, value=_text(document.get("document_type")))
-    category = CategoryField(label="Category", width=280, value=_text(document.get("category")),
-                             used_before=reference.get("categories") or [])
+    document_type = DocumentTypeField(style, value=_text(document.get("document_type")))
+    category = CategoryField(style, value=_text(document.get("category")), used_before=reference.get("categories") or [])
 
     def close():
         dialog.open = False
@@ -68,7 +73,6 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
 
     def show_error(text):
         message.value = text
-        message.visible = True
         page.update()
 
     def save():
@@ -104,32 +108,52 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             on_saved()
 
     office = document.get("current_office") or "no office"
-    dialog.modal = True
-    dialog.title = ft.Text(f"Edit {document.get('tracking_number') or 'document'}")
-    dialog.content = ft.Column(
+    third = {"xs": 12, "sm": 4}
+    half = {"xs": 12, "sm": 6}
+    narrow = (page.width or 1024) <= 600
+    content = ft.Column(
         [
-            ui.hint(f"Currently in {office}. To move it to another office, use Pass."),
-            title,
-            ft.Row([number, year, priority, due_date], spacing=12, wrap=True),
-            description,
-            ft.Row([document_type.control(), category.control()], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.START),
-            ft.Row([status, action_required], spacing=12, wrap=True),
-            ft.Row([assigned_to, author], spacing=12, wrap=True),
-            ui.hint("Remarks"),
-            *([remark_list(ui, remarks)] if remarks else []),
-            new_remark,
-            message,
+            _section(ui, ft.Icons.DESCRIPTION, "The document", [
+                _labelled(ui, title, "Title", ft.Icons.TITLE, required=True),
+                ft.ResponsiveRow([
+                    _labelled(ui, number, "Document number", ft.Icons.TAG, col=half),
+                    _labelled(ui, year, "Series year", ft.Icons.CALENDAR_TODAY_OUTLINED, col=half),
+                    _labelled(ui, document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, col=half),
+                    _labelled(ui, category.control(), "Category", ft.Icons.CATEGORY_OUTLINED, col=half),
+                ], spacing=14, run_spacing=12),
+                _labelled(ui, description, "Description", ft.Icons.NOTES),
+            ]),
+            _section(ui, ft.Icons.TASK_ALT, "Status", [
+                ft.ResponsiveRow([
+                    _labelled(ui, status, "Status", ft.Icons.FLAG_OUTLINED, col=third),
+                    _labelled(ui, action_required, "Action required", ft.Icons.TASK_ALT, col=third),
+                    _labelled(ui, priority, "Priority", ft.Icons.PRIORITY_HIGH, col=third),
+                    _labelled(ui, due_date, "Due date", ft.Icons.EVENT_OUTLINED, col=third),
+                    _labelled(ui, assigned_to, "Referred to", ft.Icons.PERSON, col=third),
+                    _labelled(ui, author, "Author", ft.Icons.PERSON_OUTLINE, col=third),
+                ], spacing=14, run_spacing=12),
+                ft.Row(
+                    [ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=ui.muted_color()),
+                     ft.Text(f"Currently in {office}. To move it to another office, use Pass.", size=11, color=ui.muted_color(), expand=True)],
+                    spacing=8,
+                ),
+            ]),
+            _section(ui, ft.Icons.COMMENT_OUTLINED, "Remarks", [
+                *([remark_list(ui, remarks)] if remarks else [ui.hint("No remarks yet.")]),
+                _labelled(ui, new_remark, "New remark", ft.Icons.ADD_COMMENT_OUTLINED),
+            ]),
+            message.box,
         ],
-        spacing=10,
-        tight=True,
+        spacing=14,
         scroll=ft.ScrollMode.AUTO,
-        width=620,
+        height=min(560, (page.height or 760) - 200) if narrow else 560,
     )
-    dialog.actions = [
-        ft.TextButton("Cancel", on_click=lambda _: close()),
-        ft.Button("Save changes", icon=ft.Icons.SAVE_OUTLINED, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE, on_click=lambda _: save()),
-    ]
-    dialog.actions_alignment = ft.MainAxisAlignment.END
+    _style_dialog(
+        dialog, ui, "Edit Document", content,
+        [ft.TextButton("Cancel", on_click=lambda _: close()), _primary_button("Save changes", ft.Icons.SAVE_OUTLINED, lambda _: save())],
+        _dialog_width(page, False),
+        subtitle=f"{document.get('tracking_number') or 'Document'} · update its details.", icon=ft.Icons.EDIT_DOCUMENT, on_close=close,
+    )
     if dialog not in page.overlay:
         page.overlay.append(dialog)
     dialog.open = True
