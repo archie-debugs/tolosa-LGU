@@ -33,6 +33,7 @@ EMPLOYEE_PERMISSION_GROUPS = {
         "Set Documents For SB Members",
     ],
     "Users & Roles": [
+        "View Users",
         "Create Users",
         "Edit Users",
         "Reset Passwords",
@@ -64,6 +65,7 @@ OFFICE_EMPLOYEE_PERMISSION_GROUP = {
         "Search Office Documents",
         "View Office Document Details",
         "Scan QR",
+        "Pass Office Documents",
         "Confirm Document Receipt",
         "View Office History",
     ],

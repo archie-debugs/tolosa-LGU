@@ -164,7 +164,7 @@ def test_members_default_to_the_current_term(client):
 
 def test_sb_member_accounts_keep_their_position_for_filling_in_the_roster(client):
     admin = headers_for(client, "admin")
-    account = {"username": "santos", "password": "pw123", "full_name": "Hon. Maria Santos", "email": "santos@example.com"}
+    account = {"username": "santos", "password": "pw123456", "full_name": "Hon. Maria Santos", "email": "santos@example.com"}
 
     created = client.post("/auth/register", headers=admin, json={**account, "role": "SB Member", "sb_position": "Vice Mayor"})
     assert created.status_code == 200, created.text
