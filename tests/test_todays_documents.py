@@ -223,7 +223,7 @@ def page_texts(page):
     return [text for control in page.controls for text in visible_texts(control)]
 
 
-def test_sb_member_app_opens_on_todays_documents_and_picks_up_new_ones(monkeypatch):
+def test_sb_member_app_opens_on_the_dashboard_and_todays_documents_picks_up_new_ones(monkeypatch):
     import time
 
     import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
@@ -241,9 +241,14 @@ def test_sb_member_app_opens_on_todays_documents_and_picks_up_new_ones(monkeypat
     page = DummyPage()
 
     sb_app.main(page, session={"access_token": member_token, "username": "member", "permissions": ["view_documents"]})
+    assert "Budget ordinance" in page_texts(page)  # the dashboard lists today's documents too
+    # Only the Today's Documents screen refreshes itself, so open it from the sidebar.
+    from tests.test_session_revocation import sidebar_tile
+    from tests.test_account_menu_ui import click
+    click(sidebar_tile(page, "Today's Documents"))
 
     texts = page_texts(page)
-    assert "Today's Documents" in texts
+    assert "Documents set for you for today." in texts
     assert "Budget ordinance" in texts and "For first reading" in texts
     assert "Road resolution" not in texts
 
