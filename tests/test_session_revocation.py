@@ -195,3 +195,41 @@ def test_a_revoked_sb_member_is_sent_back_to_the_homepage(monkeypatch):
     shown = [t for control in page.controls for t in texts(control)]
     assert "Member Workspace" not in shown
     assert "SANGGUNIANG BAYAN" in shown
+
+
+def rename_clerk(client, admin, log_out_everywhere=None):
+    with SessionLocal() as db:
+        clerk = db.query(models.User).filter_by(username="clerk").one()
+        clerk_id, permissions = clerk.id, ["view_documents", "search_documents"]
+    payload = {"full_name": "Clerk", "username": "clerk2", "email": "clerk@example.com", "role": "Employee",
+               "status": "Active", "permissions": permissions}
+    if log_out_everywhere is not None:
+        payload["log_out_everywhere"] = log_out_everywhere
+    response = client.put(f"/auth/users/{clerk_id}", json=payload, headers=admin)
+    assert response.status_code == 200, response.text
+
+
+def test_a_renamed_user_stays_signed_in_unless_the_admin_logs_them_out():
+    reset_db()
+    client = TestClient(main.app)
+    admin = bearer(login(client, "admin"))
+    clerk_tokens = login(client, "clerk")
+
+    rename_clerk(client, admin)
+
+    assert client.get("/auth/me", headers=bearer(clerk_tokens)).json()["username"] == "clerk2"
+    refreshed = client.post("/auth/refresh", data={"refresh_token": clerk_tokens["refresh_token"]})
+    assert refreshed.status_code == 200 and refreshed.json()["username"] == "clerk2"
+
+
+def test_renaming_with_log_out_everywhere_ends_every_session():
+    reset_db()
+    client = TestClient(main.app)
+    admin = bearer(login(client, "admin"))
+    clerk_tokens = login(client, "clerk")
+
+    rename_clerk(client, admin, log_out_everywhere=True)
+
+    assert client.get("/auth/me", headers=bearer(clerk_tokens)).status_code == 401
+    assert client.post("/auth/refresh", data={"refresh_token": clerk_tokens["refresh_token"]}).status_code == 401
+    assert client.post("/auth/login", data={"username": "clerk2", "password": "pw123"}).status_code == 200

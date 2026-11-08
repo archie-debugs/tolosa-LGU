@@ -4,7 +4,8 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.orm import Session
 
 import Backends.backend.database as database
 import Backends.backend.schema as schema
@@ -137,3 +138,32 @@ def test_versioned_database_only_runs_upgrade(monkeypatch):
     schema.run_database_migrations()
 
     assert calls == [("upgrade", "head")]
+
+
+def test_deleting_a_user_keeps_their_handoffs_and_receipts(migration_engine):
+    # SQLite skips foreign keys unless asked; PostgreSQL always applies them.
+    event.listen(migration_engine, "connect", lambda connection, _: connection.execute("PRAGMA foreign_keys=ON"))
+    models.Base.metadata.create_all(bind=migration_engine)
+    command.stamp(ALEMBIC_CFG, HEAD)
+    # Back to the schema that refused the delete, then forward through the fix.
+    command.downgrade(ALEMBIC_CFG, "0036_temporary_documents")
+    command.upgrade(ALEMBIC_CFG, "head")
+
+    with Session(migration_engine) as db:
+        sender, receiver = models.Office(name="Sender"), models.Office(name="Receiver")
+        user = models.User(username="leaving", hashed_password="x")
+        document = models.Document(tracking_number="T-1", title="One")
+        db.add_all([sender, receiver, user, document])
+        db.flush()
+        handoff = models.DocumentHandoff(document_id=document.id, sending_office_id=sender.id, receiving_office_id=receiver.id,
+                                         sending_employee_id=user.id, status="Received")
+        db.add(handoff)
+        db.flush()
+        db.add(models.DocumentReceipt(document_id=document.id, office_id=receiver.id, handoff_id=handoff.id, confirmed_by_user_id=user.id))
+        db.commit()
+
+        db.delete(user)
+        db.commit()
+
+        assert db.query(models.DocumentHandoff.sending_employee_id).all() == [(None,)]
+        assert db.query(models.DocumentReceipt.confirmed_by_user_id).all() == [(None,)]

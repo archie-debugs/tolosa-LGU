@@ -59,6 +59,7 @@ def list_public_documents(
     if search and search.strip():
         tracking_numbers = tracking_numbers_for_query(search)
         like = f"%{search.strip().lower()}%"
+        # Only what the page shows: internal fields (remarks, status, office, author) stay private.
         search_conditions = [
             models.Document.tracking_number.ilike(like),
             models.Document.document_number.ilike(like),
@@ -67,11 +68,6 @@ def list_public_documents(
             models.Document.description.ilike(like),
             models.Document.document_type.ilike(like),
             models.Document.category.ilike(like),
-            models.Document.current_office.ilike(like),
-            models.Document.status.ilike(like),
-            models.Document.remarks.ilike(like),
-            models.Document.author.ilike(like),
-            models.Document.session.ilike(like),
         ]
         if tracking_numbers:
             search_conditions.append(models.Document.tracking_number.in_(tracking_numbers))

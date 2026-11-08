@@ -67,3 +67,17 @@ def test_the_public_list_says_which_documents_have_a_pdf(tmp_path):
     items = client.get("/public/documents").json()["items"]
 
     assert {item["id"]: item["has_pdf"] for item in items} == {ids[1]: True, ids[4]: False, ids[5]: False}
+
+
+def test_public_search_does_not_match_internal_fields(tmp_path):
+    ids = seed(tmp_path)
+    with SessionLocal() as db:
+        doc = db.get(models.Document, ids[1])
+        doc.remarks, doc.status, doc.current_office, doc.author, doc.session = "secretnote", "secretstatus", "secretoffice", "secretauthor", "secretsession"
+        doc.description = "public summary"
+        db.commit()
+    client = TestClient(main.app)
+
+    for word in ("secretnote", "secretstatus", "secretoffice", "secretauthor", "secretsession"):
+        assert client.get("/public/documents", params={"search": word}).json()["items"] == [], word
+    assert [item["id"] for item in client.get("/public/documents", params={"search": "summary"}).json()["items"]] == [ids[1]]

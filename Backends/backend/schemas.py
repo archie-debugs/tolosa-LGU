@@ -148,7 +148,7 @@ class DocumentHandoffResponse(BaseModel):
     document_id: int
     sending_office_id: int
     receiving_office_id: int
-    sending_employee_id: int
+    sending_employee_id: Optional[int] = None
     sent_at: datetime
     status: str
     created_at: datetime
