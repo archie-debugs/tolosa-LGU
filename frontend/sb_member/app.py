@@ -23,6 +23,7 @@ if not hasattr(ft, "Icons") and hasattr(ft, "icons"):
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.screen import is_phone
+from frontend.sb_member.dashboard import build as build_dashboard
 from frontend.theme import CANVAS, PRIMARY
 
 API_URL = os.getenv("SBMEM_BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
@@ -38,7 +39,7 @@ def main(page: ft.Page, session=None):
     token = None
     user = None
     permissions = set()
-    current_page = "Today's Documents"
+    current_page = "Dashboard"
     # Bumped on every render, so a refresh loop stops once its view is no longer shown.
     render_generation = 0
 
@@ -242,6 +243,22 @@ def main(page: ft.Page, session=None):
         # Council sessions are served by the main backend only, not the SB Member backend.
         return build_sessions_view(page, card, lambda method, path, **kwargs: api(method, path, base_url=MAIN_BACKEND_URL, **kwargs), can_manage=False)
 
+    def open_screen(label):
+        nonlocal current_page
+        current_page = label
+        render()
+
+    def open_document(document):
+        # A MOA has no document record, only its file, as on Today's Documents.
+        if document.get("kind") != "MOA":
+            document_dialog(document)
+        elif can("download_documents") and document.get("attachments"):
+            download_document(document, document["attachments"][0])
+
+    def dashboard_view():
+        return build_dashboard(page, card, api, lambda method, path, **kwargs: api(method, path, base_url=MAIN_BACKEND_URL, **kwargs),
+                               user, open_screen, open_document)
+
     def account_view():
         profile_rows = []
         for label, value in [
@@ -304,6 +321,7 @@ def main(page: ft.Page, session=None):
         nav_items = []
         if can("view_documents"):
             nav_items = [
+                (ft.Icons.DASHBOARD_OUTLINED, "Dashboard", screen("Dashboard", dashboard_view), "Workspace"),
                 (ft.Icons.EVENT_NOTE_OUTLINED, "Today's Documents", screen("Today's Documents", todays_documents_view), "Workspace"),
                 (ft.Icons.EVENT_AVAILABLE_OUTLINED, "Sessions", screen("Sessions", sessions_view), "Workspace"),
             ]
