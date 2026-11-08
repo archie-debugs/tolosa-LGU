@@ -2,6 +2,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 import Backends.backend.main as main
 import Backends.backend.routes.documents as documents_routes
@@ -305,6 +306,8 @@ def test_multiple_registration_applies_the_same_office_and_naming_rules(client):
     assert confirm(client, clerk, spec, current_office="SB Secretariat").status_code == 403
 
     admin = headers_for(client, "admin")
+    # Only the uploader may register a file, so the admin uploads their own.
+    spec = [{"tmp_name": upload(client, admin, "a.pdf", PDF), "series_year": 2025}]
     assert confirm(client, admin, spec, current_office="SB Secretariat").status_code == 400
     chosen = confirm(client, admin, spec, office_id=office_id("Office of the Mayor")).json()
     assert stored(chosen["documents"][0]["id"])[0].current_office == "Office of the Mayor"
@@ -406,3 +409,53 @@ def test_the_single_form_registering_its_file_is_not_held_to_file_names(client):
     result = confirm(client, headers, [spec], document_type="Ordinance").json()
 
     assert result["registered"] == 1, result
+
+
+def test_upload_links_use_the_address_the_browser_reaches(client, monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.test")
+    created = client.post("/documents/uploads/create_tmp_uploads", json={"files": [{"filename": "a.pdf"}]}, headers=headers_for(client, "clerk"))
+
+    assert created.json()["files"][0]["upload_url"].startswith("https://example.test/documents/uploads/tmp/")
+
+
+def test_only_the_uploader_can_register_or_overwrite_an_upload(client):
+    clerk, admin = headers_for(client, "clerk"), headers_for(client, "admin")
+    tmp = upload(client, clerk, "a.pdf", PDF)
+    spec = [{"tmp_name": tmp, "series_year": 2025}]
+
+    taken = confirm(client, admin, spec, office_id=office_id("Office of the Mayor")).json()
+    assert taken["registered"] == 0 and taken["errors"][0]["reason"] == "Temporary file not found"
+    assert client.put(f"/documents/uploads/tmp/{tmp}", content=b"%PDF-1.4 swapped", headers=admin).status_code == 403
+
+    mine = confirm(client, clerk, spec).json()
+    assert mine["registered"] == 1, mine
+    with SessionLocal() as db:
+        attachment = db.query(models.Attachment).filter_by(document_id=mine["documents"][0]["id"]).one()
+        assert open(attachment.stored_path, "rb").read() == PDF
+
+
+def test_a_failed_permanent_delete_keeps_the_file(client, tmp_path):
+    stored_file = tmp_path / "kept.pdf"
+    stored_file.write_bytes(PDF)
+    with SessionLocal() as db:
+        doc = models.Document(tracking_number="DOC-KEEP", title="Kept", archived=True)
+        db.add(doc)
+        db.flush()
+        db.add(models.Attachment(document_id=doc.id, original_filename="kept.pdf", stored_path=str(stored_file)))
+        db.commit()
+        doc_id = doc.id
+    headers = headers_for(client, "admin")
+
+    def refuse(session):
+        raise RuntimeError("database unavailable")
+
+    event.listen(SessionLocal, "before_commit", refuse)
+    try:
+        response = TestClient(main.app, raise_server_exceptions=False).delete(f"/documents/{doc_id}/permanent", headers=headers)
+    finally:
+        event.remove(SessionLocal, "before_commit", refuse)
+
+    assert response.status_code == 500
+    assert stored_file.exists()
+    assert client.delete(f"/documents/{doc_id}/permanent", headers=headers).status_code == 200
+    assert not stored_file.exists()
