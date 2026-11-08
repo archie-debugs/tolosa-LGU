@@ -96,11 +96,6 @@ def _check_grantable(admin: models.User, role: str, permissions, already=()) -> 
         raise HTTPException(status_code=403, detail=f"You can only give permissions you have yourself: {', '.join(not_held)}")
 
 
-def _office_only(role: str, has_office: bool, permissions):
-    """Office employees work only on their office's documents, so they keep only office permissions."""
-    return sorted(set(permissions) & OFFICE_WORKFLOW_PERMISSIONS) if role == "Employee" and has_office else permissions
-
-
 def _revoke_user_sessions(db: Session, user_id: int, reason: str) -> None:
     db.query(models.UserSession).filter(
         models.UserSession.user_id == user_id,
@@ -176,7 +171,6 @@ async def register_user(
         if not office or not office.is_active:
             raise HTTPException(status_code=400, detail="An active office is required")
 
-    permission_list = _office_only(normalized_role, office is not None, permission_list)
     if normalized_role != "Super Administrator" and "permissions" in data:
         _check_grantable(current_admin, normalized_role, permission_list)
 
@@ -320,7 +314,7 @@ def update_user(
         require_permission(current_admin, "assign_roles")
     office_id_supplied = "office_id" in supplied_fields
     next_office_id = payload.office_id if office_id_supplied else user.office_id
-    requested_permissions = _office_only(normalized_role, next_office_id is not None, validate_permissions(payload.permissions))
+    requested_permissions = validate_permissions(payload.permissions)
     if not target_is_super_admin and set(requested_permissions) != normalize_permissions(user.permissions):
         require_permission(current_admin, "manage_permissions")
         _check_grantable(current_admin, normalized_role, requested_permissions, already=normalize_permissions(user.permissions))

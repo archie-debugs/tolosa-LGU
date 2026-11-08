@@ -730,8 +730,8 @@ def test_user_offices_support_assignment_update_and_unassigned_users():
     assert office_user["office_id"] == office_id
     assert office_user["department"] == "SB Secretariat"
     office_permissions = office_user["permissions"]
-    # Only the office-workflow permissions the admin selected are kept.
-    assert set(office_permissions) == {"view_office_documents"}
+    # An office employee keeps general permissions as well as office ones.
+    assert set(office_permissions) == {"register_documents", "manage_permissions", "view_office_documents"}
 
     updated = client.put(
         f"/auth/users/{office_user['id']}",
