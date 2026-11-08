@@ -47,3 +47,37 @@ def test_a_super_administrator_keeps_admin_panel_and_the_users_cards(monkeypatch
     words = shown(monkeypatch, "admin")
 
     assert "Admin Panel" in words and "Total Users" in words
+
+
+def add_documents():
+    with SessionLocal() as db:
+        for n, (status, archived) in enumerate((("Pending", False), ("Pending", False), ("Completed", False), ("Pending", True)), start=1):
+            db.add(models.Document(tracking_number=f"T-{n}", title=f"Doc {n}", status=status, archived=archived))
+        db.commit()
+
+
+def card_values(words, title):
+    return words[words.index(title) + 1]
+
+
+def test_an_employee_without_view_analytics_sees_the_real_document_counts(monkeypatch):
+    reset_db(["view_dashboard"])
+    add_documents()
+    words = shown(monkeypatch, "clerk")
+
+    assert [card_values(words, t) for t in ("Total Documents", "Active Documents", "Pending", "Completed", "Archived")] == ["4", "3", "3", "1", "1"]
+
+
+def test_the_dashboard_counts_need_view_dashboard_and_give_user_counts_only_with_view_users():
+    client = TestClient(main.app)
+    reset_db(["view_documents"])
+    clerk = {"Authorization": f"Bearer {login(client, 'clerk')['access_token']}"}
+    assert client.get("/analytics/dashboard", headers=clerk).status_code == 403
+
+    reset_db(["view_dashboard"])
+    clerk = {"Authorization": f"Bearer {login(client, 'clerk')['access_token']}"}
+    assert "users" not in client.get("/analytics/dashboard", headers=clerk).json()
+
+    reset_db(["view_dashboard", "view_users"])
+    clerk = {"Authorization": f"Bearer {login(client, 'clerk')['access_token']}"}
+    assert client.get("/analytics/dashboard", headers=clerk).json()["users"]["total"] == 2

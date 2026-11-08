@@ -15,7 +15,7 @@ from .. import business, models, stages
 from ..authentication import get_current_user
 from ..core import record_audit_log, require_permission
 from ..database import get_db
-from .council_sessions import HELD, MANAGE, _session, members_in_office, session_title
+from .council_sessions import HELD, MANAGE, _session, members_in_office, readable_session, session_title
 from .measure_stages import _committee_for, _set_enacted_number, add_stage_change
 
 router = APIRouter(prefix="/council/sessions", tags=["order-of-business"])
@@ -175,7 +175,7 @@ def _audit(db, user, action, session, details):
 @router.get("/{session_id}/business")
 def get_business(session_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     require_permission(current_user, "view_documents")
-    return _business(db, _session(db, session_id))
+    return _business(db, readable_session(db, session_id, current_user))
 
 
 @router.get("/{session_id}/business/suggestions")

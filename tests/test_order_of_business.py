@@ -262,9 +262,13 @@ def test_readers_can_see_the_order_of_business_but_not_change_it_and_drafts_dele
     add_item(client, clerk, session, "other", title="Privilege speech")
     member = headers_for(client, "member")
 
+    # A draft's order of business is hidden from readers until the session is scheduled.
+    assert client.get(f"/council/sessions/{session['id']}/business", headers=member).status_code == 404
+    assert set_status(client, clerk, session, "Scheduled").status_code == 200
     assert client.get(f"/council/sessions/{session['id']}/business", headers=member).status_code == 200
     assert add_item(client, member, session, "other", title="Another").status_code == 403
     assert client.get(f"/council/sessions/{session['id']}/business/suggestions", headers=member).status_code == 403
+    assert set_status(client, clerk, session, "Draft").status_code == 200
     assert client.delete(f"/council/sessions/{session['id']}", headers=clerk).status_code == 200
     with SessionLocal() as db:
         assert db.query(models.SessionItem).count() == 0

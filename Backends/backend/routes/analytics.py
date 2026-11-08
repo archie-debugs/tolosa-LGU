@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..authentication import get_current_user
-from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, require_permission
+from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, require_permission, user_has_permission
 from ..database import get_db
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -135,6 +135,40 @@ def _recent_security_events(db: Session) -> list[dict]:
     ]
 
 
+def _document_counts(documents) -> dict:
+    return {
+        "total_documents": len(documents),
+        "active_documents": sum(1 for doc in documents if not _to_bool(doc.archived)),
+        "pending_documents": sum(1 for doc in documents if _norm_status(doc.status) == "Pending"),
+        "completed_documents": sum(1 for doc in documents if _norm_status(doc.status) == "Completed"),
+        "archived_documents": sum(1 for doc in documents if _to_bool(doc.archived)),
+    }
+
+
+def _user_counts(db) -> dict:
+    return {
+        "total": db.query(func.count(models.User.id)).scalar() or 0,
+        "active": db.query(func.count(models.User.id)).filter(
+            models.User.is_active.is_(True), models.User.status == "Active"
+        ).scalar() or 0,
+        "inactive": db.query(func.count(models.User.id)).filter(
+            or_(models.User.is_active.is_(False), models.User.status != "Active")
+        ).scalar() or 0,
+        "employees": db.query(func.count(models.User.id)).filter(models.User.role == "Employee").scalar() or 0,
+        "sb_members": db.query(func.count(models.User.id)).filter(models.User.role == "SB Member").scalar() or 0,
+    }
+
+
+@router.get("/dashboard")
+def get_dashboard_counts(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """The home Dashboard's cards: document counts, and user counts only for those who may view users."""
+    require_permission(current_user, "view_dashboard")
+    counts = {"overview": _document_counts(db.query(models.Document).all())}
+    if user_has_permission(current_user, "view_users"):
+        counts["users"] = _user_counts(db)
+    return counts
+
+
 @router.get("")
 @router.get("/")
 @router.get("/overview")
@@ -178,12 +212,12 @@ def get_analytics_overview(
         except Exception:
             pass
 
-    total_documents = len(documents)
-    archived_documents = sum(1 for doc in documents if _to_bool(doc.archived))
-    active_documents = sum(1 for doc in documents if not _to_bool(doc.archived))
-
-    pending_documents = sum(1 for doc in documents if _norm_status(doc.status) == "Pending")
-    completed_documents = sum(1 for doc in documents if _norm_status(doc.status) == "Completed")
+    counts = _document_counts(documents)
+    total_documents = counts["total_documents"]
+    archived_documents = counts["archived_documents"]
+    active_documents = counts["active_documents"]
+    pending_documents = counts["pending_documents"]
+    completed_documents = counts["completed_documents"]
 
     now = datetime.now(timezone.utc)
     start_of_month = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
@@ -212,17 +246,7 @@ def get_analytics_overview(
         key = doc.category or "Unspecified"
         document_categories[key] = document_categories.get(key, 0) + 1
 
-    user_metrics = {
-        "total": db.query(func.count(models.User.id)).scalar() or 0,
-        "active": db.query(func.count(models.User.id)).filter(
-            models.User.is_active.is_(True), models.User.status == "Active"
-        ).scalar() or 0,
-        "inactive": db.query(func.count(models.User.id)).filter(
-            or_(models.User.is_active.is_(False), models.User.status != "Active")
-        ).scalar() or 0,
-        "employees": db.query(func.count(models.User.id)).filter(models.User.role == "Employee").scalar() or 0,
-        "sb_members": db.query(func.count(models.User.id)).filter(models.User.role == "SB Member").scalar() or 0,
-    }
+    user_metrics = _user_counts(db)
 
     processing_days = []
     for doc in documents:

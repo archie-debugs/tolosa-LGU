@@ -169,12 +169,34 @@ def test_moving_the_date_drops_marks_of_members_no_longer_in_office(client, coun
 
 def test_sb_members_can_read_sessions_but_not_change_them(client, council_term):
     term, _ = council_term
-    session = new_session(client, headers_for(client, "admin"), term).json()
+    admin = headers_for(client, "admin")
+    session = new_session(client, admin, term).json()
+    assert set_status(client, admin, session, "Scheduled").status_code == 200
     member = headers_for(client, "member")
 
     assert client.get(f"/council/sessions/{session['id']}", headers=member).status_code == 200
     assert new_session(client, member, term).status_code == 403
     assert set_status(client, member, session, "Scheduled").status_code == 403
+
+
+def test_draft_sessions_are_hidden_from_those_who_cannot_manage_sessions(client, council_term):
+    term, _ = council_term
+    admin = headers_for(client, "admin")
+    draft = new_session(client, admin, term, held_on="2026-10-27").json()
+    scheduled = new_session(client, admin, term, held_on="2026-10-29").json()
+    assert set_status(client, admin, scheduled, "Scheduled").status_code == 200
+    member = headers_for(client, "member")
+
+    listed = [item["id"] for item in client.get("/council/sessions", headers=member).json()["sessions"]]
+    assert listed == [scheduled["id"]]
+    assert client.get(f"/council/sessions/{draft['id']}", headers=member).status_code == 404
+    assert client.get(f"/council/sessions/{draft['id']}/business", headers=member).status_code == 404
+    assert client.get(f"/council/sessions/{scheduled['id']}/business", headers=member).status_code == 200
+
+    # Staff who manage sessions still see and open drafts.
+    clerk = headers_for(client, "clerk")
+    assert {item["id"] for item in client.get("/council/sessions", headers=clerk).json()["sessions"]} == {draft["id"], scheduled["id"]}
+    assert client.get(f"/council/sessions/{draft['id']}", headers=clerk).status_code == 200
 
 
 def test_ordinals():
