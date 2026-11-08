@@ -79,6 +79,7 @@ def open_document_details(
     can_download=False,
     can_print=False,
     can_change_stage=False,
+    can_change_visibility=False,
     open_pass=None,
     open_edit=None,
     preview=None,
@@ -96,6 +97,7 @@ def open_document_details(
     `api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
     The backend decides what the user's office can do now (receive, pass on, record an
     action); the `can_*` flags only cover what the user's permissions allow.
+    `can_change_visibility` adds Make public / Make private (not on a scan or an archived document).
     `qr_token` is set when the document was opened by scanning its QR code; receiving needs it.
     `open_pass` is given only where passing is done (the Office Dashboard and a QR scan); elsewhere an
     office that may pass the document is pointed to the Office Dashboard instead.
@@ -177,6 +179,16 @@ def open_document_details(
             changed()
         except Exception as exc:
             notify(f"Unable to record {action_type}: {exc}", error=True)
+        reload()
+
+    def set_public(public):
+        tracking_number = (state["payload"].get("document") or {}).get("tracking_number") or ""
+        try:
+            api("PUT", f"/documents/{document_id}", json={"is_public": public})
+            notify(f"{tracking_number} is now {'public' if public else 'private'}.")
+            changed()
+        except Exception as exc:
+            notify(f"Unable to make {tracking_number} {'public' if public else 'private'}: {exc}", error=True)
         reload()
 
     def set_state(update=True, **changes):
@@ -266,6 +278,10 @@ def open_document_details(
             buttons.append(ft.OutlinedButton("Preview", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _: preview(summary())))
         if attachments and can_download and download and not scan:
             buttons.append(ft.OutlinedButton("Download", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=lambda _: download(summary())))
+        if can_change_visibility and "is_public" in document and not document.get("archived") and not scan:
+            public = bool(document.get("is_public"))
+            buttons.append(ft.OutlinedButton("Make private" if public else "Make public", icon=ft.Icons.PUBLIC_OFF if public else ft.Icons.PUBLIC,
+                                             on_click=lambda _: set_public(not public)))
         if can_edit and open_edit and not document.get("archived") and not scan:
             buttons.append(ft.OutlinedButton("Edit", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda _: close_then(open_edit)))
         if not buttons:
