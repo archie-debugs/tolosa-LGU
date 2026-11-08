@@ -1228,7 +1228,8 @@ def test_super_admin_office_management_and_inactive_assignment_retention():
     )
     assert internal_user.status_code == 200, internal_user.text
     assert internal_user.json()["office_id"] is None
-    assert "edit_documents" in internal_user.json()["permissions"]
+    # An employee gets only the permissions chosen for them; none chosen means none.
+    assert internal_user.json()["permissions"] == []
 
     permission_account = client.post(
         "/auth/register",
@@ -1637,7 +1638,8 @@ def test_employee_user_management_permissions_are_enforced_server_side():
             username="manager",
             hashed_password=get_password_hash("managerpass"),
             role="Employee",
-            permissions="['view_users', 'create_users', 'edit_users', 'manage_permissions', 'reset_passwords', 'activate_users', 'deactivate_users', 'delete_users', 'assign_roles']",
+            # A manager can only give permissions they have, so they hold view_documents too.
+            permissions="['view_users', 'create_users', 'edit_users', 'manage_permissions', 'reset_passwords', 'activate_users', 'deactivate_users', 'delete_users', 'assign_roles', 'view_documents']",
             status="Active",
             is_active=True,
         )
@@ -1784,7 +1786,7 @@ def test_role_and_permission_changes_have_dedicated_audit_events():
             username="permission-manager",
             hashed_password=get_password_hash("managerpass"),
             role="Employee",
-            permissions="['edit_users', 'assign_roles', 'manage_permissions']",
+            permissions="['edit_users', 'assign_roles', 'manage_permissions', 'view_documents', 'download_documents']",
             status="Active",
             is_active=True,
         )

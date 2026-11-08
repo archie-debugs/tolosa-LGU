@@ -23,6 +23,7 @@ from ..core import (
     OFFICE_WORKFLOW_PERMISSIONS,
     require_permission,
     require_user_management_permission,
+    user_has_permission,
 )
 from ..authentication import get_current_user, get_current_user_for_user_management, oauth2_scheme, session_user
 from ..auth_jwt import create_access_token, create_refresh_token, decode_access_token, decode_refresh_token
@@ -82,6 +83,24 @@ def validate_reset_password(password: str) -> str:
     return normalized
 
 
+def _check_grantable(admin: models.User, role: str, permissions, already=()) -> None:
+    """Who may give what: "*" belongs to the Super Administrator role alone, and anyone else
+    may only give permissions they have themselves (those the account already had are kept)."""
+    if role != "Super Administrator" and "*" in permissions:
+        raise HTTPException(status_code=400, detail="All permissions (*) come only with the Super Administrator role")
+    beyond = sorted(set(permissions) - set(already) - {"*"})
+    if beyond and not user_has_permission(admin, "manage_permissions"):
+        raise HTTPException(status_code=403, detail="You need the Manage Permissions permission to give permissions")
+    not_held = [permission for permission in beyond if not user_has_permission(admin, permission)]
+    if not_held:
+        raise HTTPException(status_code=403, detail=f"You can only give permissions you have yourself: {', '.join(not_held)}")
+
+
+def _office_only(role: str, has_office: bool, permissions):
+    """Office employees work only on their office's documents, so they keep only office permissions."""
+    return sorted(set(permissions) & OFFICE_WORKFLOW_PERMISSIONS) if role == "Employee" and has_office else permissions
+
+
 def _revoke_user_sessions(db: Session, user_id: int, reason: str) -> None:
     db.query(models.UserSession).filter(
         models.UserSession.user_id == user_id,
@@ -115,6 +134,13 @@ async def register_user(
     if not username or not password or not full_name or not email:
         raise HTTPException(status_code=400, detail="Full name, email, username, and password are required")
 
+    username = str(username).strip()
+    email = str(email).strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Full name, email, username, and password are required")
+    if not EMAIL_PATTERN.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    validate_reset_password(password)
     normalized_role = normalize_user_role(role)
     if normalized_role not in {"Super Administrator", "Employee", "SB Member"}:
         raise HTTPException(status_code=400, detail="Invalid role")
@@ -129,6 +155,9 @@ async def register_user(
         permission_list = validate_permissions(permissions)
     elif normalized_role == "Employee" and office_assignment_requested:
         permission_list = sorted(OFFICE_WORKFLOW_PERMISSIONS)
+    elif normalized_role == "Employee":
+        # An employee gets only what was chosen for them; none chosen means none.
+        permission_list = []
     else:
         permission_list = get_default_permissions_for_role(normalized_role)
     if normalized_role == "Super Administrator":
@@ -147,9 +176,9 @@ async def register_user(
         if not office or not office.is_active:
             raise HTTPException(status_code=400, detail="An active office is required")
 
-    if normalized_role == "Employee" and office is not None:
-        # Office employees get only office-workflow permissions, limited to those the admin chose.
-        permission_list = sorted(set(permission_list) & OFFICE_WORKFLOW_PERMISSIONS)
+    permission_list = _office_only(normalized_role, office is not None, permission_list)
+    if normalized_role != "Super Administrator" and "permissions" in data:
+        _check_grantable(current_admin, normalized_role, permission_list)
 
     try:
         new_user = models.User(
@@ -278,6 +307,8 @@ def update_user(
         raise HTTPException(status_code=400, detail="Status must be Active or Inactive")
     if not payload.username.strip() or not payload.full_name.strip() or not payload.email.strip():
         raise HTTPException(status_code=400, detail="Full name, email, and username are required")
+    if not EMAIL_PATTERN.match(payload.email.strip()):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
 
     supplied_fields = getattr(payload, "model_fields_set", None)
     if supplied_fields is None:
@@ -287,12 +318,12 @@ def update_user(
 
     if normalized_role != normalize_user_role(user.role):
         require_permission(current_admin, "assign_roles")
-    requested_permissions = validate_permissions(payload.permissions)
-    if not target_is_super_admin and set(requested_permissions) != normalize_permissions(user.permissions):
-        require_permission(current_admin, "manage_permissions")
-
     office_id_supplied = "office_id" in supplied_fields
     next_office_id = payload.office_id if office_id_supplied else user.office_id
+    requested_permissions = _office_only(normalized_role, next_office_id is not None, validate_permissions(payload.permissions))
+    if not target_is_super_admin and set(requested_permissions) != normalize_permissions(user.permissions):
+        require_permission(current_admin, "manage_permissions")
+        _check_grantable(current_admin, normalized_role, requested_permissions, already=normalize_permissions(user.permissions))
     office_changed = next_office_id != user.office_id
     office = user.office if not office_changed else None
     if office_changed:

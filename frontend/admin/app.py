@@ -162,9 +162,11 @@ from frontend.admin.screen import DESKTOP, dialog_width, is_phone, screen_size
 from frontend.admin.document_edit import open_edit_document_dialog as open_edit_dialog
 from frontend.admin.audit_logs import build_audit_logs_view
 from frontend.admin.analytics import build_analytics_view
+from frontend.admin.permission_picker import build_permission_list, permission_key
 from frontend.admin.users_roles import (
     OFFICE_EMPLOYEE_PERMISSION_GROUP,
     EMPLOYEE_PERMISSION_GROUPS,
+    SB_MEMBER_PERMISSIONS,
     build_offices_table,
     build_users_roles_table,
     build_users_roles_view,
@@ -3010,40 +3012,18 @@ def main(page: ft.Page, session=None):
 
         permission_area = ft.Column([], spacing=8)
         selected_create_permissions = set()
-        create_master_check = ft.Checkbox(label="Select All Permissions", tristate=True, scale=1.05)
+        picker_state = {}
         office_permission_labels = OFFICE_EMPLOYEE_PERMISSION_GROUP["Office Workflow"]
 
         def selected_role():
             return "Employee" if employee_only else role_choice.value
 
-        def create_permission_key(label):
-            return label.strip().lower().replace(" ", "_")
+        def has_office():
+            return office_choice.value != office_placeholder
 
         def create_permission_groups():
-            groups = dict(EMPLOYEE_PERMISSION_GROUPS)
-            if selected_role() == "Employee" and office_choice.value != office_placeholder:
-                groups.update(OFFICE_EMPLOYEE_PERMISSION_GROUP)
-            return groups
-
-        def update_create_master():
-            groups = create_permission_groups()
-            total = sum(len(items) for items in groups.values())
-            count = sum(
-                create_permission_key(label) in selected_create_permissions
-                for labels in groups.values()
-                for label in labels
-            )
-            create_master_check.value = True if count == total else None if count else False
-
-        def set_all_create_permissions(event):
-            selected_create_permissions.clear()
-            if event.control.value:
-                selected_create_permissions.update(
-                    create_permission_key(label)
-                    for labels in create_permission_groups().values()
-                    for label in labels
-                )
-            render_permission_section()
+            # Office employees keep only office permissions (the backend saves only those).
+            return dict(OFFICE_EMPLOYEE_PERMISSION_GROUP) if has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
 
         def render_permission_section():
             permission_area.controls.clear()
@@ -3052,11 +3032,10 @@ def main(page: ft.Page, session=None):
                 office_choice.value = office_placeholder
             sb_position_block.visible = selected_role() == "SB Member"
             if employee_only:
-                has_office = office_choice.value != office_placeholder
                 permission_area.controls.append(widgets.hint(
-                    "This employee will automatically receive access to:" if has_office else "Select an office to automatically assign the standard office permissions.",
+                    "This employee will automatically receive access to:" if has_office() else "Select an office to automatically assign the standard office permissions.",
                 ))
-                if has_office:
+                if has_office():
                     permission_area.controls.append(ft.Column([
                         ft.Row([
                             ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.GREEN_600),
@@ -3065,72 +3044,32 @@ def main(page: ft.Page, session=None):
                         for label in office_permission_labels
                     ], spacing=4))
             elif selected_role() == "Employee":
-                permission_groups = create_permission_groups()
-                permission_count = sum(len(items) for items in permission_groups.values())
-                permission_area.controls.append(widgets.hint("Control access to the features available to this employee."))
-                selected_count = sum(
-                    create_permission_key(label) in selected_create_permissions
-                    for labels in permission_groups.values()
-                    for label in labels
-                )
-                # wrap: on a phone the count goes under the checkbox instead of off the edge.
-                permission_area.controls.append(ft.Row([create_master_check, ft.Text(f"{selected_count} of {permission_count} permissions selected", size=12, color=widgets.muted_color())], spacing=12, wrap=True, run_spacing=0))
-                for section_name, perms in permission_groups.items():
-                    group_key = section_name
-                    group_count = sum(create_permission_key(perm) in selected_create_permissions for perm in perms)
-                    group_check = ft.Checkbox(label=f"Select All  •  {group_count} of {len(perms)} selected", tristate=True, value=True if group_count == len(perms) else None if group_count else False, on_change=lambda event, name=group_key: set_create_group(name, event))
-                    permission_area.controls.append(
-                        ft.Container(
-                            content=ft.ExpansionTile(
-                                title=ft.Text(section_name, weight=ft.FontWeight.BOLD, size=13),
-                                subtitle=ft.Text(f"{len(perms)} permissions", size=11),
-                                leading=ft.Icon(ft.Icons.FOLDER_OUTLINED, color=ft.Colors.BLUE_700),
-                                controls=[ft.Column([ft.Row([ft.Checkbox(label=perm, value=create_permission_key(perm) in selected_create_permissions, scale=0.9, on_change=lambda event, key=create_permission_key(perm): update_create_permission(key, event)),], spacing=0) for perm in perms], spacing=2), ft.Row([group_check], spacing=8)],
-                                initially_expanded=False,
-                                maintain_state=True,
-                                bgcolor=widgets.tone("#E8F1FD", "#1E2B38"),
-                                collapsed_bgcolor=widgets.card_color(),
-                            ),
-                            border=ft.border.all(1, widgets.line_color()),
-                            border_radius=10,
-                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                        )
-                    )
+                if has_office():
+                    office_keys = {permission_key(label) for label in office_permission_labels}
+                    # Choosing an office starts with all office permissions on.
+                    if not picker_state.get("office_defaults"):
+                        selected_create_permissions.update(office_keys)
+                        picker_state["office_defaults"] = True
+                    permission_area.controls.append(widgets.hint(
+                        "Office employees work on their office's documents, so they only get office permissions. "
+                        "To give general permissions such as registering documents, leave the office unassigned."
+                    ))
+                else:
+                    permission_area.controls.append(widgets.hint("Turn on what this employee may do. Nothing is on until you turn it on."))
+                permission_area.controls.append(build_permission_list(
+                    widgets, selected_create_permissions, create_permission_groups(), render_permission_section, picker_state,
+                ))
             else:
                 permission_area.controls.append(widgets.hint("SB Members get read-only access:"))
                 permission_area.controls.append(ft.Column([
-                    ft.Checkbox(label="View Documents", value=True, disabled=True),
-                    ft.Checkbox(label="Search Documents", value=True, disabled=True),
-                    ft.Checkbox(label="Filter Documents", value=True, disabled=True),
-                    ft.Checkbox(label="View Document Details", value=True, disabled=True),
-                    ft.Checkbox(label="Download Documents", value=True, disabled=True),
-                    ft.Checkbox(label="Print Documents", value=True, disabled=True),
+                    ft.Checkbox(label=label, value=True, disabled=True) for label in SB_MEMBER_PERMISSIONS
                 ], spacing=6))
                 permission_area.controls.append(widgets.hint("SB Members do not have QR Tracking, registration, editing, or user-management access."))
             page.update()
 
-        def update_create_permission(key, event):
-            if event.control.value:
-                selected_create_permissions.add(key)
-            else:
-                selected_create_permissions.discard(key)
-            update_create_master()
-            render_permission_section()
-
-        def set_create_group(group_name, event):
-            for label in create_permission_groups()[group_name]:
-                key = create_permission_key(label)
-                if event.control.value:
-                    selected_create_permissions.add(key)
-                else:
-                    selected_create_permissions.discard(key)
-            update_create_master()
-            render_permission_section()
-
         if role_choice is not None:
             role_choice.on_change = lambda _: render_permission_section()
         office_choice.on_change = lambda _: render_permission_section()
-        create_master_check.on_change = set_all_create_permissions
         render_permission_section()
 
         def create_account(_):
@@ -3141,6 +3080,10 @@ def main(page: ft.Page, session=None):
 
             if not password.value:
                 error_message.value = "Password is required."
+                page.update()
+                return
+            if len(password.value) < 8:
+                error_message.value = "Password must be at least 8 characters."
                 page.update()
                 return
 
@@ -3183,12 +3126,13 @@ def main(page: ft.Page, session=None):
             if selected_role() == "SB Member":
                 payload["sb_position"] = sb_position_choice.value
             available_permissions = {
-                create_permission_key(label)
+                permission_key(label)
                 for labels in create_permission_groups().values()
                 for label in labels
             }
             permissions = sorted(selected_create_permissions & available_permissions)
-            if not employee_only and (permissions or selected_office):
+            # Always sent for an employee, so turning nothing on means no permissions.
+            if not employee_only and selected_role() == "Employee":
                 payload["permissions"] = permissions
 
             try:
@@ -3347,11 +3291,6 @@ def main(page: ft.Page, session=None):
             visible=user.get("role") == "SB Member",
         )
 
-        def role_changed(_):
-            sb_position_choice.visible = role_choice.value == "SB Member"
-            page.update()
-
-        role_choice.on_change = role_changed
         office_choice = ft.Dropdown(
             label="Department/Office",
             options=[ft.dropdown.Option("Unassigned")] + [
@@ -3370,24 +3309,8 @@ def main(page: ft.Page, session=None):
             width=270,
             autofocus=False,
         )
-        permissions_area = ft.Column([], spacing=8)
         error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
-        permission_groups = dict(EMPLOYEE_PERMISSION_GROUPS)
-        if user.get("role") == "Employee" and user.get("office_id") is not None:
-            permission_groups.update(OFFICE_EMPLOYEE_PERMISSION_GROUP)
-        group_descriptions = {
-            "Dashboard": "Control access to dashboard information.",
-            "Documents": "Control actions employees can perform on legislative documents.",
-            "QR Code": "Control QR code generation, printing, and tracking access.",
-            "Today's Documents": "Let this employee set the documents SB Members see for the day.",
-            "Users & Roles": "Control employee access to user and role administration.",
-            "Members & Committees": "Let this employee keep the SB member roster, terms and committees up to date.",
-            "Sessions": "Let this employee add SB sessions, move them to held, and record or correct attendance.",
-            "Audit Logs": "Control access to system activity records.",
-            "Analytics": "Control access to analytics and reports.",
-            "Office Workflow": "Control this employee's access to future office document functions.",
-        }
-        permission_key = lambda label: label.strip().lower().replace(" ", "_")
+        widgets = TrackingWidgets(page)
         raw_permissions = user.get("permissions") or []
         if isinstance(raw_permissions, str):
             try:
@@ -3397,316 +3320,60 @@ def main(page: ft.Page, session=None):
                     raw_permissions = ast.literal_eval(raw_permissions)
                 except (SyntaxError, ValueError):
                     raw_permissions = [raw_permissions]
-        selected_permissions = {permission_key(str(item)) for item in raw_permissions}
-        permission_checks = {}
-        group_checks = {}
-        permission_cards = ft.Column(spacing=8, expand=False)
-        permission_search = ft.TextField(label="Search permissions...", prefix_icon=ft.Icons.SEARCH, dense=True)
-        permission_summary = ft.Text(size=12, color=ft.Colors.BLUE_GREY_600)
-        master_check = ft.Checkbox(label="Select All Permissions", tristate=True, scale=1.05)
-        rendering_permissions = False
-        expanded_groups = set()
-        group_switchers = {}
-        group_arrows = {}
+        original_permissions = {permission_key(str(item)) for item in raw_permissions}
+        selected_permissions = set(original_permissions)
+        picker_state = {}
+        permission_cards = ft.Column(spacing=8)
 
-        def update_permission_state():
-            nonlocal rendering_permissions
-            if rendering_permissions:
-                return
-            rendering_permissions = True
-            selected_count = sum(1 for checkbox in permission_checks.values() if checkbox.value)
-            total_count = len(permission_checks)
-            permission_summary.value = f"{selected_count} of {total_count} permissions selected"
-            master_check.value = True if selected_count == total_count and total_count else None if selected_count else False
-            for group_name, labels in permission_groups.items():
-                count = sum(1 for label in labels if permission_checks[permission_key(label)].value)
-                group_checks[group_name].value = True if count == len(labels) else None if count else False
-                group_checks[group_name].label = f"Select All  •  {count} of {len(labels)} selected"
-            rendering_permissions = False
+        def edit_has_office():
+            return role_choice.value == "Employee" and office_choice.value not in (None, "", "Unassigned")
 
-        def set_group_permissions(group_name, value):
-            nonlocal rendering_permissions
-            rendering_permissions = True
-            for label in permission_groups[group_name]:
-                permission_checks[permission_key(label)].value = bool(value)
-            rendering_permissions = False
-            render_permission_cards()
+        def edit_permission_groups():
+            # Office employees keep only office permissions (the backend saves only those).
+            return dict(OFFICE_EMPLOYEE_PERMISSION_GROUP) if edit_has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
 
-        def set_all_permissions(value):
-            nonlocal rendering_permissions
-            rendering_permissions = True
-            for checkbox in permission_checks.values():
-                checkbox.value = bool(value)
-            rendering_permissions = False
-            render_permission_cards()
+        def shown_keys():
+            return {permission_key(label) for labels in edit_permission_groups().values() for label in labels}
 
         def render_permission_cards(_=None):
+            sb_position_choice.visible = role_choice.value == "SB Member"
             permission_cards.controls.clear()
             if role_choice.value == "Super Administrator":
-                permission_cards.controls.append(ft.Text("Full system access. Super Administrator permissions cannot be reduced here.", size=12, color=ft.Colors.BLUE_GREY_600))
-                update_permission_state()
-                page.update()
-                return
-            search_text = (permission_search.value or "").strip().lower()
-            for group_name, labels in permission_groups.items():
-                matching_labels = [label for label in labels if not search_text or search_text in label.lower() or search_text in group_name.lower()]
-                if not matching_labels:
-                    continue
-                permission_list = ft.Column(
-                    [
-                        ft.Checkbox(
-                            label=label,
-                            value=permission_checks[permission_key(label)].value,
-                            active_color=ft.Colors.BLUE_700,
-                            on_change=lambda event, key=permission_key(label): permission_changed(key, event),
-                        )
-                        for label in matching_labels
-                    ],
-                    spacing=2,
-                )
-                def toggle_group(_=None, name=group_name):
-                    if name in expanded_groups:
-                        expanded_groups.remove(name)
-                    else:
-                        expanded_groups.add(name)
-                    group_arrows[name].name = ft.Icons.KEYBOARD_ARROW_DOWN if name in expanded_groups else ft.Icons.KEYBOARD_ARROW_RIGHT
-                    group_switchers[name].content = group_body if name in expanded_groups else ft.Container(height=0)
-                    group_switchers[name].update()
-                    group_arrows[name].update()
-
-                group_header = ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN if group_name in expanded_groups else ft.Icons.KEYBOARD_ARROW_RIGHT, color=ft.Colors.BLUE_700),
-                            ft.Icon(ft.Icons.FOLDER_OUTLINED, color=ft.Colors.BLUE_700),
-                            ft.Column([
-                                ft.Text(group_name, weight=ft.FontWeight.BOLD, size=13),
-                                ft.Text(group_descriptions[group_name], size=11, color=ft.Colors.BLUE_GREY_600),
-                            ], spacing=2, expand=True),
-                            ft.Text(f"{sum(1 for label in labels if permission_checks[permission_key(label)].value)} / {len(labels)} selected", size=11, color=ft.Colors.BLUE_GREY_600),
-                        ],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=ft.Padding(left=12, top=8, right=12, bottom=8),
-                    bgcolor=ft.Colors.BLUE_GREY_50,
-                    on_click=toggle_group,
-                )
-                group_body = ft.Column(
-                    [
-                        ft.Row([group_checks[group_name], ft.Text(f"{len(labels)} permissions", size=11, color=ft.Colors.BLUE_GREY_600)], spacing=8),
-                        permission_list,
-                    ],
-                    spacing=6,
-                )
-                group_switcher = ft.AnimatedSwitcher(
-                    content=group_body if group_name in expanded_groups else ft.Container(height=0),
-                    duration=220,
-                    reverse_duration=180,
-                    transition=ft.AnimatedSwitcherTransition.FADE,
-                )
-                group_arrows[group_name] = group_header.content.controls[0]
-                group_switchers[group_name] = group_switcher
-                permission_cards.controls.append(
-                    ft.Container(
-                        content=ft.Column([group_header, group_switcher], spacing=0),
-                        border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
-                        border_radius=10,
-                    )
-                )
-            update_permission_state()
-            page.update()
-            """
-                        group_body = ft.Column(
-                            [
-                                group_check,
-                                ft.Column([
-                                    ft.Checkbox(
-                                        label=perm,
-                                        value=create_permission_key(perm) in selected_create_permissions,
-                                        scale=0.9,
-                                        on_change=lambda event, key=create_permission_key(perm): update_create_permission(key, event),
-                                    )
-                                    for perm in perms
-                                ], spacing=2),
-                            ],
-                            spacing=6,
-                            visible=section_name in expanded_groups,
-                        )
-                        group_header = ft.Container(
-                            content=ft.Row([
-                                ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN if section_name in expanded_groups else ft.Icons.KEYBOARD_ARROW_RIGHT, color=ft.Colors.BLUE_700),
-                                ft.Icon(ft.Icons.FOLDER_OUTLINED, color=ft.Colors.BLUE_700),
-                                ft.Text(section_name, weight=ft.FontWeight.BOLD, size=13, expand=True),
-                                ft.Text(f"{group_count} / {len(perms)} selected", size=11, color=ft.Colors.BLUE_GREY_600),
-                            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                            padding=ft.Padding(left=12, top=8, right=12, bottom=8),
-                            bgcolor=ft.Colors.BLUE_GREY_50,
-                            on_click=lambda _, name=section_name: (expanded_groups.remove(name) if name in expanded_groups else expanded_groups.add(name), render_permission_section()),
-                        )
-
-        def permission_changed(key, event):
-                                content=ft.Column([group_header, group_body], spacing=0),
-                active_color=ft.Colors.BLUE_700,
-                on_change=lambda event, name=group_name: set_group_permissions(name, event.control.value),
-            )
-            for label in labels:
-                key = permission_key(label)
-                permission_checks[key] = ft.Checkbox(label=label, value=key in selected_permissions)
-
-        master_check.on_change = lambda event: set_all_permissions(event.control.value)
-                        ft.Checkbox(label="Search Documents", value=True, disabled=True),
-                        ft.Checkbox(label="Filter Documents", value=True, disabled=True),
-                        ft.Checkbox(label="View Document Details", value=True, disabled=True),
-                        ft.Checkbox(label="Download Documents", value=True, disabled=True),
-                        ft.Checkbox(label="Print Documents", value=True, disabled=True),
-                    ], spacing=6))
-                    permission_area.controls.append(ft.Text("SB Members do not have QR Tracking, registration, editing, or user-management access.", size=11, color=ft.Colors.BLUE_GREY_600))
-                page.update()
-
-            def update_create_permission(key, event):
-                if event.control.value:
-                    selected_create_permissions.add(key)
-                else:
-                    selected_create_permissions.discard(key)
-                update_create_master()
-                render_permission_section()
-
-            def set_create_group(group_name, event):
-                for label in EMPLOYEE_PERMISSION_GROUPS[group_name]:
-                    key = create_permission_key(label)
-                    if event.control.value:
-                        selected_create_permissions.add(key)
-                    else:
-                        selected_create_permissions.discard(key)
-                update_create_master()
-                render_permission_section()
-
-            role_choice.on_change = lambda _: render_permission_section()
-            create_master_check.on_change = set_all_create_permissions
-            render_permission_section()
-
-            def create_account(_):
-                if not full_name.value or not username.value or not email.value:
-                    error_message.value = "Full name, username, and email are required."
-                    page.update()
-                    return
-
-                if password.value != confirm_password.value:
-                    error_message.value = "Passwords do not match."
-                    page.update()
-                    return
-
-                if not password.value:
-                    error_message.value = "Password is required."
-                    page.update()
-                    return
-
-                if not runtime_token and not AUTH_TOKEN:
-                    error_message.value = "Unable to register user: no admin authentication available."
-                    page.update()
-                    return
-
-                permissions = sorted(selected_create_permissions)
-
-                payload = {
-                    "username": username.value.strip(),
-                    "password": password.value,
-                    "full_name": full_name.value.strip(),
-                    "email": email.value.strip(),
-                    "role": role_choice.value,
-                }
-                if permissions:
-                    payload["permissions"] = str(permissions)
-
-                try:
-                    response = http.post(
-                        f"{BACKEND_URL}/auth/register",
-                        json=payload,
-                        headers=get_admin_headers(),
-                        verify=False,
-                        timeout=20,
-                    )
-                    if response.status_code != 200:
-                        detail = response.text
-                        try:
-                            detail = response.json().get("detail", detail)
-                        except Exception:
-                            pass
-                        raise Exception(detail)
-                    body = response.json()
-                    created_user = {
-                        "full_name": full_name.value,
-                        "username": body.get("username", username.value.strip()),
-                        "email": email.value,
-                        "role": body.get("role", role_choice.value),
-                        "status": "Active",
-                        "permissions": permissions,
-                        "last_login": "-",
-                        "created": date.today().strftime("%Y-%m-%d"),
-                    }
-                    user_management_data.append(created_user)
-                    close_dialog(dialog)
-                    update_users_role_view()
-                except Exception as exc:
-                    error_message.value = f"Account creation failed: {exc}"
-                    page.update()
-                    return
-
-            error_message = ft.Text("", color=ft.Colors.RED_700, size=12)
-
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Create User Account"),
-                content=ft.Container(
-                    content=ft.Column([
-                        full_name,
-                        username,
-                        email,
-                        password,
-                        confirm_password,
-                        role_choice,
-                        permission_area,
-                        error_message,
-                    ], width=560, scroll=ft.ScrollMode.ALWAYS, spacing=10),
-                    width=580,
-                    height=640,
-                ),
-                actions=[
-                    ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
-                    ft.Button("Create Account", on_click=create_account, bgcolor=ft.Colors.BLUE_800, color=ft.Colors.WHITE),
-                ],
-            )
-            page.overlay.append(dialog)
-            dialog.open = True
+                permission_cards.controls.append(widgets.hint("Full system access. Super Administrator permissions cannot be reduced here."))
+            elif role_choice.value == "SB Member":
+                permission_cards.controls.append(widgets.hint("SB Members get read-only access: " + ", ".join(SB_MEMBER_PERMISSIONS) + "."))
+            else:
+                if edit_has_office():
+                    # Moving an employee into an office starts with all office permissions on.
+                    if not selected_permissions & shown_keys() and not picker_state.get("office_defaults"):
+                        selected_permissions.update(shown_keys())
+                    picker_state["office_defaults"] = True
+                    permission_cards.controls.append(widgets.hint(
+                        "Office employees work on their office's documents, so they only get office permissions. "
+                        "To give general permissions such as registering documents, set the office to Unassigned."
+                    ))
+                dropped = sorted(original_permissions - shown_keys() - {"*"})
+                if dropped:
+                    permission_cards.controls.append(ft.Text(
+                        "Saving removes permissions this account has now but can't keep here: " + ", ".join(dropped),
+                        size=12, color=ft.Colors.ORANGE_800,
+                    ))
+                permission_cards.controls.append(build_permission_list(
+                    widgets, selected_permissions, edit_permission_groups(), render_permission_cards, picker_state,
+                ))
             page.update()
 
-        def open_view_user_dialog(user):
-        permission_search.on_change = render_permission_cards
-        render_permission_cards()
-
-        """
-        def permission_changed(key, event):
-            permission_checks[key].value = event.control.value
-            render_permission_cards()
-
-        for group_name, labels in permission_groups.items():
-            group_checks[group_name] = ft.Checkbox(
-                label="Select All",
-                tristate=True,
-                active_color=ft.Colors.BLUE_700,
-                on_change=lambda event, name=group_name: set_group_permissions(name, event.control.value),
-            )
-            for label in labels:
-                key = permission_key(label)
-                permission_checks[key] = ft.Checkbox(label=label, value=key in selected_permissions)
-
-        master_check.on_change = lambda event: set_all_permissions(event.control.value)
-        permission_search.on_change = render_permission_cards
+        role_choice.on_change = render_permission_cards
+        office_choice.on_change = render_permission_cards
         render_permission_cards()
 
         def collect_permissions():
-            return [key for key, checkbox in permission_checks.items() if checkbox.value]
+            if role_choice.value == "SB Member":
+                # Unchanged for an SB Member; an account becoming one gets the read-only set.
+                if user.get("role") == "SB Member":
+                    return sorted(original_permissions)
+                return [permission_key(label) for label in SB_MEMBER_PERMISSIONS]
+            return sorted(selected_permissions & shown_keys())
 
         def save_user(_):
             if not full_name.value.strip() or not username.value.strip() or not email.value.strip():
@@ -3795,10 +3462,7 @@ def main(page: ft.Page, session=None):
                     status_choice,
                     error_message,
                     ft.Divider(height=1),
-                    ft.Text("Employee Permissions", weight=ft.FontWeight.BOLD, size=16),
-                    ft.Text("Control access to the features available to this employee.", size=12, color=ft.Colors.BLUE_GREY_600),
-                    permission_search,
-                    ft.Row([master_check, permission_summary], spacing=12, wrap=True, run_spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Text("Permissions", weight=ft.FontWeight.BOLD, size=16),
                     permission_cards,
                 ], width=560, spacing=10, scroll=ft.ScrollMode.ALWAYS),
                 width=580,
