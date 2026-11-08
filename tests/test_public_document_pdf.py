@@ -81,3 +81,33 @@ def test_public_search_does_not_match_internal_fields(tmp_path):
     for word in ("secretnote", "secretstatus", "secretoffice", "secretauthor", "secretsession"):
         assert client.get("/public/documents", params={"search": word}).json()["items"] == [], word
     assert [item["id"] for item in client.get("/public/documents", params={"search": "summary"}).json()["items"]] == [ids[1]]
+
+
+def test_download_saves_the_pdf_instead_of_opening_it(tmp_path):
+    ids = seed(tmp_path)
+    client = TestClient(main.app)
+
+    response = client.get(f"/public/documents/{ids[1]}/pdf", params={"download": 1})
+
+    assert response.status_code == 200 and response.content == PDF
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert "ordinance.pdf" in response.headers["content-disposition"]
+    assert client.get(f"/public/documents/{ids[2]}/pdf", params={"download": 1}).status_code == 404
+
+
+def test_the_portal_has_a_download_button_beside_view_pdf(monkeypatch):
+    import flet as ft
+    import frontend.frontend_public.public_portal as portal
+    from tests.test_account_menu_ui import walk
+
+    monkeypatch.setattr(portal, "load_public_documents", lambda **kw: {
+        "items": [{"id": 7, "tracking_number": "ORD-000001", "title": "An ordinance", "type": "Ordinance", "has_pdf": True}],
+        "total": 1, "page": 1, "page_size": 10, "total_pages": 1})
+    launched = []
+    page = type("P", (), {"width": 1400, "height": 900, "launch_url": lambda self, url: launched.append(url), "update": lambda self, *a: None})()
+    view = portal.build_public_portal(page)
+    buttons = {c.text: c for c in walk(view) if isinstance(c, ft.OutlinedButton)}
+
+    buttons["View PDF"].on_click(None)
+    buttons["Download"].on_click(None)
+    assert launched == [portal.public_pdf_url(7), portal.public_pdf_url(7) + "?download=1"]

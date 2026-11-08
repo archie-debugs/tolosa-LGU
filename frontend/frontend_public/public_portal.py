@@ -27,10 +27,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 
 
-def public_pdf_url(document_id):
-    """The backend address the visitor's browser reaches (read at call time: the LAN IP is detected at startup)."""
+def public_pdf_url(document_id, download=False):
+    """The backend address the visitor's browser reaches (read at call time: the LAN IP is detected at startup).
+    With `download`, the browser saves the file instead of opening it."""
     base = (os.getenv("PUBLIC_BASE_URL") or BACKEND_URL).strip().rstrip("/")
-    return f"{base}/public/documents/{document_id}/pdf"
+    return f"{base}/public/documents/{document_id}/pdf" + ("?download=1" if download else "")
 
 DOCUMENTS = [
     {"number": "DOC-22-2026", "title": "An Ordinance Providing for the Establishment of a Public Service and Infrastructure Development Fund", "type": "Ordinance", "date": "August 10, 2026"},
@@ -251,13 +252,25 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
         )
 
     def view_button(document):
-        """Opens the document's PDF straight in the browser; nothing to open without one."""
+        """View PDF opens it straight in the browser, Download saves it; nothing to open without one."""
         if not (document.get("has_pdf") and document.get("id")):
             return ft.Text("No PDF on file", size=12, color=muted, italic=True, no_wrap=True)
-        return outlined_button(
-            "View PDF", ft.Icons.PICTURE_AS_PDF_OUTLINED,
-            lambda _, document_id=document["id"]: page.launch_url(public_pdf_url(document_id)) if page is not None else None,
-            height=36,
+        return ft.Row(
+            [
+                outlined_button(
+                    "View PDF", ft.Icons.PICTURE_AS_PDF_OUTLINED,
+                    lambda _, document_id=document["id"]: page.launch_url(public_pdf_url(document_id)) if page is not None else None,
+                    height=36,
+                ),
+                outlined_button(
+                    "Download", ft.Icons.DOWNLOAD_OUTLINED,
+                    lambda _, document_id=document["id"]: page.launch_url(public_pdf_url(document_id, download=True)) if page is not None else None,
+                    height=36,
+                ),
+            ],
+            spacing=8,
+            tight=True,
+            alignment=ft.MainAxisAlignment.END,
         )
 
     def card(content, padding=0):
@@ -433,8 +446,8 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
 
     # Rows rather than a DataTable: a DataTable only grows as wide as its columns, so its lines
     # stopped short of the card's right edge. Every column but the title has a fixed width.
-    column_widths = {"number": 150, "type": 110, "date": 120, "status": 140, "action": 120}
-    min_table_width = 900
+    column_widths = {"number": 150, "type": 110, "date": 120, "status": 140, "action": 250}
+    min_table_width = 1030
 
     def table_row(number, title, kind, when, status, action, bgcolor=None, height=None, last=False):
         return ft.Container(
