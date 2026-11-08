@@ -4,6 +4,7 @@ import flet as ft
 import requests
 from frontend.admin.app import main as admin_main
 from frontend import theme
+from frontend.navigation import pull_to_refresh
 from frontend.responsive import redraw_on_resize
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
@@ -483,8 +484,15 @@ def build_homepage_view(page=None):
         scroll=ft.ScrollMode.AUTO,
     )
 
+    def refresh():
+        """Pulling the top bar down reloads the page's data, like pull-to-refresh."""
+        if page is not None:
+            page.clean()
+            page.add(build_homepage_view(page))
+            page.update()
+
     view = ft.Column(
-        [navigation, content_scroll],
+        [pull_to_refresh(navigation, refresh), content_scroll],
         spacing=0,
         expand=True,
     )

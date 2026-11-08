@@ -8,6 +8,7 @@ import requests
 import flet as ft
 
 from frontend import theme
+from frontend.navigation import pull_to_refresh
 from frontend.responsive import redraw_on_resize
 
 if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
@@ -721,8 +722,15 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
         scroll=ft.ScrollMode.AUTO,
     )
 
+    def refresh():
+        """Pulling the top bar down reloads the page's data, like pull-to-refresh."""
+        if page is not None:
+            page.clean()
+            page.add(build_public_portal(page, search=search))
+            page.update()
+
     view = ft.Column(
-        [navigation, content_scroll],
+        [pull_to_refresh(navigation, refresh), content_scroll],
         spacing=0,
         expand=True,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,

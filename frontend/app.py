@@ -14,6 +14,7 @@ from frontend.Frontend_Homepage.page import build_homepage_view
 from frontend.frontend_public.public_portal import build_public_portal
 from frontend.theme import CANVAS
 import frontend.responsive  # noqa: F401  (one column on phones and tablets)
+from frontend import navigation
 
 
 def main(page: ft.Page):
@@ -28,6 +29,11 @@ def main(page: ft.Page):
         page.overlay.clear()
         route_path = (page.route or "/").split("?", 1)[0]
         route_parts = route_path.split("/")
+        if route_path == navigation.APP_PREFIX or route_path.startswith(navigation.APP_PREFIX + "/"):
+            # A workspace address (a reload, or Back after signing out): sign back in or ask to.
+            from frontend.admin.app import main as shared_workspace_main
+            shared_workspace_main(page)
+            return
         if len(route_parts) == 3 and route_parts[1] == "qr" and route_parts[2]:
             page_state = page.data if isinstance(page.data, dict) else {}
             page_state.pop("qr_authorization", None)
@@ -52,7 +58,7 @@ def main(page: ft.Page):
         page.add(content)
         page.update()
 
-    page.on_route_change = render_route
+    navigation.install(page, public=render_route)
     page.go(page.route or "/")
 
 
