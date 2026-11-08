@@ -1872,6 +1872,7 @@ def main(page: ft.Page, session=None):
                 can_download=has_permission("download_documents"),
                 can_print=has_permission("print_documents"),
                 can_change_stage=has_permission("change_measure_stage"),
+                can_change_visibility=has_permission("manage_public_visibility"),
                 open_pass=open_pass_document_dialog if allow_pass else None,
                 open_edit=open_edit_document_dialog,
                 preview=preview_document_pdf,
@@ -2207,7 +2208,8 @@ def main(page: ft.Page, session=None):
             preview=preview_document_pdf,
             print_document=print_document_pdf,
             download=download_document_attachment,
-            set_visibility=set_document_visibility,
+            # The backend lets only accounts with manage_public_visibility change it.
+            set_visibility=set_document_visibility if has_permission("manage_public_visibility") else None,
             archive=confirm_delete_document,
             archive_selected=open_documents_bulk_archive_dialog,
             qr_labels=open_qr_label_download_dialog,
