@@ -85,7 +85,7 @@ def test_a_type_page_lists_only_that_type_under_its_name_without_a_type_filter()
         document_type="Ordinance",
     )
 
-    assert calls and all(params.get("document_type") == "Ordinance" for params in calls)
+    assert calls and all(params.get("page_type") == "Ordinance" for params in calls)
     shown = texts(view)
     assert "Ordinances" in shown and "Documents" not in shown
     assert "Type" not in shown and "Category" in shown
