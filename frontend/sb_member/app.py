@@ -25,6 +25,7 @@ from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.screen import is_phone
 from frontend.sb_member.dashboard import build as build_dashboard
 from frontend.theme import CANVAS, PRIMARY
+import frontend.responsive  # noqa: F401  (one column on phones and tablets)
 
 API_URL = os.getenv("SBMEM_BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
 # How often Today's Documents re-checks for documents employees set while it is open.

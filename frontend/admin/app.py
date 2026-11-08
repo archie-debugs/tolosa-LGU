@@ -152,6 +152,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
     if BACKEND_URL.startswith("https://"):
         BACKEND_URL = BACKEND_URL.replace("https://", "http://", 1)
 
+import frontend.responsive  # noqa: F401  (one column on phones and tablets)
 from frontend.admin.council import POSITIONS as SB_POSITIONS, build_members_committees_view
 from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.documents import build_documents_view, format_date

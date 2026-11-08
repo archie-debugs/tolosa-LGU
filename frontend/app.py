@@ -13,6 +13,7 @@ if not hasattr(ft, "Colors") and hasattr(ft, "colors"):
 from frontend.Frontend_Homepage.page import build_homepage_view
 from frontend.frontend_public.public_portal import build_public_portal
 from frontend.theme import CANVAS
+import frontend.responsive  # noqa: F401  (one column on phones and tablets)
 
 
 def main(page: ft.Page):
