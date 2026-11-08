@@ -3022,8 +3022,8 @@ def main(page: ft.Page, session=None):
             return office_choice.value != office_placeholder
 
         def create_permission_groups():
-            # Office employees keep only office permissions (the backend saves only those).
-            return dict(OFFICE_EMPLOYEE_PERMISSION_GROUP) if has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
+            # Office permissions only work with an office, so they are listed only for office employees.
+            return {**OFFICE_EMPLOYEE_PERMISSION_GROUP, **EMPLOYEE_PERMISSION_GROUPS} if has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
 
         def render_permission_section():
             permission_area.controls.clear()
@@ -3051,8 +3051,7 @@ def main(page: ft.Page, session=None):
                         selected_create_permissions.update(office_keys)
                         picker_state["office_defaults"] = True
                     permission_area.controls.append(widgets.hint(
-                        "Office employees work on their office's documents, so they only get office permissions. "
-                        "To give general permissions such as registering documents, leave the office unassigned."
+                        "Office permissions start switched on. Turn on anything else this employee may do."
                     ))
                 else:
                     permission_area.controls.append(widgets.hint("Turn on what this employee may do. Nothing is on until you turn it on."))
@@ -3329,8 +3328,8 @@ def main(page: ft.Page, session=None):
             return role_choice.value == "Employee" and office_choice.value not in (None, "", "Unassigned")
 
         def edit_permission_groups():
-            # Office employees keep only office permissions (the backend saves only those).
-            return dict(OFFICE_EMPLOYEE_PERMISSION_GROUP) if edit_has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
+            # Office permissions only work with an office, so they are listed only for office employees.
+            return {**OFFICE_EMPLOYEE_PERMISSION_GROUP, **EMPLOYEE_PERMISSION_GROUPS} if edit_has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
 
         def shown_keys():
             return {permission_key(label) for labels in edit_permission_groups().values() for label in labels}
@@ -3345,12 +3344,12 @@ def main(page: ft.Page, session=None):
             else:
                 if edit_has_office():
                     # Moving an employee into an office starts with all office permissions on.
-                    if not selected_permissions & shown_keys() and not picker_state.get("office_defaults"):
-                        selected_permissions.update(shown_keys())
+                    office_keys = {permission_key(label) for labels in OFFICE_EMPLOYEE_PERMISSION_GROUP.values() for label in labels}
+                    if not selected_permissions & office_keys and not picker_state.get("office_defaults"):
+                        selected_permissions.update(office_keys)
                     picker_state["office_defaults"] = True
                     permission_cards.controls.append(widgets.hint(
-                        "Office employees work on their office's documents, so they only get office permissions. "
-                        "To give general permissions such as registering documents, set the office to Unassigned."
+                        "Office permissions are listed first; any other permission can be added below them."
                     ))
                 dropped = sorted(original_permissions - shown_keys() - {"*"})
                 if dropped:
@@ -3638,6 +3637,7 @@ def main(page: ft.Page, session=None):
         render_shell(
             page, current_user, logout_user, nav_items, view,
             initial_selected_index=initial_selected_index,
+            panel_title="Employee Panel" if is_employee() else "Admin Panel",
             account={
                 "name": profile.get("full_name") or current_user,
                 "role": profile.get("role") or current_user_role,
@@ -3908,8 +3908,8 @@ def main(page: ft.Page, session=None):
                 welcome_banner,
                 section_title(ft.Icons.DESCRIPTION_OUTLINED, "Documents", "Where every document stands right now."),
                 metric_grid(summary_items),
-                section_title(ft.Icons.PEOPLE_ALT_OUTLINED, "Users", "Accounts that can sign in to the system."),
-                metric_grid(user_cards),
+                *([section_title(ft.Icons.PEOPLE_ALT_OUTLINED, "Users", "Accounts that can sign in to the system."),
+                   metric_grid(user_cards)] if has_permission("view_users") else []),
             ],
             spacing=16,
         )

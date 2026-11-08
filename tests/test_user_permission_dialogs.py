@@ -93,7 +93,7 @@ def test_create_user_starts_with_nothing_on_and_saves_only_what_was_turned_on(mo
     assert saved_permissions("newclerk") == ["register_documents"]
 
 
-def test_choosing_an_office_shows_only_office_permissions_all_on(monkeypatch):
+def test_choosing_an_office_adds_office_permissions_all_on_above_the_general_ones(monkeypatch):
     page = open_users_page(monkeypatch)
     click(button(page.controls[0], "Create User"))
     form = dialog(page)
@@ -102,10 +102,11 @@ def test_choosing_an_office_shows_only_office_permissions_all_on(monkeypatch):
     fire(office, "on_change", "Records Office")
 
     listed = switches(dialog(page))
-    assert set(listed) == {"View Office Documents", "Search Office Documents", "View Office Document Details", "Scan QR",
-                           "Pass Office Documents", "Confirm Document Receipt", "View Office History"}
-    assert all(switch.value for switch in listed.values())
-    assert any("only get office permissions" in text for text in texts(dialog(page)))
+    office = ["View Office Documents", "Search Office Documents", "View Office Document Details", "Scan QR",
+              "Pass Office Documents", "Confirm Document Receipt", "View Office History"]
+    assert list(listed)[:len(office)] == office
+    assert all(listed[label].value for label in office)
+    assert "Register Documents" in listed and not listed["Register Documents"].value
 
 
 def walk_tables(control):
@@ -117,7 +118,7 @@ def walk_tables(control):
                 yield from walk_tables(cell.content)
 
 
-def test_edit_user_shows_current_permissions_and_warns_before_an_office_drops_them(monkeypatch):
+def test_edit_user_keeps_general_permissions_when_an_office_is_assigned(monkeypatch):
     page = open_users_page(monkeypatch)
     row = next(r for c in walk_tables(page.controls[0]) for r in getattr(c, "rows", None) or []
                if "clerk" in [t for cell in r.cells for t in texts(cell.content)])
@@ -130,11 +131,12 @@ def test_edit_user_shows_current_permissions_and_warns_before_an_office_drops_th
 
     office = next(c for c in walk(form) if isinstance(c, ft.Dropdown) and c.value == "Unassigned")
     fire(office, "on_change", "Records Office")
-    assert any("Saving removes permissions" in text and "delete_documents" in text for text in texts(dialog(page)))
-    assert all(switch.value for switch in switches(dialog(page)).values())
+    assert not any("Saving removes permissions" in text for text in texts(dialog(page)))
+    listed = switches(dialog(page))
+    assert listed["Pass Office Documents"].value and not listed["Register Documents"].value
+    fire(listed["Register Documents"], "on_change", True)
 
     click(button(dialog(page), "Save Changes"))
-    assert saved_permissions("clerk") == sorted([
-        "view_office_documents", "search_office_documents", "view_office_document_details", "scan_qr",
-        "pass_office_documents", "confirm_document_receipt", "view_office_history",
-    ])
+    office = ["view_office_documents", "search_office_documents", "view_office_document_details", "scan_qr",
+              "pass_office_documents", "confirm_document_receipt", "view_office_history"]
+    assert saved_permissions("clerk") == sorted(set(office) | {"view_documents", "delete_documents", "register_documents"})

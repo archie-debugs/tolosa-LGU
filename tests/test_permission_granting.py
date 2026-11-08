@@ -83,7 +83,7 @@ def test_editing_cannot_add_permissions_the_editor_lacks_or_give_everything():
                       json={**body, "permissions": ["*"]}).status_code == 400
 
 
-def test_office_employees_keep_only_office_permissions_when_edited():
+def test_office_employees_keep_general_permissions_too_when_edited():
     office_id = setup()
     client = TestClient(main.app)
     register(client, "admin", username="clerk", permissions=["register_documents"])
@@ -96,7 +96,7 @@ def test_office_employees_keep_only_office_permissions_when_edited():
     })
 
     assert response.status_code == 200, response.text
-    assert saved_permissions("clerk") == ["pass_office_documents", "scan_qr"]
+    assert saved_permissions("clerk") == ["pass_office_documents", "register_documents", "scan_qr"]
 
 
 def test_new_accounts_need_a_real_email_and_an_eight_character_password():
