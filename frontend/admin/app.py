@@ -3765,7 +3765,7 @@ def main(page: ft.Page, session=None):
         analytics_payload = {}
         try:
             analytics_response = http.get(
-                f"{BACKEND_URL}/analytics",
+                f"{BACKEND_URL}/analytics/dashboard",
                 headers=get_admin_headers(),
                 verify=False,
                 timeout=10,

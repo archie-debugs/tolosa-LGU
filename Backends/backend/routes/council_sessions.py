@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..authentication import get_current_user
-from ..core import lgu_today, record_audit_log, require_permission
+from ..core import lgu_today, record_audit_log, require_permission, user_has_permission
 from ..database import get_db
 from .council import POSITIONS
 
@@ -138,6 +138,14 @@ def _session(db, session_id):
     return session
 
 
+def readable_session(db, session_id, user):
+    """A Draft session is unfinished, so only those who manage sessions can see it."""
+    session = _session(db, session_id)
+    if session.status == DRAFT and not user_has_permission(user, MANAGE):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
 def _check_details(db, term, kind, number, held_on, session_id=None):
     if kind not in KINDS:
         raise HTTPException(status_code=400, detail="A session is Regular or Special")
@@ -182,7 +190,10 @@ def list_sessions(
         if not current:
             return {"sessions": [], "next_numbers": {}}
         term_id = current.id
-    sessions = (db.query(models.CouncilSession).filter(models.CouncilSession.term_id == term_id)
+    query = db.query(models.CouncilSession).filter(models.CouncilSession.term_id == term_id)
+    if not user_has_permission(current_user, MANAGE):
+        query = query.filter(models.CouncilSession.status != DRAFT)
+    sessions = (query
                 .order_by(models.CouncilSession.held_on.desc(), models.CouncilSession.id.desc()).all())
     return {"sessions": [_summary(db, session) for session in sessions],
             "next_numbers": {kind: _next_number(db, term_id, kind) for kind in KINDS}}
@@ -209,7 +220,7 @@ def create_session(payload: SessionCreate, db: Session = Depends(get_db), curren
 @router.get("/{session_id}")
 def get_session(session_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     require_permission(current_user, "view_documents")
-    return _detail(db, _session(db, session_id))
+    return _detail(db, readable_session(db, session_id, current_user))
 
 
 @router.put("/{session_id}")
