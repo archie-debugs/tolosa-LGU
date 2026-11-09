@@ -32,21 +32,41 @@ COUNCIL = {
     ],
 }
 DOCUMENTS = {"items": [{"id": n, "title": f"Doc {n}", "document_type": "Ordinance"} for n in range(1, 6)]}
+PDF = [{"id": 9, "filename": "x.pdf"}]
+UPCOMING = {"sessions": [
+    {"id": 2, "title": "12th Regular Session", "held_on": day(7), "sections": [
+        {"label": "First reading and referral", "items": [
+            {"title": f"Upcoming {n}", "document": {"id": 20 + n, "title": f"Upcoming {n}", "document_type": "Ordinance", "tracking_number": f"ORD-{n}", "attachments": PDF}}
+            for n in range(1, 5)]},
+        {"label": "Other matters and communications", "items": [{"title": "Privilege speech", "document": None}]}]},
+    {"id": 3, "title": "13th Regular Session", "held_on": day(14), "sections": []},
+    {"id": 5, "title": "14th Regular Session", "held_on": day(21), "sections": []},
+]}
 
 
 def card(control, padding=18):
     return ft.Container(content=control, padding=padding)
 
 
-def build(council=COUNCIL, documents=DOCUMENTS, opened=None):
+def build(council=COUNCIL, documents=DOCUMENTS, opened=None, upcoming=UPCOMING):
     opened = [] if opened is None else opened
     def council_api(method, path):
         if path not in council:
             raise RuntimeError("down")
         return council[path]
 
-    shown = dashboard.build(DummyPage(), card, lambda method, path: documents, council_api,
-                            {"username": "MSantos"}, opened.append, opened.append)
+    def api(method, path):
+        if path == "/upcoming-documents":
+            if upcoming is None:
+                raise RuntimeError("down")
+            return upcoming
+        return documents
+
+    def file_actions(document):
+        return [ft.IconButton(ft.Icons.PICTURE_AS_PDF_OUTLINED, tooltip="View PDF", on_click=lambda _: opened.append(("view", document["id"])))]
+
+    shown = dashboard.build(DummyPage(), card, api, council_api,
+                            {"username": "MSantos"}, opened.append, opened.append, file_actions)
     return shown, texts(shown)
 
 
@@ -79,3 +99,22 @@ def test_see_all_and_a_document_row_open_the_right_place():
     click(next(c for c in controls if isinstance(c, ft.Container) and clickable(c) and "Doc 2" in texts(c)))
 
     assert opened == ["Today's Documents", DOCUMENTS["items"][1]]
+
+
+def test_upcoming_session_documents_show_the_first_items_of_the_next_two_sessions():
+    opened = []
+    shown, words = build(opened=opened)
+
+    assert ["Upcoming 1", "Upcoming 2", "Upcoming 3"] == [w for w in words if w.startswith("Upcoming ") and w[-1].isdigit()]
+    assert "FIRST READING AND REFERRAL" in words and "and 2 more" in words
+    assert "13th Regular Session" in words and "14th Regular Session" not in words
+    assert "The order of business isn't ready yet." in words
+    controls = list(walk(shown))
+    click(next(c for c in controls if isinstance(c, ft.IconButton) and c.tooltip == "View PDF"))
+    click(next(c for c in controls if isinstance(c, ft.TextButton) and c.text == "See all upcoming sessions"))
+    assert opened == [("view", 21), "Upcoming Sessions"]
+
+
+def test_the_upcoming_card_says_why_it_is_empty():
+    assert "No upcoming session has been scheduled yet." in build(upcoming={"sessions": []})[1]
+    assert any(w.startswith("Unable to load upcoming sessions") for w in build(upcoming=None)[1])

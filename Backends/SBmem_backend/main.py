@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from Backends.backend import models
+from Backends.backend import business, models
 from Backends.backend.auth_jwt import create_download_token, decode_download_token
 from Backends.backend.authentication import ensure_active_user, get_current_user
 from Backends.backend.lan import refresh_development_public_urls
 from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, lgu_today, normalize_permissions, normalize_user_role
 from Backends.backend.database import get_db
+from Backends.backend.routes.council_sessions import SCHEDULED, session_title
 from Backends.backend.routes.temporary_documents import moa_path
 
 refresh_development_public_urls()
@@ -131,8 +132,41 @@ def todays_documents(db: Session = Depends(get_db), current_user: models.User = 
     return {"date": today.isoformat(), "items": items}
 
 
-def _set_for_today(db: Session, document_id: int) -> models.Document:
-    """A document members may open: one employees set for today, on the day's list or as temporary."""
+def _upcoming_items(db: Session):
+    """Order of business items of Scheduled sessions from today on; Draft sessions are not shown to members."""
+    return (db.query(models.SessionItem).join(models.CouncilSession, models.CouncilSession.id == models.SessionItem.session_id)
+            .filter(models.CouncilSession.status == SCHEDULED, models.CouncilSession.held_on >= lgu_today()))
+
+
+@app.get("/upcoming-documents")
+def upcoming_documents(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    """Each Scheduled session from today on, earliest first, with its order of business by section.
+
+    An item without a document, or whose document is archived, comes with `document: null`.
+    """
+    require_sb_permission(current_user, "view_documents")
+    sessions = (db.query(models.CouncilSession)
+                .filter(models.CouncilSession.status == SCHEDULED, models.CouncilSession.held_on >= lgu_today())
+                .order_by(models.CouncilSession.held_on.asc(), models.CouncilSession.id.asc()).all())
+    items = _upcoming_items(db).order_by(models.SessionItem.position.asc(), models.SessionItem.id.asc()).all()
+    result = []
+    for session in sessions:
+        mine = [item for item in items if item.session_id == session.id]
+        sections = []
+        for key, label in business.SECTIONS:
+            rows = [{"title": item.title, "document": _safe_document(item.document, db) if item.document and not item.document.archived else None}
+                    for item in mine if item.section == key]
+            if rows:
+                sections.append({"key": key, "label": label, "items": rows})
+        result.append({"id": session.id, "title": session_title(session), "held_on": session.held_on.isoformat(), "sections": sections})
+    return {"date": lgu_today().isoformat(), "sessions": result}
+
+
+def _set_for_today(db: Session, document_id: int, upcoming: bool = False) -> models.Document:
+    """A document members may open: one employees set for today, on the day's list or as temporary.
+
+    With `upcoming`, also one on the order of business of an upcoming session: its file only, not its details.
+    """
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -143,8 +177,10 @@ def _set_for_today(db: Session, document_id: int) -> models.Document:
         db.query(models.TodaysDocument.id).filter_by(document_id=document_id, scheduled_for=today).first()
         or db.query(models.TemporaryDocument.id).filter_by(document_id=document_id, scheduled_for=today).first()
     )
+    if not set_today and upcoming:
+        set_today = _upcoming_items(db).filter(models.SessionItem.document_id == document_id).first()
     if not set_today:
-        raise HTTPException(status_code=403, detail="SB Members can only open the documents set for them today")
+        raise HTTPException(status_code=403, detail="SB Members can only open the documents set for them today or for an upcoming session")
     return doc
 
 
@@ -155,7 +191,7 @@ def get_document(document_id: int, db: Session = Depends(get_db), current_user: 
 
 
 def _member_attachment_path(db: Session, document_id: int, attachment_id: int) -> tuple[Path, models.Attachment]:
-    _set_for_today(db, document_id)
+    _set_for_today(db, document_id, upcoming=True)
     attachment = db.query(models.Attachment).filter(
         models.Attachment.id == attachment_id,
         models.Attachment.document_id == document_id,
@@ -169,8 +205,10 @@ def _member_attachment_path(db: Session, document_id: int, attachment_id: int) -
     return path, attachment
 
 
-def _attachment_response(path: Path, attachment: models.Attachment) -> FileResponse:
-    return FileResponse(str(path), filename=os.path.basename(attachment.original_filename or "") or "document", media_type=attachment.mime_type or "application/octet-stream")
+def _attachment_response(path: Path, attachment: models.Attachment, inline: bool = False) -> FileResponse:
+    # Inline lets the browser show a PDF in its own viewer instead of saving it.
+    return FileResponse(str(path), filename=os.path.basename(attachment.original_filename or "") or "document", media_type=attachment.mime_type or "application/octet-stream",
+                        content_disposition_type="inline" if inline else "attachment")
 
 
 @app.get("/documents/{document_id}/attachments/{attachment_id}")
@@ -188,10 +226,11 @@ def _public_url() -> str:
 # The member app runs in the member's browser, so a download has to be a link that browser
 # opens; saving the file from the app would put it on the machine running the app.
 @app.post("/documents/{document_id}/attachments/{attachment_id}/download-token")
-def create_download_link(document_id: int, attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
-    require_sb_permission(current_user, "download_documents")
+def create_download_link(document_id: int, attachment_id: int, inline: bool = Query(False), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    """A link to the file; with `inline` it opens in the browser (View PDF) and needs only view_documents."""
+    require_sb_permission(current_user, "view_documents" if inline else "download_documents")
     _member_attachment_path(db, document_id, attachment_id)
-    token = create_download_token({"sub": current_user.username, "document_id": document_id, "attachment_id": attachment_id})
+    token = create_download_token({"sub": current_user.username, "document_id": document_id, "attachment_id": attachment_id, "inline": inline})
     return {"download_url": f"{_public_url()}/documents/{document_id}/attachments/{attachment_id}/download?download_token={quote(token, safe='')}"}
 
 
@@ -205,8 +244,9 @@ def download_by_link(document_id: int, attachment_id: int, download_token: str =
         raise HTTPException(status_code=401, detail="Link user not found")
     ensure_active_user(user)
     get_current_sb_member(user)
-    require_sb_permission(user, "download_documents")
-    return _attachment_response(*_member_attachment_path(db, document_id, attachment_id))
+    inline = bool(payload.get("inline"))
+    require_sb_permission(user, "view_documents" if inline else "download_documents")
+    return _attachment_response(*_member_attachment_path(db, document_id, attachment_id), inline=inline)
 
 
 def _todays_moa(db: Session, entry_id: int) -> tuple[Path, models.TemporaryDocument]:
@@ -218,10 +258,10 @@ def _todays_moa(db: Session, entry_id: int) -> tuple[Path, models.TemporaryDocum
 
 
 @app.post("/temporary-documents/{entry_id}/download-token")
-def create_moa_download_link(entry_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
-    require_sb_permission(current_user, "download_documents")
+def create_moa_download_link(entry_id: int, inline: bool = Query(False), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    require_sb_permission(current_user, "view_documents" if inline else "download_documents")
     _todays_moa(db, entry_id)
-    token = create_download_token({"sub": current_user.username, "temporary_document_id": entry_id})
+    token = create_download_token({"sub": current_user.username, "temporary_document_id": entry_id, "inline": inline})
     return {"download_url": f"{_public_url()}/temporary-documents/{entry_id}/download?download_token={quote(token, safe='')}"}
 
 
@@ -235,9 +275,11 @@ def download_moa_by_link(entry_id: int, download_token: str = Query(...), db: Se
         raise HTTPException(status_code=401, detail="Link user not found")
     ensure_active_user(user)
     get_current_sb_member(user)
-    require_sb_permission(user, "download_documents")
+    inline = bool(payload.get("inline"))
+    require_sb_permission(user, "view_documents" if inline else "download_documents")
     path, entry = _todays_moa(db, entry_id)
-    return FileResponse(str(path), filename=entry.original_filename or "moa", media_type=entry.mime_type or "application/octet-stream")
+    return FileResponse(str(path), filename=entry.original_filename or "moa", media_type=entry.mime_type or "application/octet-stream",
+                        content_disposition_type="inline" if inline else "attachment")
 
 
 if __name__ == "__main__":
