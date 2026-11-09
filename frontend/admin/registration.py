@@ -136,9 +136,22 @@ def file_name_type_problem(document_type, file_name, title):
     return None
 
 
+SHORTENED_NAME_NOTE = ("Windows shortened this file's name because its folder path is too long, so its title "
+                       "can't be read. Type the title, or move the file to a short folder (like C:\\SB) and choose it again.")
+
+
+def is_shortened_name(name):
+    """A Windows short name (MUNICI~3.PDF): what a browser is given for a file whose whole path is
+    longer than Windows' 260 characters. The real name can't be had from it."""
+    return bool(re.fullmatch(r"[^\s.~]{1,6}~\d{1,6}(\.[^\s.]{1,3})?", os.path.basename(name or "")))
+
+
 def title_from_filename(name):
-    stem = os.path.splitext(name or "")[0].replace("_", " ").replace("-", " ").strip()
-    return " ".join(stem.split())
+    """The file's whole name, as it is, without its extension (.pdf, .docx): no length limit.
+    Empty for a shortened name, so MUNICI~3 is never saved as a title."""
+    if is_shortened_name(name):
+        return ""
+    return os.path.splitext(os.path.basename(name or ""))[0].strip()
 
 
 def _accent(widgets):
@@ -465,6 +478,9 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
 
     def picked(picked_files):
         set_file(picked_files[0])
+        if is_shortened_name(picked_files[0]["name"]):
+            file_hint.value = SHORTENED_NAME_NOTE
+            page.update()
         if not (title.value or "").strip():
             title.value = title_from_filename(picked_files[0]["name"])
             page.update()
@@ -802,7 +818,9 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 row[attribute] = e.control.value
             return changed
 
-        row["_title"] = ft.TextField(label="Title", value=row["title"], on_change=keep("title"), expand=True)
+        # Several lines, so a long title shows whole instead of scrolling out of the box.
+        row["_title"] = ft.TextField(label="Title", value=row["title"], on_change=keep("title"), expand=True,
+                                     multiline=True, min_lines=1, max_lines=4)
         row["_year"] = _year_dropdown(this_year, width=120, value=row["year"])
         on_dropdown_change(row["_year"], keep("year"))
         row["_status"] = ft.Row([], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -812,7 +830,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             content=ft.Column([
                 ft.Row([
                     ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=18, color=widgets.muted_color()),
-                    ft.Text(row["name"], size=12, weight=ft.FontWeight.W_600, color=widgets.body_color(), expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.Text(row["name"], size=12, weight=ft.FontWeight.W_600, color=widgets.body_color(), expand=True),
                     row["_status"],
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Row([row["_title"]], spacing=8),
@@ -854,6 +872,8 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             details.append(ft.Text(row["reason"], size=12, color=ft.Colors.RED_700))
         if row["state"] == "uploading":
             details.append(ft.ProgressBar(value=row["progress"] or None))
+        if is_shortened_name(row["name"]) and row["state"] not in ("registered", "refused"):
+            details.append(widgets.hint(SHORTENED_NAME_NOTE))
         row["_details"].controls = details
 
     def remove(row):
@@ -970,7 +990,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 "tmp_names": [row["tmp_name"] for row in batch],
                 "documents": [{
                     "tmp_name": row["tmp_name"], "series_year": int(row["year"]),
-                    "title": row["title"].strip(),
+                    "title": " ".join(row["title"].splitlines()).strip(),  # Enter in the box adds no line break to the title
                 } for row in batch],
                 **shared,
                 "allow_duplicate_number": allow,
