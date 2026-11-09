@@ -99,3 +99,43 @@ def test_a_past_day_is_read_only_and_the_archive_keeps_or_deletes_after_confirmi
     assert not any(m == "DELETE" for m, _, _ in calls), "the first click only asks to confirm"
     find(cards.archive_card, "FilledButton", "Confirm delete").on_click(None)
     assert ("DELETE", "/temporary-documents/5") in [(m, p) for m, p, _ in calls]
+
+
+def test_a_message_from_one_day_is_not_shown_on_another_and_names_its_day():
+    cards, _ = build()
+    next_week = date(2026, 11, 14)
+    cards.load(next_week, TODAY)
+    find(cards.day_card, "OutlinedButton", "Add").on_click(None)
+    assert "Added ORD-000007 for Nov 14, 2026." in texts(cards.day_card)
+
+    cards.load(TODAY, TODAY)
+    assert not any(text.startswith("Added") for text in texts(cards.day_card))
+
+
+def test_an_moa_saves_for_the_day_its_upload_started_on():
+    cards, calls = build()
+    next_week = date(2026, 11, 14)
+
+    class SlowFiles(FakeFiles):
+        def upload(self, uploads, on_progress):
+            cards.load(TODAY, TODAY)  # the employee goes back to today while the file uploads
+            on_progress(uploads[0][0], 1.0, None)
+
+    cards.files = SlowFiles()
+    cards.load(next_week, TODAY)
+    find(cards.day_card, "OutlinedButton", "Upload a MOA").on_click(None)
+    find(cards.day_card, "OutlinedButton", "Choose file…").on_click(None)
+    find(cards.day_card, "FilledButton", "Upload MOA").on_click(None)
+    saved = next(call for call in calls if call[1] == "/temporary-documents/moa")
+    assert saved[2]["json"]["scheduled_for"] == "2026-11-14"
+
+
+def test_an_ordinance_archived_after_it_was_set_is_flagged_and_view_needs_details_access():
+    cards, _ = build()
+    cards.state["items"] = []
+    cards.load(TODAY, TODAY)
+    cards.state["items"] = [{"id": 1, "kind": "Ordinance", "title": "Budget ordinance", "document": {**ORDINANCE, "archived": True}, "archived": False}]
+    cards.render()
+    shown = texts(cards.day_card)
+    assert "Archived · hidden from members" in shown
+    assert not any(type(c).__name__ == "TextButton" and c.text == "View" for c in _walk(cards.day_card)), "no details access: no dead View button"

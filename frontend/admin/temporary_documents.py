@@ -61,9 +61,14 @@ class TemporaryDocuments:
         self.state["notice"] = (message, error)
 
     def load(self, day, today, update=False):
+        if day != self.state["day"]:
+            self.notify("")  # a message like "Added ... " belongs to the day it was made on
         self.state.update(day=day, today=today, confirm=None)
         try:
-            self.state["items"] = self.api("GET", "/temporary-documents", params={"date": day.isoformat()}).get("items", [])
+            payload = self.api("GET", "/temporary-documents", params={"date": day.isoformat()})
+            self.state["items"] = payload.get("items", [])
+            # The server's day, so a screen left open past midnight stops offering to add to yesterday.
+            self.state["today"] = date.fromisoformat(payload.get("today") or today.isoformat())
             self.state["archive"] = self.api("GET", "/temporary-documents/archive").get("items", [])
         except Exception as exc:
             self.state.update(items=[], archive=[])
@@ -101,7 +106,7 @@ class TemporaryDocuments:
     def add_ordinance(self, document):
         try:
             self.api("POST", "/temporary-documents/ordinance", json={"scheduled_for": self.state["day"].isoformat(), "document_id": document["id"]})
-            self.reload(f"Added {document.get('tracking_number') or 'the ordinance'} for this day.")
+            self.reload(f"Added {document.get('tracking_number') or 'the ordinance'} for {self.state['day'].strftime('%b %d, %Y')}.")
         except Exception as exc:
             self.reload(f"Unable to add: {error_detail(exc)[0]}", error=True)
 
@@ -149,6 +154,7 @@ class TemporaryDocuments:
             self.notify("Choose a file and give it a title.", error=True)
             self.render(True)
             return
+        day = self.state["day"]
         self.set_busy(True)
         try:
             created = self.api("POST", "/documents/uploads/create_tmp_uploads", json={"files": [{"filename": chosen["name"], "size": chosen["size"]}]})
@@ -166,7 +172,7 @@ class TemporaryDocuments:
             if error:
                 self.fail(f"The upload failed: {error}")
             elif upload_finished(value):
-                self.save_moa(item["tmp_name"], title)
+                self.save_moa(item["tmp_name"], title, day)
             else:
                 self.progress.value = value
                 self.page.update()
@@ -174,15 +180,15 @@ class TemporaryDocuments:
         self.progress.value = 0
         self.files.upload([(chosen["name"], item["upload_url"])], on_progress)
 
-    def save_moa(self, tmp_name, title):
+    def save_moa(self, tmp_name, title, day):
         try:
-            self.api("POST", "/temporary-documents/moa", json={"scheduled_for": self.state["day"].isoformat(), "tmp_name": tmp_name, "title": title})
+            self.api("POST", "/temporary-documents/moa", json={"scheduled_for": day.isoformat(), "tmp_name": tmp_name, "title": title})
         except Exception as exc:
             self.fail(f"Unable to save the MOA: {error_detail(exc)[0]}")
             return
         self.state.update(busy=False, file=None)
         self.title_field.value = ""
-        self.reload(f"Uploaded \"{title}\".")
+        self.reload(f"Uploaded \"{title}\" for {day.strftime('%b %d, %Y')}.")
 
     def set_busy(self, busy):
         self.state["busy"] = busy
@@ -207,12 +213,14 @@ class TemporaryDocuments:
         ], spacing=2, expand=True)
 
     def entry_row(self, index, entry):
-        actions = [ft.TextButton("Open file" if entry["kind"] == "MOA" else "View", on_click=lambda _, e=entry: self.view(e))]
+        actions = [ft.TextButton("Open file" if entry["kind"] == "MOA" else "View", on_click=lambda _, e=entry: self.view(e))]             if entry["kind"] == "MOA" or self.open_details else []
         if self.editable():
             actions.append(ft.TextButton("Remove", style=ft.ButtonStyle(color=ft.Colors.RED_700), on_click=lambda _, e=entry: self.remove(e)))
         return self.widgets.list_row([
             ft.Text(f"{index + 1}.", width=28, size=14, weight=ft.FontWeight.BOLD, color=self.widgets.muted_color()),
-            self.kind_chip(entry), self.text_column(self.reference(entry), entry.get("title")), *actions,
+            self.kind_chip(entry), self.text_column(self.reference(entry), entry.get("title")),
+            *([self.widgets.chip("Archived · hidden from members", ft.Colors.RED_700)] if (entry.get("document") or {}).get("archived") else []),
+            *actions,
         ], stack_on_phone=True)
 
     def due_chip(self, entry):
