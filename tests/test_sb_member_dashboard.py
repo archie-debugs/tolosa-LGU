@@ -25,11 +25,6 @@ COUNCIL = {
         {"id": 4, "title": "Old draft", "held_on": day(-1), "status": "Draft"},
     ]},
     "/council/sessions/2/business": {"sections": [{"items": [{}, {}]}, {"items": [{}]}]},
-    "/council/committees": [
-        {"id": 1, "name": "Committee on Finance", "chair_member_id": 7, "is_active": True},
-        {"id": 2, "name": "Committee on Health", "chair_member_id": 8, "is_active": True},
-        {"id": 3, "name": "Old Committee", "chair_member_id": 7, "is_active": False},
-    ],
 }
 DOCUMENTS = {"items": [{"id": n, "title": f"Doc {n}", "document_type": "Ordinance"} for n in range(1, 6)]}
 PDF = [{"id": 9, "filename": "x.pdf"}]
@@ -70,13 +65,12 @@ def build(council=COUNCIL, documents=DOCUMENTS, opened=None, upcoming=UPCOMING):
     return shown, texts(shown)
 
 
-def test_the_dashboard_shows_position_next_session_chaired_committees_and_todays_documents():
+def test_the_dashboard_shows_position_next_session_and_todays_documents():
     shown, words = build()
 
     assert "Good day, Hon. Maria Santos" in words and "Regular Member" in words
     assert "12th Regular Session" in words and "In 7 days" in words and "Order of business: 3 items" in words
-    assert "Committee on Finance" in words
-    assert "Committee on Health" not in words and "Old Committee" not in words
+    assert "Committees I chair" not in words
     assert ["Doc 1", "Doc 2", "Doc 3"] == [w for w in words if w.startswith("Doc ")]
     assert "See all 5" in [c.text for c in walk(shown) if isinstance(c, ft.TextButton)]
 
@@ -86,7 +80,6 @@ def test_each_card_says_why_it_is_empty_when_a_call_fails_or_nothing_is_set():
 
     assert "Good day, MSantos" in words  # no member record: falls back to the account name
     assert any(w.startswith("Unable to load sessions") for w in words)
-    assert any(w.startswith("Unable to load committees") for w in words)
     assert "No documents have been set for today yet." in words
 
 
