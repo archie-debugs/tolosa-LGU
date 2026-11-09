@@ -262,64 +262,33 @@ def test_sb_member_app_opens_on_the_dashboard_and_todays_documents_picks_up_new_
     assert "Road resolution" in page_texts(page)
 
 
-def test_employee_screen_adds_a_document_then_its_note():
+def test_employee_screen_shows_only_the_days_temporary_documents():
     import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
     import flet as ft
     from frontend.admin.todays_documents import build_todays_documents_view
 
     calls = []
-    entries = []
 
     def fake_api(method, path, **kwargs):
-        calls.append((method, path, kwargs))
-        if method == "GET" and path == "/todays-documents":
-            return {"date": kwargs["params"]["date"], "today": "2026-10-18", "items": list(entries)}
-        if method == "GET" and path == "/todays-documents/upcoming":
-            return {"items": [{"date": "2026-10-18", "count": len(entries), "hidden": 0}] if entries else []}
-        if method == "GET" and path == "/documents":
-            return {"items": [{"id": 7, "title": "Budget ordinance", "tracking_number": "DOC-000007", "document_number": "12", "series_year": 2026, "attachments": []}],
-                    "total": 1, "page": 1, "total_pages": 1}
-        if method == "POST":
-            entries.append({"id": 1, "note": None, "document": {"id": 7, "title": "Budget ordinance", "tracking_number": "DOC-000007", "has_attachment": False}})
-            return entries[-1]
-        if method == "PATCH":
-            entries[0]["note"] = kwargs["json"]["note"]
-            return entries[0]
+        calls.append((method, path))
+        if path == "/temporary-documents":
+            return {"date": kwargs["params"]["date"], "today": "2026-10-18", "items": []}
+        if path == "/temporary-documents/archive":
+            return {"today": "2026-10-18", "items": []}
+        if path == "/documents":
+            return {"items": [], "total": 0, "page": 1, "total_pages": 1}
         raise AssertionError((method, path))
-
-    def button(view, kind, label):
-        return next(c for c in _walk(view) if type(c).__name__ == kind and (getattr(c, "text", None) or getattr(c, "content", None)) == label)
 
     from datetime import date as _date
     page = DummyPage()
-    view = build_todays_documents_view(page, fake_api, lambda content, **k: ft.Container(content=content), today=_date(2026, 10, 18))
-    page.add(view)
-    assert any(text.startswith("No documents set for this day yet.") for text in page_texts(page))
-    # Every non-archived document is listed before anything is searched.
-    listing = next(call for call in calls if call[1] == "/documents")
-    assert listing[2]["params"] == {"archived": "false", "page": 1, "page_size": 10, "sort_by": "created_at", "sort_order": "desc"}
-    assert "Budget ordinance" in page_texts(page) and "No file" in page_texts(page)
-    assert "1 document · page 1 of 1" in page_texts(page)
+    page.add(build_todays_documents_view(page, fake_api, lambda content, **k: ft.Container(content=content), today=_date(2026, 10, 18)))
+    texts = page_texts(page)
 
-    search_field = next(c for c in _walk(view) if type(c).__name__ == "TextField" and "Search" in (c.hint_text or ""))
-    search_field.value = "budget"
-    search_field.on_submit(None)
-    assert [call for call in calls if call[1] == "/documents"][-1][2]["params"]["search"] == "budget"
-    assert "1 document match · page 1 of 1" in page_texts(page)
-    button(view, "OutlinedButton", "Add").on_click(None)
-
-    post = next(call for call in calls if call[0] == "POST")
-    assert post[2]["json"] == {"scheduled_for": "2026-10-18", "document_id": 7}
-    assert "On this list" in page_texts(page), "the search result shows it was added"
-    assert "1 document · 1 without a file" in page_texts(page)
-
-    next(c for c in _walk(view) if type(c).__name__ == "IconButton" and c.tooltip == "Add note").on_click(None)
-    note_field = next(c for c in _walk(view) if type(c).__name__ == "TextField" and "Note" in (c.hint_text or ""))
-    note_field.value = "For second reading"
-    button(view, "FilledButton", "Save note").on_click(None)
-    patch = next(call for call in calls if call[0] == "PATCH")
-    assert patch[1] == "/todays-documents/1" and patch[2]["json"] == {"note": "For second reading"}
-    assert "For second reading" in page_texts(page)
+    assert "Sunday, October 18, 2026" in texts
+    assert "Add a document" not in texts and "On this day's list" not in texts
+    # Regular documents go through a session's order of business now; this screen never asks for the day's list.
+    assert not any(path.startswith("/todays-documents") for _, path in calls)
+    assert ("GET", "/temporary-documents") in calls
 
 
 def _walk(control, seen=None):
