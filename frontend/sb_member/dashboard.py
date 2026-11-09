@@ -7,12 +7,12 @@ from datetime import date
 
 import flet as ft
 
-from frontend.sb_member.upcoming import days_until, session_rows as upcoming_session_rows
+from frontend.sb_member.upcoming import day_rows, days_until
 from frontend.theme import PRIMARY
 
 SHOWN_DOCUMENTS = 3
-# Upcoming sessions on the dashboard, and items shown for each; the rest are on Upcoming Sessions.
-SHOWN_SESSIONS = 2
+# Upcoming days on the dashboard, and documents shown for each; the rest are on Upcoming Documents.
+SHOWN_DAYS = 2
 SHOWN_UPCOMING_ITEMS = 3
 
 
@@ -132,18 +132,18 @@ def build(page, card, api, council_api, user, open_screen, open_document, file_a
     document_card = card(ft.Column(document_rows, spacing=6))
 
     payload, error = fetch(api, "GET", "/upcoming-documents")
-    upcoming = (payload or {}).get("sessions", [])
+    upcoming = (payload or {}).get("days", [])
     upcoming_rows = [heading(ft.Icons.UPCOMING_OUTLINED, "Next Sessions Documents")]
     if error:
-        upcoming_rows.append(small(f"Unable to load upcoming sessions: {error}"))
+        upcoming_rows.append(small(f"Unable to load upcoming documents: {error}"))
     elif not upcoming:
-        upcoming_rows.append(small("No upcoming session has been scheduled yet."))
-    for index, session in enumerate(upcoming[:SHOWN_SESSIONS]):
+        upcoming_rows.append(small("No documents have been set for a later day yet."))
+    for index, day_entry in enumerate(upcoming[:SHOWN_DAYS]):
         if index:
             upcoming_rows.append(ft.Divider(height=1))
-        upcoming_rows += upcoming_session_rows(session, today, ink, muted, file_actions, limit=SHOWN_UPCOMING_ITEMS)
+        upcoming_rows += day_rows(day_entry, today, ink, muted, file_actions, limit=SHOWN_UPCOMING_ITEMS)
     if upcoming:
-        upcoming_rows.append(go(("See all upcoming sessions", "Upcoming Sessions")))
+        upcoming_rows.append(go(("See all upcoming documents", "Upcoming Documents")))
     upcoming_card = card(ft.Column(upcoming_rows, spacing=8))
 
     return ft.Column([

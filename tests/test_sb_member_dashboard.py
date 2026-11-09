@@ -28,14 +28,13 @@ COUNCIL = {
 }
 DOCUMENTS = {"items": [{"id": n, "title": f"Doc {n}", "document_type": "Ordinance"} for n in range(1, 6)]}
 PDF = [{"id": 9, "filename": "x.pdf"}]
-UPCOMING = {"sessions": [
-    {"id": 2, "title": "12th Regular Session", "held_on": day(7), "sections": [
-        {"label": "First reading and referral", "items": [
-            {"title": f"Upcoming {n}", "document": {"id": 20 + n, "title": f"Upcoming {n}", "document_type": "Ordinance", "tracking_number": f"ORD-{n}", "attachments": PDF}}
-            for n in range(1, 5)]},
-        {"label": "Other matters and communications", "items": [{"title": "Privilege speech", "document": None}]}]},
-    {"id": 3, "title": "13th Regular Session", "held_on": day(14), "sections": []},
-    {"id": 5, "title": "14th Regular Session", "held_on": day(21), "sections": []},
+UPCOMING = {"days": [
+    {"date": day(7), "items": [
+        *[{"id": 20 + n, "title": f"Upcoming {n}", "document_type": "Ordinance", "tracking_number": f"ORD-{n}", "attachments": PDF} for n in range(1, 4)],
+        {"id": None, "temporary_id": 4, "kind": "MOA", "title": "Upcoming MOA", "attachments": [{"id": 4, "filename": "moa.pdf"}]},
+        {"id": 30, "title": "Upcoming no file", "document_type": "Ordinance", "tracking_number": "ORD-9", "attachments": []}]},
+    {"date": day(8), "items": [{"id": 40, "title": "Tomorrow plus one", "document_type": "Ordinance", "tracking_number": "ORD-40", "attachments": PDF}]},
+    {"date": day(21), "items": [{"id": 50, "title": "Three weeks out", "document_type": "Ordinance", "tracking_number": "ORD-50", "attachments": PDF}]},
 ]}
 
 
@@ -94,20 +93,20 @@ def test_see_all_and_a_document_row_open_the_right_place():
     assert opened == ["Today's Documents", DOCUMENTS["items"][1]]
 
 
-def test_upcoming_session_documents_show_the_first_items_of_the_next_two_sessions():
+def test_next_sessions_documents_show_the_first_documents_of_the_next_two_days():
     opened = []
     shown, words = build(opened=opened)
 
+    assert "Next Sessions Documents" in words
     assert ["Upcoming 1", "Upcoming 2", "Upcoming 3"] == [w for w in words if w.startswith("Upcoming ") and w[-1].isdigit()]
-    assert "FIRST READING AND REFERRAL" in words and "and 2 more" in words
-    assert "13th Regular Session" in words and "14th Regular Session" not in words
-    assert "The order of business isn't ready yet." in words
+    assert "and 2 more" in words and "Tomorrow plus one" in words and "Three weeks out" not in words
+    assert (TODAY + timedelta(days=7)).strftime("%A, %B %d, %Y") in words
     controls = list(walk(shown))
     click(next(c for c in controls if isinstance(c, ft.IconButton) and c.tooltip == "View PDF"))
-    click(next(c for c in controls if isinstance(c, ft.TextButton) and c.text == "See all upcoming sessions"))
-    assert opened == [("view", 21), "Upcoming Sessions"]
+    click(next(c for c in controls if isinstance(c, ft.TextButton) and c.text == "See all upcoming documents"))
+    assert opened == [("view", 21), "Upcoming Documents"]
 
 
-def test_the_upcoming_card_says_why_it_is_empty():
-    assert "No upcoming session has been scheduled yet." in build(upcoming={"sessions": []})[1]
-    assert any(w.startswith("Unable to load upcoming sessions") for w in build(upcoming=None)[1])
+def test_the_next_sessions_card_says_why_it_is_empty():
+    assert "No documents have been set for a later day yet." in build(upcoming={"days": []})[1]
+    assert any(w.startswith("Unable to load upcoming documents") for w in build(upcoming=None)[1])

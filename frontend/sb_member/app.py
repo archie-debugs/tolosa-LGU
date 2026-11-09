@@ -24,7 +24,7 @@ from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.screen import is_phone
 from frontend.sb_member.dashboard import build as build_dashboard
-from frontend.sb_member.upcoming import session_rows
+from frontend.sb_member.upcoming import day_rows
 from frontend.theme import CANVAS, PRIMARY
 import frontend.responsive  # noqa: F401  (one column on phones and tablets)
 
@@ -218,13 +218,13 @@ def main(page: ft.Page, session=None):
         try:
             payload = api("GET", "/upcoming-documents")
         except Exception as exc:
-            body = [card(ft.Text(f"Unable to load upcoming sessions: {exc}", size=12))]
+            body = [card(ft.Text(f"Unable to load upcoming documents: {exc}", size=12))]
         else:
             today = datetime.fromisoformat(payload["date"]).date()
-            body = [card(ft.Column(session_rows(s, today, ink, muted, file_actions), spacing=8)) for s in payload["sessions"]] or [
-                card(ft.Text("No upcoming session has been scheduled yet.", size=13))]
+            body = [card(ft.Column(day_rows(d, today, ink, muted, file_actions), spacing=8)) for d in payload["days"]] or [
+                card(ft.Text("No documents have been set for a later day yet.", size=13))]
         return ft.Column([
-            page_header("Upcoming Sessions", "The order of business of each coming session. View or download a document ahead of time.", ft.Icons.UPCOMING_OUTLINED),
+            page_header("Upcoming Documents", "Documents set for the coming days. View or download them ahead of time.", ft.Icons.UPCOMING_OUTLINED),
             *body,
         ], spacing=12, tight=True)
 
@@ -313,7 +313,7 @@ def main(page: ft.Page, session=None):
             nav_items = [
                 (ft.Icons.DASHBOARD_OUTLINED, "Dashboard", screen("Dashboard", dashboard_view), "Workspace"),
                 (ft.Icons.EVENT_NOTE_OUTLINED, "Today's Documents", screen("Today's Documents", todays_documents_view), "Workspace"),
-                (ft.Icons.UPCOMING_OUTLINED, "Upcoming Sessions", screen("Upcoming Sessions", upcoming_view), "Workspace"),
+                (ft.Icons.UPCOMING_OUTLINED, "Upcoming Documents", screen("Upcoming Documents", upcoming_view), "Workspace"),
                 (ft.Icons.EVENT_AVAILABLE_OUTLINED, "Sessions", screen("Sessions", sessions_view), "Workspace"),
             ]
         nav_items.append((ft.Icons.ACCOUNT_CIRCLE_OUTLINED, "My Account", screen("My Account", account_view), MENU_SECTION))
