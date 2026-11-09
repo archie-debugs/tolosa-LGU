@@ -251,6 +251,9 @@ def test_sb_member_app_opens_on_the_dashboard_and_todays_documents_picks_up_new_
     assert "Documents set for you for today." in texts
     assert "Budget ordinance" in texts and "For first reading" in texts
     assert "Road resolution" not in texts
+    # Members get the file (View PDF / Download), never the details dialog; this one has no file yet.
+    assert "No file" in texts
+    assert not any(type(c).__name__ == "OutlinedButton" and c.text == "Open" for c in _walk(page.controls[0]))
 
     assert add(main_client, employee, ids["Road resolution"]).status_code == 200
     deadline = time.time() + 5

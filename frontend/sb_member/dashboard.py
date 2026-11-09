@@ -8,9 +8,13 @@ from datetime import date
 
 import flet as ft
 
+from frontend.sb_member.upcoming import days_until, session_rows as upcoming_session_rows
 from frontend.theme import PRIMARY
 
 SHOWN_DOCUMENTS = 3
+# Upcoming sessions on the dashboard, and items shown for each; the rest are on Upcoming Sessions.
+SHOWN_SESSIONS = 2
+SHOWN_UPCOMING_ITEMS = 3
 
 
 def next_session(sessions, today):
@@ -25,13 +29,11 @@ def my_member(members, username):
     return next((m for m in members if m.get("is_active") and (m.get("username") or "").lower() == username), None)
 
 
-def days_until(day, today):
-    days = (day - today).days
-    return "Today" if days == 0 else "Tomorrow" if days == 1 else f"In {days} days"
+def build(page, card, api, council_api, user, open_screen, open_document, file_actions):
+    """`api` calls the SB Member backend, `council_api` the main backend; `open_screen(label)` goes to a sidebar screen.
 
-
-def build(page, card, api, council_api, user, open_screen, open_document):
-    """`api` calls the SB Member backend, `council_api` the main backend; `open_screen(label)` goes to a sidebar screen."""
+    `file_actions(document)` gives the View PDF / Download buttons of an upcoming document.
+    """
     dark = page.theme_mode == ft.ThemeMode.DARK
     ink = ft.Colors.BLUE_GREY_50 if dark else ft.Colors.BLUE_GREY_900
     muted = ft.Colors.BLUE_GREY_300 if dark else ft.Colors.BLUE_GREY_600
@@ -144,10 +146,25 @@ def build(page, card, api, council_api, user, open_screen, open_document):
         document_rows.append(go((f"See all {len(items)}", "Today's Documents")))
     document_card = card(ft.Column(document_rows, spacing=6))
 
+    payload, error = fetch(api, "GET", "/upcoming-documents")
+    upcoming = (payload or {}).get("sessions", [])
+    upcoming_rows = [heading(ft.Icons.UPCOMING_OUTLINED, "Next Sessions Documents")]
+    if error:
+        upcoming_rows.append(small(f"Unable to load upcoming sessions: {error}"))
+    elif not upcoming:
+        upcoming_rows.append(small("No upcoming session has been scheduled yet."))
+    for index, session in enumerate(upcoming[:SHOWN_SESSIONS]):
+        if index:
+            upcoming_rows.append(ft.Divider(height=1))
+        upcoming_rows += upcoming_session_rows(session, today, ink, muted, file_actions, limit=SHOWN_UPCOMING_ITEMS)
+    if upcoming:
+        upcoming_rows.append(go(("See all upcoming sessions", "Upcoming Sessions")))
+    upcoming_card = card(ft.Column(upcoming_rows, spacing=8))
+
     return ft.Column([
         greeting,
         ft.ResponsiveRow([
             ft.Column([session_card, committee_card], spacing=14, col={"xs": 12, "md": 5}),
-            ft.Column([document_card], col={"xs": 12, "md": 7}),
+            ft.Column([document_card, upcoming_card], spacing=14, col={"xs": 12, "md": 7}),
         ], spacing=14, run_spacing=14),
     ], spacing=14, tight=True)

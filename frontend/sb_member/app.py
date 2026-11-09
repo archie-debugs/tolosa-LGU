@@ -24,6 +24,7 @@ from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.screen import is_phone
 from frontend.sb_member.dashboard import build as build_dashboard
+from frontend.sb_member.upcoming import session_rows
 from frontend.theme import CANVAS, PRIMARY
 import frontend.responsive  # noqa: F401  (one column on phones and tablets)
 
@@ -112,52 +113,19 @@ def main(page: ft.Page, session=None):
     def can(permission):
         return permission in permissions
 
-    def download_document(document, attachment):
+    def download_document(document, attachment, inline=False):
         # The app runs in the member's browser: hand that browser a download link, since a
         # file saved here would land on the machine running the app, not the member's.
+        # `inline` opens the file in the browser's own viewer instead (View PDF).
         try:
             # A MOA set for today has no document; its link comes from the temporary document.
             path = (f"/temporary-documents/{document['temporary_id']}/download-token" if document.get("kind") == "MOA"
-                    else f"/documents/{document['id']}/attachments/{attachment['id']}/download-token")
+                    else f"/documents/{document['id']}/attachments/{attachment['id']}/download-token") + ("?inline=true" if inline else "")
             payload = api("POST", path)
             page.launch_url(payload["download_url"])
-            notify(f"Downloading {attachment['filename']} in your browser")
+            notify(f"Opening {attachment['filename']} in your browser" if inline else f"Downloading {attachment['filename']} in your browser")
         except Exception as exc:
             notify(str(exc))
-
-    def document_dialog(document):
-        attachment_controls = []
-        for attachment in document.get("attachments", []):
-            actions = []
-            if can("download_documents"):
-                actions.append(ft.OutlinedButton("Download", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=lambda _, d=document, a=attachment: download_document(d, a)))
-            attachment_controls.append(ft.Row([ft.Icon(ft.Icons.INSERT_DRIVE_FILE_OUTLINED, size=18, color=PRIMARY), ft.Text(attachment["filename"], expand=True), *actions], spacing=8))
-        if not attachment_controls:
-            attachment_controls = [ft.Text("No attached file", size=12, color=ft.Colors.BLUE_GREY_600)]
-        info = [
-            ("System ID", document.get("tracking_number")),
-            ("Document Number", document.get("document_number")),
-            ("Series Year", document.get("series_year")),
-            ("Document Type", document.get("document_type")),
-            ("Date", format_date(document.get("date"))),
-            ("Originating Office", document.get("originating_office")),
-            ("Status", document.get("status")),
-        ]
-        rows = [ft.Row([ft.Text(label, width=145, size=12, weight=ft.FontWeight.W_600, color=ft.Colors.BLUE_GREY_600), ft.Text(value or "Not available", size=12, expand=True)], spacing=8) for label, value in info]
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text(document.get("title", "Document"), weight=ft.FontWeight.BOLD),
-            content=ft.Container(ft.Column(rows + [ft.Divider(), ft.Text("Description", weight=ft.FontWeight.BOLD, size=13), ft.Text(document.get("description") or "No description provided.", size=12), ft.Divider(), ft.Text("Attached File", weight=ft.FontWeight.BOLD, size=13), *attachment_controls], tight=True, spacing=10), width=620),
-            actions=[ft.TextButton("Close", on_click=lambda _: close_dialog(dialog))],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-        page.dialog = dialog
-        dialog.open = True
-        page.update()
-
-    def close_dialog(dialog):
-        dialog.open = False
-        page.update()
 
     def todays_documents_view():
         if not can("view_documents"):
@@ -170,13 +138,7 @@ def main(page: ft.Page, session=None):
 
         def document_row(index, document):
             moa = document.get("kind") == "MOA"
-            actions = [] if moa else [ft.OutlinedButton("Open", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _, d=document: document_dialog(d))]
-            if can("download_documents") and document.get("attachments"):
-                download = lambda _, d=document: download_document(d, d["attachments"][0])
-                actions.append(
-                    ft.OutlinedButton("Download", icon=ft.Icons.DOWNLOAD_OUTLINED, on_click=download) if moa else
-                    ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download document", icon_color=ft.Colors.BLUE_GREY_600, on_click=download)
-                )
+            actions = file_actions(document) if document.get("attachments") else [ft.Text("No file", size=12, color=ft.Colors.BLUE_GREY_600)]
             reference = (
                 f"MOA · {document['attachments'][0]['filename']}" if moa else
                 f"{document.get('document_type') or 'Document'} · No. {document.get('document_number') or '-'} / {document.get('series_year') or '-'} · {document.get('tracking_number') or '-'}"
@@ -239,6 +201,33 @@ def main(page: ft.Page, session=None):
             updated_line,
         ], spacing=10, tight=True)
 
+    def file_actions(document):
+        # A document's file only, never its details: View PDF in the browser, and Download.
+        attachment = document["attachments"][0]
+        actions = [ft.IconButton(ft.Icons.PICTURE_AS_PDF_OUTLINED, tooltip="View PDF", icon_color=PRIMARY,
+                                 on_click=lambda _: download_document(document, attachment, inline=True))]
+        if can("download_documents"):
+            actions.append(ft.IconButton(ft.Icons.DOWNLOAD_OUTLINED, tooltip="Download", icon_color=ft.Colors.BLUE_GREY_600,
+                                         on_click=lambda _: download_document(document, attachment)))
+        return actions
+
+    def upcoming_view():
+        if not can("view_documents"):
+            return card(ft.Text("Documents are unavailable for this account.", size=14))
+        ink, muted = color("ink", ft.Colors.BLUE_GREY_900, ft.Colors.BLUE_GREY_50), color("muted", ft.Colors.BLUE_GREY_600, ft.Colors.BLUE_GREY_300)
+        try:
+            payload = api("GET", "/upcoming-documents")
+        except Exception as exc:
+            body = [card(ft.Text(f"Unable to load upcoming sessions: {exc}", size=12))]
+        else:
+            today = datetime.fromisoformat(payload["date"]).date()
+            body = [card(ft.Column(session_rows(s, today, ink, muted, file_actions), spacing=8)) for s in payload["sessions"]] or [
+                card(ft.Text("No upcoming session has been scheduled yet.", size=13))]
+        return ft.Column([
+            page_header("Upcoming Sessions", "The order of business of each coming session. View or download a document ahead of time.", ft.Icons.UPCOMING_OUTLINED),
+            *body,
+        ], spacing=12, tight=True)
+
     def sessions_view():
         # Read only: SB Members see the sessions and attendance the Secretariat records.
         # Council sessions are served by the main backend only, not the SB Member backend.
@@ -250,15 +239,15 @@ def main(page: ft.Page, session=None):
         render()
 
     def open_document(document):
-        # A MOA has no document record, only its file, as on Today's Documents.
-        if document.get("kind") != "MOA":
-            document_dialog(document)
-        elif can("download_documents") and document.get("attachments"):
-            download_document(document, document["attachments"][0])
+        # Members open a document's file, not its details.
+        if document.get("attachments"):
+            download_document(document, document["attachments"][0], inline=True)
+        else:
+            notify("This document has no file attached yet.")
 
     def dashboard_view():
         return build_dashboard(page, card, api, lambda method, path, **kwargs: api(method, path, base_url=MAIN_BACKEND_URL, **kwargs),
-                               user, open_screen, open_document)
+                               user, open_screen, open_document, file_actions)
 
     def account_view():
         profile_rows = []
@@ -324,6 +313,7 @@ def main(page: ft.Page, session=None):
             nav_items = [
                 (ft.Icons.DASHBOARD_OUTLINED, "Dashboard", screen("Dashboard", dashboard_view), "Workspace"),
                 (ft.Icons.EVENT_NOTE_OUTLINED, "Today's Documents", screen("Today's Documents", todays_documents_view), "Workspace"),
+                (ft.Icons.UPCOMING_OUTLINED, "Upcoming Sessions", screen("Upcoming Sessions", upcoming_view), "Workspace"),
                 (ft.Icons.EVENT_AVAILABLE_OUTLINED, "Sessions", screen("Sessions", sessions_view), "Workspace"),
             ]
         nav_items.append((ft.Icons.ACCOUNT_CIRCLE_OUTLINED, "My Account", screen("My Account", account_view), MENU_SECTION))
