@@ -1,7 +1,6 @@
 """The SB Member dashboard: the first screen after login (the "Briefing" layout from the prototype).
 
-A greeting with the member's position, then the next session and the committees they chair
-beside today's documents. One column on a phone; two side by side on a tablet or laptop.
+A greeting with the member's position, then the next session beside today's documents. One column on a phone; two side by side on a tablet or laptop.
 """
 
 from datetime import date
@@ -105,20 +104,6 @@ def build(page, card, api, council_api, user, open_screen, open_document, file_a
         session_rows.append(go(("See the sessions", "Sessions")))
     session_card = card(ft.Column(session_rows, spacing=10))
 
-    committees, error = fetch(council_api, "GET", "/council/committees")
-    chaired = [c for c in committees or [] if c.get("is_active") and member and c.get("chair_member_id") == member["id"]]
-    committee_rows = [heading(ft.Icons.GROUPS_2, "Committees I chair")]
-    if error:
-        committee_rows.append(small(f"Unable to load committees: {error}"))
-    elif not chaired:
-        committee_rows.append(small("You don't chair a committee this term."))
-    committee_rows += [ft.Row([
-        ft.Icon(ft.Icons.STAR_OUTLINE, color=PRIMARY, size=20),
-        ft.Text(c["name"], size=13, color=ink, expand=True),
-        chip("Chairperson", ft.Colors.AMBER_800),
-    ], spacing=10) for c in chaired]
-    committee_card = card(ft.Column(committee_rows, spacing=10))
-
     payload, error = fetch(api, "GET", "/todays-documents")
     items = (payload or {}).get("items", [])
     document_rows = [heading(ft.Icons.EVENT_NOTE, "Today's documents", chip(str(len(items)), PRIMARY))]
@@ -164,7 +149,7 @@ def build(page, card, api, council_api, user, open_screen, open_document, file_a
     return ft.Column([
         greeting,
         ft.ResponsiveRow([
-            ft.Column([session_card, committee_card], spacing=14, col={"xs": 12, "md": 5}),
+            ft.Column([session_card], spacing=14, col={"xs": 12, "md": 5}),
             ft.Column([document_card, upcoming_card], spacing=14, col={"xs": 12, "md": 7}),
         ], spacing=14, run_spacing=14),
     ], spacing=14, tight=True)
