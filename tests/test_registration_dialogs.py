@@ -189,7 +189,7 @@ def test_a_document_with_its_file_registers_once_the_upload_finishes():
     page, dialog, files, api, _ = open_single()
     press(dialog, "Choose file")
     files.on_picked([{"name": "Ordinance_on_parking.pdf", "size": 2048}])
-    assert field(dialog, "Title").value == "Ordinance on parking"
+    assert field(dialog, "Title").value == "Ordinance_on_parking"
 
     press(dialog, "Register")
     assert files.uploads == [[("Ordinance_on_parking.pdf", "http://backend/up/Ordinance_on_parking.pdf")]]
@@ -202,7 +202,7 @@ def test_a_document_with_its_file_registers_once_the_upload_finishes():
     assert find_button(dialog, "Uploading 50%") is not None
     files.on_progress("Ordinance_on_parking.pdf", 1.0, None)
     payload = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]
-    assert payload["documents"] == [{"tmp_name": "tmp_Ordinance_on_parking.pdf", "series_year": 2026, "title": "Ordinance on parking"}]
+    assert payload["documents"] == [{"tmp_name": "tmp_Ordinance_on_parking.pdf", "series_year": 2026, "title": "Ordinance_on_parking"}]
     assert payload["office_id"] == 2 and payload["allow_duplicate_number"] is False
     assert "DOC-000001" in texts(dialog)
 
@@ -241,7 +241,7 @@ def test_several_files_register_after_their_uploads_with_their_own_titles():
     press(dialog, "Register 2 documents")
 
     specs = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["documents"]
-    assert [spec["title"] for spec in specs] == ["Ordinance on roads", "ordinance 2"]
+    assert [spec["title"] for spec in specs] == ["Ordinance on roads", "ordinance-2"]
     assert "Registered DOC-000001" in texts(dialog) and "Registered DOC-000002" in texts(dialog)
     assert find_button(dialog, "QR labels").visible is True
     assert registered == [1]
@@ -412,3 +412,25 @@ def test_a_batch_opened_from_a_type_page_keeps_that_type():
     fill_required(dialog)
     press(dialog, "Register 1 document")
     assert field(dialog, "Document type").disabled is True
+
+
+def test_a_title_is_the_whole_file_name_however_long():
+    from frontend.admin.registration import title_from_filename
+    long_name = "Ordinance No. 12, s. 2026 - An Ordinance Regulating the Use of Sidewalks_Final " * 4
+    assert title_from_filename(long_name + ".pdf") == long_name.strip()
+    assert title_from_filename("Resolution_No-5 v2.docx") == "Resolution_No-5 v2"
+
+
+def test_a_name_windows_shortened_leaves_the_title_empty_and_says_why():
+    from frontend.admin.registration import SHORTENED_NAME_NOTE
+    page, dialog, files, api, registered = open_multiple()
+    press(dialog, "Choose files")
+    files.on_picked([{"name": "MUNICI~3.PDF", "size": 1}, {"name": "ordinance-2.pdf", "size": 1}])
+    files.on_progress("MUNICI~3.PDF", 1.0, None)
+    files.on_progress("ordinance-2.pdf", 1.0, None)
+
+    titles = [c.value for c in walk(dialog) if type(c).__name__ == "TextField" and c.label == "Title"]
+    assert titles == ["", "ordinance-2"]
+    assert SHORTENED_NAME_NOTE in texts(dialog)
+    press(dialog, "Register 2 documents")
+    assert api.posted("/documents/bulk-register/confirm_tmp") == []  # asks for the title first
