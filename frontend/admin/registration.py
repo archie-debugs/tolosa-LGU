@@ -146,6 +146,14 @@ def is_shortened_name(name):
     return bool(re.fullmatch(r"[^\s.~]{1,6}~\d{1,6}(\.[^\s.]{1,3})?", os.path.basename(name or "")))
 
 
+def needs_whole_name(file_name, title):
+    """True while a file Windows shortened has no real title: none, or the short name typed back."""
+    if not is_shortened_name(file_name):
+        return False
+    title = (title or "").strip()
+    return not title or is_shortened_name(title) or title.lower() == os.path.splitext(os.path.basename(file_name))[0].lower()
+
+
 def title_from_filename(name):
     """The file's whole name, as it is, without its extension (.pdf, .docx): no length limit.
     Empty for a shortened name, so MUNICI~3 is never saved as a title."""
@@ -553,6 +561,11 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         if state["busy"]:
             return
         message.value = ""
+        chosen = state["file"]
+        if chosen and needs_whole_name(chosen["name"], title.value):
+            message.value = f"Windows shortened the name of {chosen['name']}. Paste or type its whole file name as the title."
+            page.update()
+            return
         if not (title.value or "").strip():
             message.value = "Enter the document's title."
             page.update()
@@ -941,6 +954,11 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             page.update()
             return
         waiting = pending()
+        shortened = [row["name"] for row in waiting if needs_whole_name(row["name"], row["title"])]
+        if shortened:
+            message.value = "Windows shortened these file names. Paste or type each one's whole file name as its title: " + ", ".join(shortened)
+            page.update()
+            return
         untitled = [row["name"] for row in waiting if not (row["title"] or "").strip()]
         if untitled:
             message.value = "Give every file a title: " + ", ".join(untitled)

@@ -434,3 +434,25 @@ def test_a_name_windows_shortened_leaves_the_title_empty_and_says_why():
     assert SHORTENED_NAME_NOTE in texts(dialog)
     press(dialog, "Register 2 documents")
     assert api.posted("/documents/bulk-register/confirm_tmp") == []  # asks for the title first
+
+
+def test_a_shortened_file_registers_only_once_its_whole_name_is_given():
+    page, dialog, files, api, registered = open_multiple()
+    press(dialog, "Choose files")
+    files.on_picked([{"name": "MUNICI~3.PDF", "size": 1}])
+    files.on_progress("MUNICI~3.PDF", 1.0, None)
+    box = next(c for c in walk(dialog) if type(c).__name__ == "TextField" and c.label == "Title")
+
+    def type_title(value):
+        box.value = value
+        box.on_change(type("E", (), {"control": box})())
+
+    type_title("MUNICI~3")  # the short name typed back still doesn't count
+    press(dialog, "Register 1 document")
+    assert api.posted("/documents/bulk-register/confirm_tmp") == []
+    assert any("Paste or type each one's whole file name" in t for t in texts(dialog))
+
+    type_title("MUNICIPAL ORDINANCE NO. 08 SERIES OF 2023 AN ORDINANCE ADOPTING THE LOCAL CODE")
+    press(dialog, "Register 1 document")
+    specs = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["documents"]
+    assert specs[0]["title"].startswith("MUNICIPAL ORDINANCE NO. 08")
