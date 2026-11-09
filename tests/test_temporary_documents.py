@@ -107,7 +107,7 @@ def test_due_archived_entries_are_flagged_in_notifications():
     assert len([key for key in items if key.startswith("temporary_")]) == 2
 
 
-def test_members_see_todays_temporary_documents_in_todays_list_and_download_the_moa_that_day_only():
+def test_members_see_todays_temporary_documents_in_todays_list_and_download_the_moa_on_or_before_its_day():
     ids, client, employee = prepare()
     today = lgu_today().isoformat()
     client.post("/temporary-documents/ordinance", json={"scheduled_for": today, "document_id": ids["Market ordinance"]}, headers=employee)
@@ -126,4 +126,9 @@ def test_members_see_todays_temporary_documents_in_todays_list_and_download_the_
     link = member_client.post(f"/temporary-documents/{moa['id']}/download-token", headers=member)
     assert link.status_code == 200, link.text
     assert member_client.get(local(link.json()["download_url"])).content == b"%PDF-1.4\n"
+    # A later day's MOA opens ahead of its day (Upcoming Documents); once its day has passed it is archived and does not.
+    assert member_client.post(f"/temporary-documents/{later['id']}/download-token", headers=member).status_code == 200
+    with SessionLocal() as db:
+        db.query(models.TemporaryDocument).filter_by(id=later["id"]).update({"scheduled_for": lgu_today() - timedelta(days=1)})
+        db.commit()
     assert member_client.post(f"/temporary-documents/{later['id']}/download-token", headers=member).status_code == 404

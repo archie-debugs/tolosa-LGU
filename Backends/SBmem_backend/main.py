@@ -11,13 +11,12 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from Backends.backend import business, models
+from Backends.backend import models
 from Backends.backend.auth_jwt import create_download_token, decode_download_token
 from Backends.backend.authentication import ensure_active_user, get_current_user
 from Backends.backend.lan import refresh_development_public_urls
 from Backends.backend.core import LEGACY_UPLOAD_DIR, UPLOAD_DIR, lgu_today, normalize_permissions, normalize_user_role
 from Backends.backend.database import get_db
-from Backends.backend.routes.council_sessions import SCHEDULED, session_title
 from Backends.backend.routes.temporary_documents import moa_path
 
 refresh_development_public_urls()
@@ -99,25 +98,20 @@ def me(current_user: models.User = Depends(get_current_sb_member)):
     }
 
 
-@app.get("/todays-documents")
-def todays_documents(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
-    """The documents employees set for today, in their order, so members need not search.
-
-    Today's temporary documents (ordinances and MOAs) follow, in the same list: members are not
-    told which ones are temporary. A MOA has no document id; it carries `temporary_id` instead.
-    """
-    require_sb_permission(current_user, "view_documents")
-    today = lgu_today()
+def _documents_for(db: Session, day) -> list[dict[str, Any]]:
+    """The documents employees set for a day, in their order, then that day's temporary documents
+    (ordinances and MOAs): members are not told which ones are temporary. A MOA has no document id;
+    it carries `temporary_id` instead."""
     entries = (
         db.query(models.TodaysDocument)
         .join(models.Document, models.Document.id == models.TodaysDocument.document_id)
-        .filter(models.TodaysDocument.scheduled_for == today, models.Document.archived.is_(False))
+        .filter(models.TodaysDocument.scheduled_for == day, models.Document.archived.is_(False))
         .order_by(models.TodaysDocument.position.asc(), models.TodaysDocument.id.asc())
         .all()
     )
     items = [{**_safe_document(entry.document, db), "note": entry.note} for entry in entries]
     listed = {item["id"] for item in items}
-    temporary = db.query(models.TemporaryDocument).filter(models.TemporaryDocument.scheduled_for == today).order_by(models.TemporaryDocument.id).all()
+    temporary = db.query(models.TemporaryDocument).filter(models.TemporaryDocument.scheduled_for == day).order_by(models.TemporaryDocument.id).all()
     for entry in temporary:
         doc = entry.document
         if doc is not None:
@@ -129,43 +123,35 @@ def todays_documents(db: Session = Depends(get_db), current_user: models.User = 
                 "id": None, "temporary_id": entry.id, "kind": "MOA", "title": entry.title, "document_type": "MOA", "note": None,
                 "attachments": [{"id": entry.id, "filename": entry.original_filename, "mime_type": entry.mime_type, "size": entry.size}],
             })
-    return {"date": today.isoformat(), "items": items}
+    return items
 
 
-def _upcoming_items(db: Session):
-    """Order of business items of Scheduled sessions from today on; Draft sessions are not shown to members."""
-    return (db.query(models.SessionItem).join(models.CouncilSession, models.CouncilSession.id == models.SessionItem.session_id)
-            .filter(models.CouncilSession.status == SCHEDULED, models.CouncilSession.held_on >= lgu_today()))
+@app.get("/todays-documents")
+def todays_documents(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
+    """The documents employees set for today, so members need not search."""
+    require_sb_permission(current_user, "view_documents")
+    today = lgu_today()
+    return {"date": today.isoformat(), "items": _documents_for(db, today)}
 
 
 @app.get("/upcoming-documents")
 def upcoming_documents(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
-    """Each Scheduled session from today on, earliest first, with its order of business by section.
+    """Each day after today that has documents set for it, earliest first, with that day's documents.
 
-    An item without a document, or whose document is archived, comes with `document: null`.
+    Members may view and download these before their day, but not open their details.
     """
     require_sb_permission(current_user, "view_documents")
-    sessions = (db.query(models.CouncilSession)
-                .filter(models.CouncilSession.status == SCHEDULED, models.CouncilSession.held_on >= lgu_today())
-                .order_by(models.CouncilSession.held_on.asc(), models.CouncilSession.id.asc()).all())
-    items = _upcoming_items(db).order_by(models.SessionItem.position.asc(), models.SessionItem.id.asc()).all()
-    result = []
-    for session in sessions:
-        mine = [item for item in items if item.session_id == session.id]
-        sections = []
-        for key, label in business.SECTIONS:
-            rows = [{"title": item.title, "document": _safe_document(item.document, db) if item.document and not item.document.archived else None}
-                    for item in mine if item.section == key]
-            if rows:
-                sections.append({"key": key, "label": label, "items": rows})
-        result.append({"id": session.id, "title": session_title(session), "held_on": session.held_on.isoformat(), "sections": sections})
-    return {"date": lgu_today().isoformat(), "sessions": result}
+    today = lgu_today()
+    days = {day for (day,) in db.query(models.TodaysDocument.scheduled_for).filter(models.TodaysDocument.scheduled_for > today).distinct()}
+    days |= {day for (day,) in db.query(models.TemporaryDocument.scheduled_for).filter(models.TemporaryDocument.scheduled_for > today).distinct()}
+    result = [{"date": day.isoformat(), "items": items} for day in sorted(days) if (items := _documents_for(db, day))]
+    return {"date": today.isoformat(), "days": result}
 
 
 def _set_for_today(db: Session, document_id: int, upcoming: bool = False) -> models.Document:
     """A document members may open: one employees set for today, on the day's list or as temporary.
 
-    With `upcoming`, also one on the order of business of an upcoming session: its file only, not its details.
+    With `upcoming`, also one set for a later day: its file only, not its details.
     """
     doc = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not doc:
@@ -173,14 +159,13 @@ def _set_for_today(db: Session, document_id: int, upcoming: bool = False) -> mod
     if doc.archived:
         raise HTTPException(status_code=403, detail="Archived documents are not available to SB Members")
     today = lgu_today()
-    set_today = (
-        db.query(models.TodaysDocument.id).filter_by(document_id=document_id, scheduled_for=today).first()
-        or db.query(models.TemporaryDocument.id).filter_by(document_id=document_id, scheduled_for=today).first()
-    )
-    if not set_today and upcoming:
-        set_today = _upcoming_items(db).filter(models.SessionItem.document_id == document_id).first()
-    if not set_today:
-        raise HTTPException(status_code=403, detail="SB Members can only open the documents set for them today or for an upcoming session")
+
+    def set_for(table):
+        day = table.scheduled_for >= today if upcoming else table.scheduled_for == today
+        return db.query(table.id).filter(table.document_id == document_id, day).first()
+
+    if not (set_for(models.TodaysDocument) or set_for(models.TemporaryDocument)):
+        raise HTTPException(status_code=403, detail="SB Members can only open the documents set for them today or for a later day")
     return doc
 
 
@@ -249,10 +234,10 @@ def download_by_link(document_id: int, attachment_id: int, download_token: str =
     return _attachment_response(*_member_attachment_path(db, document_id, attachment_id), inline=inline)
 
 
-def _todays_moa(db: Session, entry_id: int) -> tuple[Path, models.TemporaryDocument]:
-    """A temporary MOA members may download: only on its own day."""
+def _member_moa(db: Session, entry_id: int) -> tuple[Path, models.TemporaryDocument]:
+    """A temporary MOA members may open: on its day, or before it; never after (it is archived then)."""
     entry = db.query(models.TemporaryDocument).filter(models.TemporaryDocument.id == entry_id).first()
-    if entry is None or entry.document_id is not None or entry.scheduled_for != lgu_today():
+    if entry is None or entry.document_id is not None or entry.scheduled_for < lgu_today():
         raise HTTPException(status_code=404, detail="File not found")
     return moa_path(entry), entry
 
@@ -260,7 +245,7 @@ def _todays_moa(db: Session, entry_id: int) -> tuple[Path, models.TemporaryDocum
 @app.post("/temporary-documents/{entry_id}/download-token")
 def create_moa_download_link(entry_id: int, inline: bool = Query(False), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_sb_member)):
     require_sb_permission(current_user, "view_documents" if inline else "download_documents")
-    _todays_moa(db, entry_id)
+    _member_moa(db, entry_id)
     token = create_download_token({"sub": current_user.username, "temporary_document_id": entry_id, "inline": inline})
     return {"download_url": f"{_public_url()}/temporary-documents/{entry_id}/download?download_token={quote(token, safe='')}"}
 
@@ -277,7 +262,7 @@ def download_moa_by_link(entry_id: int, download_token: str = Query(...), db: Se
     get_current_sb_member(user)
     inline = bool(payload.get("inline"))
     require_sb_permission(user, "view_documents" if inline else "download_documents")
-    path, entry = _todays_moa(db, entry_id)
+    path, entry = _member_moa(db, entry_id)
     return FileResponse(str(path), filename=entry.original_filename or "moa", media_type=entry.mime_type or "application/octet-stream",
                         content_disposition_type="inline" if inline else "attachment")
 
