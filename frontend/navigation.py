@@ -10,6 +10,7 @@ Flet has one route-change handler per page: the public router (frontend/app.py) 
 workspace shell both hand theirs to `install`, and the workspace's sees each change first.
 """
 import re
+import time
 
 import flet as ft
 
@@ -88,3 +89,95 @@ def pull_to_refresh(content, on_refresh, distance=70):
 
     return ft.GestureDetector(content=content, on_vertical_drag_update=update, on_vertical_drag_end=end,
                               on_vertical_drag_start=lambda _: pulled.update(y=0.0))
+
+
+class PullToRefresh:
+    """Pull-to-refresh for a signed-in screen, with the spinner other phone apps show.
+
+    A white circle slides down with the finger and fills as it is pulled; let go past `distance`
+    and it spins at the top while `on_refresh()` reloads the screen, then slides away. Pulling back
+    up before letting go cancels. The pull reaches it three ways:
+    - `on_scroll` (a scrolling Column's handler): pulling past the top of a screen that scrolls.
+      Android reports this as overscroll; an iPhone bounces the content below the top (pixels < 0).
+    - `wrap(control)`: a drag on something that doesn't scroll (a short screen, the top bar).
+    """
+    HIDDEN, REST, SIZE = -48, 12, 40  # spinner top (px) out of sight, while spinning; its size
+    MIN_SPIN = 0.6  # seconds: a refresh too quick to see still shows the spin
+
+    def __init__(self, page, on_refresh, distance=70):
+        self.page, self.on_refresh, self.distance = page, on_refresh, distance
+        self.pulled, self.armed, self.busy = 0.0, False, False
+        self.ring = ft.ProgressRing(value=0, width=22, height=22, stroke_width=2.5)
+        self.spinner = ft.Container(
+            content=self.ring, width=self.SIZE, height=self.SIZE, padding=9, border_radius=self.SIZE / 2,
+            bgcolor="white", shadow=ft.BoxShadow(blur_radius=6, color="#40000000"), opacity=0,
+        )
+        # Lay this over the content (the last control of an ft.Stack); outside the circle taps pass through.
+        self.indicator = ft.Row([self.spinner], alignment=ft.MainAxisAlignment.CENTER,
+                                top=self.HIDDEN, left=0, right=0, animate_position=150)
+
+    def _show(self):
+        reach = min(self.pulled, self.distance * 1.5)
+        self.indicator.top = self.HIDDEN + reach * (self.REST - self.HIDDEN + 10) / self.distance
+        self.spinner.opacity = min(1.0, reach / self.distance)
+        self.ring.value = min(1.0, reach / self.distance)
+        self.page.update()
+
+    def drag(self, dy):
+        if self.busy or not (self.pulled or dy > 0):
+            return
+        self.pulled = max(0.0, self.pulled + dy)
+        self._show()
+
+    def release(self):
+        if self.busy:
+            return
+        if self.pulled >= self.distance or self.armed:
+            self._refresh()
+        elif self.pulled:
+            self._hide()
+
+    def _refresh(self):
+        self.busy, started = True, time.monotonic()
+        self.indicator.top, self.spinner.opacity, self.ring.value = self.REST, 1.0, None  # None: spins
+        self.page.update()
+        try:
+            self.on_refresh()
+        finally:
+            time.sleep(max(0.0, self.MIN_SPIN - (time.monotonic() - started)))
+            self.busy = False
+            self._hide()
+
+    def _hide(self):
+        self.pulled, self.armed = 0.0, False
+        self.indicator.top, self.spinner.opacity, self.ring.value = self.HIDDEN, 0, 0
+        self.page.update()
+
+    def on_scroll(self, e):
+        kind, pixels = getattr(e, "event_type", None), getattr(e, "pixels", None) or 0.0
+        top = getattr(e, "min_scroll_extent", None) or 0.0
+        if kind == "over" and (getattr(e, "overscroll", None) or 0) < 0 and pixels <= top:
+            self.drag(-e.overscroll)  # Android: pulled past the top
+        elif kind == "update" and pixels < top and not self.busy:
+            # iPhone: the content bounces below the top. Once far enough it counts, as on iOS,
+            # since the bounce back also arrives as updates.
+            self.pulled = top - pixels
+            self.armed = self.armed or self.pulled >= self.distance
+            self._show()
+        elif kind == "update" and self.pulled and (getattr(e, "scroll_delta", None) or 0) > 0:
+            self.drag(-e.scroll_delta)  # Android: pushed back up before letting go
+        elif kind == "end":
+            self.release()
+
+    def wrap(self, control, when=lambda: True):
+        """Pulling `control` down refreshes too (only while `when()`; it needs a bgcolor to feel drags)."""
+        def start(_):
+            if when() and not self.busy:
+                self.pulled = 0.0
+
+        def update(e):
+            if when():
+                self.drag(getattr(e, "delta_y", 0) or 0)
+
+        return ft.GestureDetector(content=control, on_vertical_drag_start=start, on_vertical_drag_update=update,
+                                  on_vertical_drag_end=lambda _: self.release(), expand=getattr(control, "expand", None))

@@ -103,3 +103,65 @@ def test_a_reload_reopens_the_screen_in_the_address(monkeypatch):
     admin_app.main(page, session=login(TestClient(main.app), "admin"))
     assert page.route == "/app/analytics"
     assert "Document Status" in shown(page) and "Total Documents" not in shown(page)
+
+
+class Scroll:
+    def __init__(self, event_type, pixels=0.0, overscroll=None, scroll_delta=None):
+        self.event_type, self.pixels, self.overscroll, self.scroll_delta = event_type, pixels, overscroll, scroll_delta
+        self.min_scroll_extent = 0.0
+
+
+def pull_setup():
+    refreshed = []
+    pull = navigation.PullToRefresh(AppPage(), lambda: refreshed.append(1), distance=70)
+    pull.MIN_SPIN = 0
+    return pull, refreshed
+
+
+def test_android_pull_past_the_top_refreshes_and_pushing_back_cancels():
+    pull, refreshed = pull_setup()
+    for _ in range(4):
+        pull.on_scroll(Scroll("over", overscroll=-20))
+    assert pull.ring.value == 1.0 and pull.spinner.opacity == 1.0  # the circle has come down full
+    pull.on_scroll(Scroll("end"))
+    assert refreshed == [1] and pull.indicator.top == pull.HIDDEN  # spun, then slid away
+
+    for _ in range(4):
+        pull.on_scroll(Scroll("over", overscroll=-20))
+    pull.on_scroll(Scroll("update", pixels=30, scroll_delta=30))  # pushed back up first
+    pull.on_scroll(Scroll("end"))
+    assert refreshed == [1]
+
+
+def test_iphone_bounce_refreshes_once_it_went_far_enough():
+    pull, refreshed = pull_setup()
+    for pixels in (-20, -50, -80, -40, -5):  # pulled down, then the bounce back
+        pull.on_scroll(Scroll("update", pixels=pixels))
+    pull.on_scroll(Scroll("end"))
+    assert refreshed == [1]
+
+    pull.on_scroll(Scroll("update", pixels=-30))
+    pull.on_scroll(Scroll("end"))
+    assert refreshed == [1]
+
+
+def test_plain_scrolling_never_shows_the_circle():
+    pull, refreshed = pull_setup()
+    for pixels in (40, 120, 60, 0):
+        pull.on_scroll(Scroll("update", pixels=pixels, scroll_delta=10))
+    pull.on_scroll(Scroll("end"))
+    assert refreshed == [] and pull.indicator.top == pull.HIDDEN and pull.spinner.opacity == 0
+
+
+def test_dragging_a_short_screen_refreshes_only_on_phones():
+    pull, refreshed = pull_setup()
+    phone = {"on": False}
+    wrapped = pull.wrap(ft.Container(), when=lambda: phone["on"])
+    drag = lambda dy: type("Drag", (), {"delta_y": dy})()
+    for on in (False, True):
+        phone["on"] = on
+        send(wrapped, "on_vertical_drag_start")
+        for _ in range(4):
+            send(wrapped, "on_vertical_drag_update", drag(20))
+        send(wrapped, "on_vertical_drag_end")
+    assert refreshed == [1]

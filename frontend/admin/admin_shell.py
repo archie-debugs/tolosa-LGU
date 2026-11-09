@@ -201,6 +201,7 @@ def render_shell(
         controls=[natural_height_view(content_view)] if content_view is not None else [],
         expand=True,
         scroll=ft.ScrollMode.AUTO,
+        on_scroll_interval=30,  # a pull past the top is followed closely; plain scrolling sends little
     )
 
     # =========================================================
@@ -489,7 +490,8 @@ def render_shell(
     # =========================================================
 
     profile_bar = ft.Container(padding=ft.Padding(left=8, top=4, right=8, bottom=4))
-    refreshing = ft.ProgressBar(visible=False, height=3)
+    pull = navigation.PullToRefresh(page, lambda: switch_view(selected_index, remember=False))
+    content_scroll.on_scroll = pull.on_scroll
 
     def open_menu_view(label):
         index = next((i for i, item in enumerate(shell_nav_items) if item[1] == label), None)
@@ -750,7 +752,10 @@ def render_shell(
         bgcolor=colors["canvas"],
         border=None,
         border_radius=0,
-        content=ft.Column([navigation.pull_to_refresh(profile_bar, lambda: pull_refresh()), refreshing, notifications_panel, content_holder],
+        content=ft.Column([pull.wrap(profile_bar), notifications_panel,
+                           # Phones and tablets: pulling a screen too short to scroll refreshes it too.
+                           pull.wrap(ft.Stack([ft.Container(content_holder, left=0, top=0, right=0, bottom=0), pull.indicator],
+                                              expand=True), when=lambda: compact)],
                           expand=True, spacing=4),
     )
     scrim = ft.Container(
@@ -826,14 +831,6 @@ def render_shell(
         else:
             show_address(selected_index)  # the first screen: stay
         return True
-
-    def pull_refresh():
-        """Pulling the top bar down reloads the open screen's data, like pull-to-refresh."""
-        refreshing.visible = True
-        page.update()
-        switch_view(selected_index, remember=False)
-        refreshing.visible = False
-        page.update()
 
     def page_resized(_=None):
         """Screens lay themselves out for the screen size, so a new size redraws the open one."""
