@@ -80,6 +80,7 @@ def test_handoff_creation_and_pending_receipt_flow():
         db.refresh(doc)
         document_id = doc.id
         db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+        db.add(models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf"))  # only documents with a file can be passed on
         db.commit()
 
         sender = create_employee(db, "handoffsender", office_a.id, permissions=["pass_office_documents", "view_office_documents", "scan_qr", "view_office_document_details", "view_office_history"])
@@ -165,6 +166,7 @@ def test_super_admin_handoff_uses_assigned_office_and_requires_assignment():
         db.commit()
         db.refresh(doc)
         db.add(models.DocumentOffice(document_id=doc.id, office_id=office_a.id))
+        db.add(models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf"))  # only documents with a file can be passed on
         assigned_admin = models.User(
             username="assigned-super-admin",
             hashed_password=get_password_hash("pw123"),
@@ -981,3 +983,29 @@ def test_concurrent_handoffs_of_one_document_create_exactly_one_pending_handoff(
     assert sorted(statuses) == [200] + [409] * (len(headers) - 1)
     with SessionLocal() as db:
         assert db.query(models.DocumentHandoff).filter_by(document_id=document_id, status="Pending Receipt").count() == 1
+
+
+def test_a_document_without_its_file_cannot_be_passed_on():
+    reset_db()
+    client = TestClient(main.app)
+    with SessionLocal() as db:
+        office_a = models.Office(name="Office A", office_code="OFFA")
+        office_b = models.Office(name="Office B", office_code="OFFB")
+        db.add_all([office_a, office_b])
+        db.commit()
+        doc = models.Document(tracking_number="DOC-500099", title="No file yet", status="Approved", priority="Medium",
+                              qr_token="no-file-token", current_office_id=office_a.id)
+        db.add(doc)
+        db.commit()
+        document_id, office_b_id = doc.id, office_b.id
+        create_employee(db, "nofilesender", office_a.id, permissions=["pass_office_documents"])
+
+    login = client.post("/auth/login", data={"username": "nofilesender", "password": "pw123"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    response = client.post(f"/documents/{document_id}/handoffs", json={"receiving_office_id": office_b_id}, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Attach the document's file before passing it on."
+    with SessionLocal() as db:
+        assert db.query(models.DocumentHandoff).count() == 0
