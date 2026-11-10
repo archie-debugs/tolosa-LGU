@@ -2,6 +2,7 @@
 
 import base64
 import inspect
+import time
 from urllib.parse import quote
 
 import flet as ft
@@ -25,6 +26,8 @@ PRIORITY_COLORS = {"high": ft.Colors.RED_700, "medium": ft.Colors.AMBER_800, "lo
 
 # Flet 0.28 takes base64 text in `src_base64`; newer releases take the bytes in `src`.
 IMAGE_TAKES_BASE64 = "src_base64" in inspect.signature(ft.Image.__init__).parameters
+
+POP_MS = 250  # how long the Document details pop-up takes to pop in
 
 
 def outline(color):
@@ -548,13 +551,12 @@ def open_document_details(
 
     # The pop-up opens on the click with a spinner and pops in: it grows from 92% while fading in.
     # The dialog itself is see-through so the whole card animates, not just its contents.
-    pop = ft.animation.Animation(250, ft.AnimationCurve.EASE_OUT)
+    pop = ft.animation.Animation(POP_MS, ft.AnimationCurve.EASE_OUT)
     card = ft.Container(
         scale=0.92,
         opacity=0,
         animate_scale=pop,
         animate_opacity=pop,
-        animate_size=pop,  # grows smoothly from the spinner to the full details
         bgcolor=widgets.card_color(),
         border_radius=28,
         padding=ft.Padding(24, 24, 24, 12),
@@ -567,12 +569,17 @@ def open_document_details(
     page.update()
     card.scale, card.opacity = 1, 1
     page.update()
+    popping = time.monotonic()
     try:
         fetch()
     except Exception:
         dialog.open = False
         page.update()
         raise
+    # Drawing the details freezes the browser for about 150ms, so let the pop-in finish first or it
+    # stutters. The extra 100ms covers the browser drawing the pop-up before the pop-in starts.
+    if card.page:  # only a card on a real page animates
+        time.sleep(max(0, (POP_MS + 100) / 1000 - (time.monotonic() - popping)))
     render()
     page.update()
     return True
