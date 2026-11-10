@@ -132,3 +132,34 @@ def test_members_see_todays_temporary_documents_in_todays_list_and_download_the_
         db.query(models.TemporaryDocument).filter_by(id=later["id"]).update({"scheduled_for": lgu_today() - timedelta(days=1)})
         db.commit()
     assert member_client.post(f"/temporary-documents/{later['id']}/download-token", headers=member).status_code == 404
+
+
+def stage(client, headers, name, content):
+    created = client.post("/documents/uploads/create_tmp_uploads", json={"files": [{"filename": name, "size": len(content)}]}, headers=headers)
+    file = created.json()["files"][0]
+    assert client.put(local(file["upload_url"]), content=content).status_code == 200
+    return file["tmp_name"]
+
+
+def test_photos_of_an_moa_s_pages_are_stored_as_one_pdf():
+    from tests.test_register_images import photo
+
+    _, client, employee = prepare()
+    first, second = (stage(client, employee, f"MOA roads {n}.jpg", photo()) for n in (1, 2))
+    moa = client.post("/temporary-documents/moa", json={
+        "scheduled_for": lgu_today().isoformat(), "tmp_name": first, "page_tmp_names": [second], "title": "MOA on roads",
+    }, headers=employee)
+    assert moa.status_code == 200, moa.text
+    assert moa.json()["filename"] == "MOA roads 1.pdf"
+    with SessionLocal() as db:
+        entry = db.get(models.TemporaryDocument, moa.json()["id"])
+        assert entry.mime_type == "application/pdf" and entry.stored_path.endswith(".pdf")
+        with open(entry.stored_path, "rb") as handle:
+            assert handle.read().count(b"/Type /Page\n") == 2
+
+    word = stage(client, employee, "MOA.docx", b"word file")
+    page = stage(client, employee, "page.jpg", photo())
+    mixed = client.post("/temporary-documents/moa", json={
+        "scheduled_for": lgu_today().isoformat(), "tmp_name": word, "page_tmp_names": [page], "title": "Mixed",
+    }, headers=employee)
+    assert mixed.status_code == 400 and "Only photos or scans" in mixed.json()["detail"]

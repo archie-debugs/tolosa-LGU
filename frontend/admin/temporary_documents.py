@@ -8,7 +8,7 @@ from datetime import date
 
 import flet as ft
 
-from frontend.admin.registration import error_detail, upload_finished
+from frontend.admin.registration import UNSUPPORTED, error_detail, is_image, upload_finished
 from frontend.admin.todays_documents import document_label
 
 
@@ -28,7 +28,7 @@ class TemporaryDocuments:
         self.page, self.api, self.widgets, self.files = page, api, widgets, files
         self.card_title, self.empty_state, self.open_details = card_title, empty_state, open_details
         self.state = {"day": None, "today": None, "items": [], "archive": [], "results": [], "mode": "ordinance",
-                      "file": None, "busy": False, "confirm": None, "notice": ("", False)}
+                      "file": None, "pages": [], "busy": False, "confirm": None, "notice": ("", False)}
         self.count_text = ft.Text("", size=13, color=widgets.body_color())
         self.notice_text = ft.Text("", size=12)
         self.list_column = ft.Column(spacing=0)
@@ -140,13 +140,22 @@ class TemporaryDocuments:
             self.render(True)
 
     def pick_file(self):
+        """One file, or several photos or scans of the MOA's pages (joined into one PDF), as in Register Document."""
         def picked(chosen):
-            self.state["file"] = chosen[0]
-            self.title_field.value = chosen[0]["name"].rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()
-            self.notify("")
+            if not chosen:
+                return
+            names = [item["name"] for item in chosen]
+            if len(chosen) > 1 and not all(is_image(name) for name in names):
+                self.notify("Choose one file, or several photos or scans (JPG, PNG) of one MOA's pages.", error=True)
+            elif len(set(names)) != len(names):
+                self.notify("Two of the photos have the same name. Rename one, then choose them again.", error=True)
+            else:
+                self.state["file"], self.state["pages"] = chosen[0], chosen[1:]
+                self.title_field.value = chosen[0]["name"].rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()
+                self.notify("")
             self.render(True)
 
-        self.files.pick(False, picked)
+        self.files.pick(True, picked)
 
     def upload(self):
         chosen, title = self.state["file"], (self.title_field.value or "").strip()
@@ -155,38 +164,45 @@ class TemporaryDocuments:
             self.render(True)
             return
         day = self.state["day"]
+        chosen = [chosen, *self.state["pages"]]
         self.set_busy(True)
         try:
-            created = self.api("POST", "/documents/uploads/create_tmp_uploads", json={"files": [{"filename": chosen["name"], "size": chosen["size"]}]})
+            created = self.api("POST", "/documents/uploads/create_tmp_uploads",
+                               json={"files": [{"filename": item["name"], "size": item["size"]} for item in chosen]})
         except Exception as exc:
             self.fail(f"The file could not be prepared for upload: {error_detail(exc)[0]}")
             return
-        item = next(iter(created.get("files") or []), {})
-        if not item.get("ok"):
-            self.fail("Only PDF, DOC and DOCX files can be uploaded.")
+        items = created.get("files") or []
+        if len(items) != len(chosen) or not all(item.get("ok") for item in items):
+            self.fail(UNSUPPORTED.replace("registered", "uploaded"))
             return
+        done = {item["name"]: 0.0 for item in chosen}  # name -> progress, 1.0 once uploaded
 
         def on_progress(name, value, error):
-            if name != chosen["name"] or not self.state["busy"]:
+            if name not in done or not self.state["busy"]:
                 return
             if error:
                 self.fail(f"The upload failed: {error}")
-            elif upload_finished(value):
-                self.save_moa(item["tmp_name"], title, day)
+                return
+            done[name] = 1.0 if upload_finished(value) else value
+            if all(value == 1.0 for value in done.values()):
+                self.save_moa([item["tmp_name"] for item in items], title, day)
             else:
-                self.progress.value = value
+                self.progress.value = sum(done.values()) / len(done)
                 self.page.update()
 
         self.progress.value = 0
-        self.files.upload([(chosen["name"], item["upload_url"])], on_progress)
+        self.files.upload([(item["name"], staged["upload_url"]) for item, staged in zip(chosen, items)], on_progress)
 
-    def save_moa(self, tmp_name, title, day):
+    def save_moa(self, tmp_names, title, day):
         try:
-            self.api("POST", "/temporary-documents/moa", json={"scheduled_for": day.isoformat(), "tmp_name": tmp_name, "title": title})
+            self.api("POST", "/temporary-documents/moa", json={
+                "scheduled_for": day.isoformat(), "tmp_name": tmp_names[0], "page_tmp_names": tmp_names[1:], "title": title,
+            })
         except Exception as exc:
             self.fail(f"Unable to save the MOA: {error_detail(exc)[0]}")
             return
-        self.state.update(busy=False, file=None)
+        self.state.update(busy=False, file=None, pages=[])
         self.title_field.value = ""
         self.reload(f"Uploaded \"{title}\" for {day.strftime('%b %d, %Y')}.")
 
@@ -259,13 +275,17 @@ class TemporaryDocuments:
         ]
 
     def moa_area(self):
-        chosen = self.state["file"]
+        chosen, pages = self.state["file"], self.state["pages"]
         controls = [
-            self.widgets.hint("PDF or Word, up to 25 MB. It stays for this day, then is archived for 30 days."),
+            self.widgets.hint("PDF or Word, up to 25 MB, or photos or scans (JPG, PNG) of its pages, saved as one PDF. "
+                              "It stays for this day, then is archived for 30 days."),
             ft.Row([
                 ft.OutlinedButton("Choose file…", icon=ft.Icons.ATTACH_FILE, on_click=lambda _: self.pick_file(), disabled=self.state["busy"]),
-                ft.Text(chosen["name"] if chosen else "No file chosen", size=13, color=self.widgets.body_color()),
+                ft.Text(f"{1 + len(pages)} pages, joined into one PDF" if chosen and pages else chosen["name"] if chosen else "No file chosen",
+                        size=13, color=self.widgets.body_color()),
             ], spacing=12, wrap=True),
+            *([self.widgets.hint("In this order: " + ", ".join(item["name"] for item in [chosen, *pages]))] if chosen and pages else []),
+            *([self.widgets.hint("Saved as a PDF.")] if chosen and not pages and is_image(chosen["name"]) else []),
         ]
         if chosen:
             controls += [

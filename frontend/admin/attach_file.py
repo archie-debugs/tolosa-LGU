@@ -8,7 +8,7 @@ import flet as ft
 
 from frontend.admin.registration import error_detail, set_label, upload_finished
 
-RULES = "The file must be a PDF, DOC, or DOCX file and must not duplicate existing file content."
+RULES = "The file must be a PDF, DOC or DOCX file, or a JPG or PNG photo (saved as a PDF), and must not duplicate existing file content."
 
 
 def open_attach_file_dialog(page, dialog, api, files, document, *, on_saved=None):
@@ -68,7 +68,7 @@ def open_attach_file_dialog(page, dialog, api, files, document, *, on_saved=None
             return
         item = next(iter(created.get("files") or []), {})
         if not item.get("ok"):
-            fail("Only PDF, DOC and DOCX files can be used.")
+            fail("Only PDF, DOC, DOCX, JPG and PNG files can be used.")
             return
 
         def on_progress(name, value, error):

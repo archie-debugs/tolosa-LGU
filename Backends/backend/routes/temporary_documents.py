@@ -25,7 +25,10 @@ from ..authentication import ensure_active_user, get_current_user
 from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, lgu_today, record_audit_log, require_permission
 from ..database import get_db
 from ..tracking_numbers import standard_document_type
-from .documents import ALLOWED_EXTENSIONS, MAX_FILE_SIZE, _public_base_url
+from .documents import (
+    ALLOWED_EXTENSIONS, MAX_FILE_SIZE, _images_to_pdf, _is_image, _pdf_name, _public_base_url, _remove_staged, _staged_name,
+    _staged_pages,
+)
 
 router = APIRouter(prefix="/temporary-documents", tags=["temporary-documents"])
 
@@ -43,6 +46,8 @@ class MoaEntry(BaseModel):
     scheduled_for: date
     tmp_name: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1, max_length=300)
+    # More photos or scans of the same MOA's pages, after tmp_name's: joined with it into one PDF.
+    page_tmp_names: list[str] = Field(default_factory=list, max_length=100)
 
 
 def due_on(entry: models.TemporaryDocument) -> date:
@@ -156,15 +161,37 @@ def add_moa(payload: MoaEntry, db: Session = Depends(get_db), current_user: mode
     if not safe_name or not os.path.isfile(tmp_path) or meta.get("username") != current_user.username:
         raise HTTPException(status_code=404, detail="Uploaded file not found. Upload it again.")
     original_filename = os.path.basename(meta.get("original_filename") or safe_name)
-    extension = os.path.splitext(original_filename.lower())[1]
+    try:
+        page_paths = _staged_pages(current_user, payload.page_tmp_names)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Uploaded file not found. Upload it again.")
     size = os.path.getsize(tmp_path)
-    if extension not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Use a PDF or Word file")
     if size == 0 or size > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="The file is empty or larger than 25 MB")
     os.makedirs(TEMPORARY_DIR, exist_ok=True)
-    stored_path = os.path.join(TEMPORARY_DIR, f"{secrets.token_hex(12)}{extension}")
-    os.replace(tmp_path, stored_path)
+    if page_paths or _is_image(original_filename):
+        # Photos or scans are stored as one PDF, as when registering a document.
+        if not all(_is_image(name) for name in [original_filename, *(_staged_name(path) for path in page_paths)]):
+            raise HTTPException(status_code=400, detail="Only photos or scans (JPG, PNG) of one MOA's pages can be joined into one PDF.")
+        contents = []
+        for path in [tmp_path, *page_paths]:
+            with open(path, "rb") as handle:
+                contents.append(handle.read())
+        try:
+            content = _images_to_pdf(contents)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        original_filename, size = _pdf_name(original_filename), len(content)
+        stored_path = os.path.join(TEMPORARY_DIR, f"{secrets.token_hex(12)}.pdf")
+        with open(stored_path, "wb") as handle:
+            handle.write(content)
+        _remove_staged([tmp_path, *page_paths, *(f"{path}.meta.json" for path in page_paths)])
+    else:
+        extension = os.path.splitext(original_filename.lower())[1]
+        if extension not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail="Use a PDF, Word file, or JPG or PNG photo")
+        stored_path = os.path.join(TEMPORARY_DIR, f"{secrets.token_hex(12)}{extension}")
+        os.replace(tmp_path, stored_path)
     try:
         os.remove(meta_path)
     except OSError:

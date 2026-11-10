@@ -11,7 +11,11 @@ from frontend.admin.definition_fields import DocumentTypeField
 from frontend.admin.screen import dialog_width
 from frontend.admin.tracking_ui import TrackingWidgets
 
-ALLOWED_EXTENSIONS = ("pdf", "doc", "docx")
+DOCUMENT_EXTENSIONS = ("pdf", "doc", "docx")
+# Photos or scans of a document's pages; the backend stores them as a PDF.
+IMAGE_EXTENSIONS = ("jpg", "jpeg", "png")
+ALLOWED_EXTENSIONS = DOCUMENT_EXTENSIONS + IMAGE_EXTENSIONS
+UNSUPPORTED = "Only PDF, DOC, DOCX, JPG and PNG files can be registered."
 PRIORITIES = ("Low", "Medium", "High")
 # The choices the SB's tracking sheet uses.
 ACTIONS_REQUIRED = ("None", "For Agenda", "Approval", "Posting")
@@ -77,10 +81,10 @@ class PickerFiles:
         elif then:
             then(result)
 
-    def pick(self, multiple, on_picked):
+    def pick(self, multiple, on_picked, extensions=ALLOWED_EXTENSIONS):
         self.on_picked = on_picked
         result = self.picker.pick_files(
-            allow_multiple=multiple, file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=list(ALLOWED_EXTENSIONS),
+            allow_multiple=multiple, file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=list(extensions),
         )
         self._run(result, self._picked if result is not None else None)
 
@@ -152,6 +156,10 @@ def needs_whole_name(file_name, title):
         return False
     title = (title or "").strip()
     return not title or is_shortened_name(title) or title.lower() == os.path.splitext(os.path.basename(file_name))[0].lower()
+
+
+def is_image(name):
+    return os.path.splitext(name or "")[1].lower().lstrip(".") in IMAGE_EXTENSIONS
 
 
 def title_from_filename(name):
@@ -465,7 +473,8 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         _show_problem(page, dialog, widgets, "Register document", f"The registration form could not be loaded: {error_detail(exc)[0]}")
         return
     form = _Form(page, options, widgets, document_type)
-    state = {"file": None, "tmp_name": None, "busy": False, "allow_duplicate": False, "duplicate": None}
+    # "pages": more photos of the same document after "file"; "tmp_names": all of them once uploaded.
+    state = {"file": None, "pages": [], "tmp_names": None, "busy": False, "allow_duplicate": False, "duplicate": None}
 
     style = _field_style(widgets)
     title = ft.TextField(data="Title", hint_text="Enter document title...", autofocus=True, **style)
@@ -473,7 +482,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     file_name = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=widgets.heading_color(), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
     file_hint = widgets.hint("")
     remove_file = ft.IconButton(ft.Icons.CLOSE, tooltip="Remove file", on_click=lambda _: set_file(None))
-    choose_file = _pill_button(widgets, "Choose file", ft.Icons.ATTACH_FILE, lambda _: files.pick(False, picked))
+    choose_file = _pill_button(widgets, "Choose file", ft.Icons.ATTACH_FILE, lambda _: files.pick(True, picked))
     message = _Notice()
     progress = ft.ProgressBar(value=None, visible=False)
     duplicate_box = ft.Column(spacing=6, visible=False)
@@ -485,14 +494,28 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         files.on_progress = None
         page.update()
 
-    def set_file(picked_file):
+    def set_file(picked_file, pages=()):
         state["file"] = picked_file
-        state["tmp_name"] = None
+        state["pages"] = list(pages)
+        state["tmp_names"] = None
         render_file()
         page.update()
 
     def picked(picked_files):
-        set_file(picked_files[0])
+        if not picked_files:
+            return
+        names = [item["name"] for item in picked_files]
+        if len(picked_files) > 1 and not all(is_image(name) for name in names):
+            message.value = ("Choose one file, or several photos or scans (JPG, PNG) of one document's pages. "
+                             "To register several documents at once, use Register multiple.")
+            page.update()
+            return
+        if len(set(names)) != len(names):
+            message.value = "Two of the photos have the same name. Rename one, then choose them again."
+            page.update()
+            return
+        message.value = ""
+        set_file(picked_files[0], picked_files[1:])
         if is_shortened_name(picked_files[0]["name"]):
             file_hint.value = SHORTENED_NAME_NOTE
             page.update()
@@ -502,8 +525,14 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
 
     def render_file():
         chosen = state["file"]
-        file_name.value = chosen["name"] if chosen else "No file chosen"
-        file_hint.value = "" if chosen else "Without a file, only the record is registered."
+        count = 1 + len(state["pages"])
+        file_name.value = (f"{count} pages, joined into one PDF" if count > 1 else chosen["name"]) if chosen else "No file chosen"
+        file_hint.value = (
+            "In this order: " + ", ".join(item["name"] for item in [chosen, *state["pages"]]) if chosen and count > 1
+            else "Saved as a PDF." if chosen and is_image(chosen["name"])
+            else "" if chosen
+            else "Without a file, only the record is registered. Photos or scans (JPG, PNG) are saved as one PDF."
+        )
         remove_file.visible = bool(chosen) and not state["busy"]
         choose_file.visible = not state["busy"]
 
@@ -605,47 +634,56 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         registered(document)
 
     def upload_then_register(values):
-        if state["tmp_name"]:
+        if state["tmp_names"]:
             confirm(values)
             return
         set_busy(True, "Uploading…")
-        chosen = state["file"]
+        chosen = [state["file"], *state["pages"]]
         try:
-            created = api("POST", "/documents/uploads/create_tmp_uploads", json={"files": [{"filename": chosen["name"], "size": chosen["size"]}]})
+            created = api("POST", "/documents/uploads/create_tmp_uploads",
+                          json={"files": [{"filename": item["name"], "size": item["size"]} for item in chosen]})
         except Exception as exc:
             fail(f"The file could not be prepared for upload: {error_detail(exc)[0]}")
             return
-        item = next(iter(created.get("files") or []), {})
-        if not item.get("ok"):
-            reason = item.get("reason") or "The file was refused."
-            fail("Only PDF, DOC and DOCX files can be registered." if reason == "Unsupported extension" else reason)
+        items = created.get("files") or []
+        refused = next((item for item in items if not item.get("ok")), None)
+        if refused or len(items) != len(chosen):
+            reason = (refused or {}).get("reason") or "The file was refused."
+            fail(UNSUPPORTED if reason == "Unsupported extension" else reason)
             return
+        done = {}  # name -> progress, 1.0 once uploaded
 
         def on_progress(name, value, error):
-            if name != chosen["name"] or not state["busy"]:
+            if name not in done or not state["busy"]:
                 return
             if error:
                 fail(f"The upload failed: {error}")
                 return
-            if upload_finished(value):
-                state["tmp_name"] = item["tmp_name"]
+            done[name] = 1.0 if upload_finished(value) else value
+            if all(value == 1.0 for value in done.values()):
+                state["tmp_names"] = [item["tmp_name"] for item in items]
                 confirm(values)
             else:
-                progress.value = value
-                set_label(register_button, f"Uploading {int(value * 100)}%")
+                overall = sum(done.values()) / len(done)
+                progress.value = overall
+                set_label(register_button, f"Uploading {int(overall * 100)}%")
                 page.update()
 
+        done.update({item["name"]: 0.0 for item in chosen})
         progress.value = 0
-        files.upload([(chosen["name"], item["upload_url"])], on_progress)
+        files.upload([(item["name"], staged["upload_url"]) for item, staged in zip(chosen, items)], on_progress)
 
     def confirm(values):
         set_busy(True, "Registering…")
         progress.value = None
-        spec = {"tmp_name": state["tmp_name"], "series_year": values["series_year"], "title": values["title"]}
+        tmp_names = state["tmp_names"]
+        spec = {"tmp_name": tmp_names[0], "series_year": values["series_year"], "title": values["title"]}
         shared = {key: value for key, value in values.items() if key not in spec and key != "title"}
+        # Several photos are one document's pages: the backend joins them into one PDF.
+        pages = {"combine_images": True} if len(tmp_names) > 1 else {}
         try:
             result = api("POST", "/documents/bulk-register/confirm_tmp", json={
-                "tmp_names": [state["tmp_name"]], "documents": [spec], **shared, "allow_duplicate_number": state["allow_duplicate"],
+                "tmp_names": tmp_names, "documents": [spec], **shared, **pages, "allow_duplicate_number": state["allow_duplicate"],
             })
         except Exception as exc:
             fail(error_detail(exc)[0])
@@ -657,7 +695,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         if error.get("duplicate_number"):
             show_duplicate(error.get("documents") or [])
         elif error.get("reason") == "Temporary file not found":
-            state["tmp_name"] = None
+            state["tmp_names"] = None
             fail("The uploaded file expired. Press Register to upload it again.")
         else:
             fail(error.get("reason") or "The document was not registered.")
@@ -931,7 +969,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 "state": "uploading" if item.get("ok") else "refused",
             }
             if not item.get("ok"):
-                row["reason"] = "Only PDF, DOC and DOCX files can be registered." if item.get("reason") == "Unsupported extension" else item.get("reason")
+                row["reason"] = UNSUPPORTED if item.get("reason") == "Unsupported extension" else item.get("reason")
             else:
                 uploads.append((f["name"], item["upload_url"]))
             build_row(row)
@@ -1075,7 +1113,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
             _upload_box(
                 widgets,
                 ft.Text("Choose files", size=14, weight=ft.FontWeight.BOLD, color=widgets.heading_color()),
-                widgets.hint("PDF, DOC or DOCX. Each file becomes one document; give each its own title and year."),
+                widgets.hint("PDF, DOC, DOCX, or a JPG or PNG photo (saved as a PDF). Each file becomes one document; give each its own title and year."),
                 _pill_button(widgets, "Choose files", ft.Icons.ATTACH_FILE, lambda _: files.pick(True, picked)),
             ),
             summary,

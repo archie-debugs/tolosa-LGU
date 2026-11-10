@@ -131,7 +131,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None, fil
             return
         item = next(iter(created.get("files") or []), {})
         if not item.get("ok"):
-            fail("Only PDF, DOC and DOCX files can be attached.")
+            fail("Only PDF, DOC, DOCX, JPG and PNG files can be attached.")
             return
 
         def on_progress(name, value, error):
@@ -185,7 +185,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None, fil
             ft.Column([file_name, file_hint], spacing=2, expand=True),
             ft.OutlinedButton("Choose file", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: files.pick(False, picked)),
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        ft.Text("PDF, DOC or DOCX. Choosing it fills the title from its name; check the details below.", size=11, color=ui.muted_color()),
+        ft.Text("PDF, DOC, DOCX, or a JPG or PNG photo (saved as a PDF). Choosing it fills the title from its name; check the details below.", size=11, color=ui.muted_color()),
         progress,
     ])] if attaching else []
     content = ft.Column(

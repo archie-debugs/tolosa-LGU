@@ -65,6 +65,42 @@ LEGISLATIVE_NUMBER_PATTERN = re.compile(r"(?i)\b(?:ordinance|resolution)\s+(?:no
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 ALLOWED_MIME_TYPES = {"application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB per file
+# Photos or scans of a document's pages. The web app stages them like documents, and they are stored
+# as PDFs (_images_to_pdf), so everything after registering sees an ordinary PDF.
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+STAGED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
+IMAGE_MAX_SIDE = 2000  # pixels: enough to read and print a page, far smaller than a phone photo
+
+
+def _is_image(filename: str) -> bool:
+    return os.path.splitext((filename or "").lower())[1] in IMAGE_EXTENSIONS
+
+
+def _pdf_name(filename: str) -> str:
+    return f"{os.path.splitext(filename)[0]}.pdf"
+
+
+def _images_to_pdf(contents: list[bytes]) -> bytes:
+    """One PDF with a page per image, in order: turned upright as the camera recorded, and shrunk."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    pages = []
+    try:
+        for content in contents:
+            image = ImageOps.exif_transpose(Image.open(io.BytesIO(content)))
+            if image.mode in ("RGBA", "LA", "P"):
+                image = image.convert("RGBA")
+                flat = Image.new("RGB", image.size, "white")  # see-through parts print white, not black
+                flat.paste(image, mask=image.getchannel("A"))
+                image = flat
+            image = image.convert("RGB")
+            image.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
+            pages.append(image)
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise ValueError("The image could not be read. Choose a JPG or PNG photo or scan of the document.") from error
+    out = io.BytesIO()
+    pages[0].save(out, "PDF", save_all=True, append_images=pages[1:], resolution=150, quality=80)
+    return out.getvalue()
 
 
 def _is_allowed_file(filename: str, content_type: str | None) -> tuple[bool, list[str]]:
@@ -169,7 +205,7 @@ async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Q
             raise HTTPException(status_code=400, detail="Invalid upload name")
         # enforce allowed extension
         _, ext = os.path.splitext(safe_name.lower())
-        if ext not in ALLOWED_EXTENSIONS:
+        if ext not in STAGED_EXTENSIONS:
             raise HTTPException(status_code=400, detail="Unsupported file extension")
 
         body = await request.body()
@@ -250,7 +286,7 @@ def validate_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(
             if size > MAX_FILE_SIZE:
                 errors.append("File exceeds maximum allowed size")
             _, ext = os.path.splitext(safe_name.lower())
-            if ext not in ALLOWED_EXTENSIONS:
+            if ext not in STAGED_EXTENSIONS:
                 errors.append("Unsupported file extension")
 
             if errors:
@@ -282,7 +318,7 @@ def create_tmp_uploads(payload: dict = Body(...), db: Session = Depends(get_db),
         filename = f.get("filename") or ""
         safe_basename = os.path.basename(filename)
         _, ext = os.path.splitext(safe_basename.lower())
-        if ext not in ALLOWED_EXTENSIONS:
+        if ext not in STAGED_EXTENSIONS:
             results.append({"filename": filename, "ok": False, "reason": "Unsupported extension"})
             continue
         # generate tmp name and upload token
@@ -328,6 +364,12 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
     safe_tmp_names = [os.path.basename(tmp or "") for tmp in tmp_names]
     if any(not name for name in safe_tmp_names) or len(set(safe_tmp_names)) != len(safe_tmp_names):
         raise HTTPException(status_code=400, detail="Each uploaded document must have a unique temporary file name.")
+    # The single-document form may send several photos or scans of one document's pages: the first
+    # carries the document's details and the rest join it as later pages of one PDF.
+    pages_by_tmp_name = {}
+    if payload.get("combine_images") is True and len(safe_tmp_names) > 1:
+        pages_by_tmp_name[safe_tmp_names[0]] = safe_tmp_names[1:]
+        tmp_names = safe_tmp_names = safe_tmp_names[:1]
 
     year_by_tmp_name = {}
     title_by_tmp_name = {}
@@ -409,6 +451,17 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
 
             with open(tmp_path, "rb") as fh:
                 content = fh.read()
+            page_paths = _staged_pages(current_user, pages_by_tmp_name.get(safe_name) or [])
+            stored_name = safe_name
+            if page_paths or _is_image(original_filename):
+                if not all(_is_image(name) for name in [original_filename, *(_staged_name(path) for path in page_paths)]):
+                    raise Exception("Only photos or scans (JPG, PNG) of one document's pages can be joined into one PDF.")
+                pages = [content]
+                for page_path in page_paths:
+                    with open(page_path, "rb") as fh:
+                        pages.append(fh.read())
+                content = _images_to_pdf(pages)
+                original_filename, stored_name = _pdf_name(original_filename), _pdf_name(safe_name)
             size = len(content)
             if size == 0:
                 raise Exception("Empty file")
@@ -464,7 +517,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             )
 
             # move file from tmp to uploads
-            safe_stored = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(safe_name)}"
+            safe_stored = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{os.path.basename(stored_name)}"
             dest_path = os.path.join(UPLOAD_DIR, safe_stored)
             with open(dest_path, "wb") as fh:
                 fh.write(content)
@@ -489,6 +542,7 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
                 os.remove(tmp_path)
             except Exception:
                 pass
+            _remove_staged(page_paths)
         except Exception as exc:
             try:
                 db.rollback()
@@ -3658,6 +3712,12 @@ def _checked_upload(db: Session, current_user, file: UploadFile | None, tmp_name
         content = file.file.read(MAX_FILE_SIZE + 1)
     else:
         raise HTTPException(status_code=400, detail="Choose a file to upload.")
+    if _is_image(filename) and content:
+        try:
+            content = _images_to_pdf([content])
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        filename, content_type = _pdf_name(filename), "application/pdf"
     valid, validation_errors = _is_allowed_file(filename, content_type)
     if not valid:
         raise HTTPException(status_code=400, detail="; ".join(validation_errors))
@@ -3677,6 +3737,22 @@ def _checked_upload(db: Session, current_user, file: UploadFile | None, tmp_name
         reference = duplicate_doc.tracking_number if duplicate_doc else str(duplicate.document_id)
         raise HTTPException(status_code=409, detail=f"Duplicate file content detected in document {reference}")
     return filename, content_type, content, checksum, staged
+
+
+def _staged_name(path: str) -> str:
+    """The name a staged file was chosen with."""
+    return os.path.basename(_tmp_meta(os.path.basename(path)).get("original_filename") or path)
+
+
+def _staged_pages(current_user, tmp_names: list[str]) -> list[str]:
+    """The paths of this user's staged page files, refused like a missing file if any is gone or not theirs."""
+    paths = []
+    for name in tmp_names:
+        path = os.path.join(TEMP_UPLOAD_DIR, os.path.basename(name))
+        if not os.path.isfile(path) or _tmp_meta(os.path.basename(name)).get("username") != current_user.username:
+            raise Exception("Temporary file not found")
+        paths.append(path)
+    return paths
 
 
 def _remove_staged(paths):
