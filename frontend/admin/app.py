@@ -3921,7 +3921,24 @@ def main(page: ft.Page, session=None):
             )
             # Five to a row on wide screens, two on tablets and beside the sidebar on a sideways tablet.
             card.col = {"xs": 10, "sm": 5, "xl": 2}
+            levitate_on_hover(card)
             return card
+
+        def levitate_on_hover(card):
+            """The card rises a little, with a deeper shadow, while the pointer is over it."""
+            resting_shadow = card.shadow
+            shadow_color = ft.Colors.with_opacity(0.30 if page.theme_mode == ft.ThemeMode.DARK else 0.16, ft.Colors.BLACK)
+            raised_shadow = ft.BoxShadow(blur_radius=22, color=shadow_color, offset=ft.Offset(0, 10), spread_radius=0)
+            card.offset = ft.transform.Offset(0, 0)
+            card.animate_offset = ft.animation.Animation(180, ft.AnimationCurve.EASE_OUT)
+
+            def hover(e):
+                raised = str(e.data).lower() == "true"
+                card.offset = ft.transform.Offset(0, -0.05 if raised else 0)
+                card.shadow = raised_shadow if raised else resting_shadow
+                card.update()
+
+            card.on_hover = hover
 
         def metric_grid(items):
             return ft.ResponsiveRow([metric_card(item) for item in items], columns=10, spacing=12, run_spacing=12)
