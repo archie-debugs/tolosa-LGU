@@ -482,12 +482,26 @@ def open_document_details(
         if scan:
             render_full_page(sections)
             return
-        width = dialog_width(page, 680)
-        dialog.title = ft.Text("Document details", color=widgets.heading_color())
-        dialog.content = ft.Container(
+        fill_card(ft.Container(
             content=ft.Column(sections, spacing=14, scroll=ft.ScrollMode.AUTO),
-            width=width,
+            width=dialog_width(page, 680),
             padding=ft.Padding(4, 0, 4, 0),
+        ))
+
+    def close(_):
+        dialog.open = False
+        page.update()
+
+    def fill_card(body):
+        # Swapping what is inside the card never replays the pop-in, so a reload after an action stays still.
+        card.content = ft.Column(
+            [
+                ft.Text("Document details", size=22, color=widgets.heading_color()),
+                ft.Container(body, expand=1, expand_loose=True),  # the details scroll; title and Close stay put
+                ft.Row([ft.TextButton("Close", on_click=close)], alignment=ft.MainAxisAlignment.END),
+            ],
+            spacing=14,
+            tight=True,
         )
 
     def render_full_page(sections):
@@ -526,9 +540,39 @@ def open_document_details(
         changed()
         reload()
 
-    fetch()
+    if scan:
+        fetch()
+        render()
+        page.update()
+        return True
+
+    # The pop-up opens on the click with a spinner and pops in: it grows from 92% while fading in.
+    # The dialog itself is see-through so the whole card animates, not just its contents.
+    pop = ft.animation.Animation(250, ft.AnimationCurve.EASE_OUT)
+    card = ft.Container(
+        scale=0.92,
+        opacity=0,
+        animate_scale=pop,
+        animate_opacity=pop,
+        animate_size=pop,  # grows smoothly from the spinner to the full details
+        bgcolor=widgets.card_color(),
+        border_radius=28,
+        padding=ft.Padding(24, 24, 24, 12),
+        shadow=ft.BoxShadow(blur_radius=24, color=ft.Colors.with_opacity(0.25, ft.Colors.BLACK)),
+    )
+    fill_card(ft.Container(ft.ProgressRing(), width=dialog_width(page, 680), height=160, alignment=ft.alignment.center))
+    dialog.title, dialog.actions, dialog.content = None, [], card
+    dialog.bgcolor, dialog.elevation, dialog.content_padding = ft.Colors.TRANSPARENT, 0, 0
+    dialog.open = True
+    page.update()
+    card.scale, card.opacity = 1, 1
+    page.update()
+    try:
+        fetch()
+    except Exception:
+        dialog.open = False
+        page.update()
+        raise
     render()
-    if not scan:
-        dialog.open = True
     page.update()
     return True

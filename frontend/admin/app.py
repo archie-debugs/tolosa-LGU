@@ -1201,7 +1201,6 @@ def main(page: ft.Page, session=None):
     documents_details_dialog = ft.AlertDialog(
         title=ft.Text("Document Details"),
         content=ft.Container(content=ft.Text(""), padding=8),
-        actions=[ft.TextButton("Close", on_click=lambda _: close_documents_details_dialog())],
     )
     page.overlay.append(documents_details_dialog)
 
@@ -1657,10 +1656,6 @@ def main(page: ft.Page, session=None):
 
     # File selection for attachment inside Register Document form
     # Uses inline FilePicker coroutine (no overlay append, no separate page)
-
-    def close_documents_details_dialog():
-        documents_details_dialog.open = False
-        page.update()
 
     def close_documents_delete_dialog():
         nonlocal pending_delete_document
