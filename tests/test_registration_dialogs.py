@@ -456,3 +456,11 @@ def test_a_shortened_file_registers_only_once_its_whole_name_is_given():
     press(dialog, "Register 1 document")
     specs = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]["documents"]
     assert specs[0]["title"].startswith("MUNICIPAL ORDINANCE NO. 08")
+
+
+def test_both_forms_show_their_message_at_the_top():
+    for opened in (open_single(), open_multiple()):
+        dialog = opened[1]
+        form = next(c for c in walk(dialog) if isinstance(c, ft.Column) and c.scroll)
+        box = form.controls[0]
+        assert type(box).__name__ == "Container" and box.visible is False  # the red message box, empty for now

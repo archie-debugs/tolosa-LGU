@@ -1823,6 +1823,7 @@ def list_documents(
     page_type: str | None = Query(default=None, description="A type's own page: its counts and filter values cover only that type"),
     category: str | None = None,
     current_office: str | None = None,
+    stage: str | None = None,
     year: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -1864,6 +1865,8 @@ def list_documents(
     available_document_types = sorted(value for (value,) in query.with_entities(models.Document.document_type).distinct() if value)
     available_categories = sorted(value for (value,) in query.with_entities(models.Document.category).distinct() if value)
     available_offices = sorted(value for (value,) in query.with_entities(models.Document.current_office).distinct() if value)
+    available_stages = sorted((value for (value,) in query.with_entities(models.Document.stage).distinct() if value),
+                              key=lambda value: stages.ORDER.index(value) if value in stages.ORDER else len(stages.ORDER))
     available_archivers = []
     if archived:
         recent_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
@@ -1908,6 +1911,8 @@ def list_documents(
         query = query.filter(models.Document.category == category)
     if current_office:
         query = query.filter(models.Document.current_office == current_office)
+    if stage:
+        query = query.filter(models.Document.stage == stage)
     if priority:
         query = query.filter(models.Document.priority == priority)
     if location == "in_transit":
@@ -1998,6 +2003,7 @@ def list_documents(
         "available_document_types": available_document_types,
         "available_categories": available_categories,
         "available_offices": available_offices,
+        "available_stages": available_stages,
         "summary": summary,
     }
 

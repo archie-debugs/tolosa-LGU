@@ -286,6 +286,7 @@ class _Notice:
     """A red message box, shown only while it has something to say. Set `value` like a Text's."""
 
     def __init__(self):
+        self.form = None  # the scrolling Column the box sits at the top of
         self.text = ft.Text("", size=12, color=ft.Colors.RED_700, expand=True)
         self.box = ft.Container(
             content=ft.Row([ft.Icon(ft.Icons.ERROR, color=ft.Colors.RED_600, size=20), self.text], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -304,6 +305,12 @@ class _Notice:
     def value(self, text):
         self.text.value = text
         self.box.visible = bool(text)
+        # The box sits at the top of its form; scroll up so a long form shows it.
+        if text and self.form is not None:
+            try:
+                self.form.scroll_to(offset=0, duration=300)
+            except Exception:
+                pass  # not drawn on a page yet (tests, or before the dialog opens)
 
 
 def load_options(api):
@@ -700,6 +707,7 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
     third = {"xs": 12, "sm": 4}
     half = {"xs": 12, "sm": 6}
     content = ft.Column([
+        message.box,
         _section(widgets, ft.Icons.DESCRIPTION, "The document", [
             _labelled(widgets, title, "Title", ft.Icons.TITLE, required=True),
             ft.ResponsiveRow([
@@ -722,8 +730,8 @@ def open_register_dialog(page, dialog, api, files, *, on_registered=None, open_d
         ]),
         duplicate_box,
         progress,
-        message.box,
     ], spacing=14, scroll=ft.ScrollMode.AUTO, height=min(560, (page.height or 760) - 200) if narrow else 560)
+    message.form = content
     problem = form.office_problem() if not options["offices"] else None
     if problem:
         message.value = problem
@@ -1050,6 +1058,7 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
     third = {"xs": 12, "sm": 4}
     half = {"xs": 12, "sm": 6}
     content = ft.Column([
+        message.box,
         _section(widgets, ft.Icons.DESCRIPTION, "Document details", [
             ft.ResponsiveRow([
                 _labelled(widgets, form.document_type.control(), "Document type", ft.Icons.DESCRIPTION_OUTLINED, required=True, col=half),
@@ -1078,9 +1087,9 @@ def open_multiple_register_dialog(page, dialog, api, files, *, on_registered=Non
                 spacing=12,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            message.box,
         ]),
     ], spacing=14, scroll=ft.ScrollMode.AUTO, height=560)
+    message.form = content
     status["problem"] = form.office_problem() if not options["offices"] else None
     message.value = status["problem"] or ""
     _style_dialog(

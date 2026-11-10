@@ -92,7 +92,9 @@ def test_referring_a_measure_asks_for_the_committee():
 
     assert committee.visible and [option.text for option in committee.options] == ["Committee on Health"]
     committee.value = "3"
-    text_field(section, "Date it happened").value = "2026-10-21"
+    day = text_field(section, "Date it happened (blank for today)")
+    assert day.read_only  # picked from a calendar, not typed
+    day.value = "2026-10-21"
     press(section, "Save stage")
 
     assert api.posted() == [("/documents/7/stage", {"stage": "In Committee", "effective_on": "2026-10-21", "committee_id": 3, "note": None})]
@@ -107,11 +109,11 @@ def test_approval_asks_for_the_number_and_a_bad_date_is_caught_first():
     number = text_field(section, "Ordinance number")
     assert number.visible
 
-    text_field(section, "Date it happened").value = "21/10/2026"
+    text_field(section, "Date it happened (blank for today)").value = "21/10/2026"
     press(section, "Save stage")
     assert api.posted() == [] and "The date must look like 2026-10-22." in texts(section)
 
-    text_field(section, "Date it happened").value = ""
+    text_field(section, "Date it happened (blank for today)").value = ""
     number.value = "6"
     press(section, "Save stage")
     assert api.posted() == [("/documents/7/stage", {"stage": "Approved", "document_number": "6", "note": None})]

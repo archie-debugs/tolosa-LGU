@@ -145,6 +145,8 @@ def test_saving_needs_a_title_and_shows_the_backend_reason():
     field(dialog, "Title").value = "  "
     press(dialog, "Save changes")
     assert "Title is required." in texts(dialog.content)
+    form = next(c for c in walk(dialog.content) if isinstance(c, ft.Column) and c.scroll)
+    assert "Title is required." in texts(form.controls[0])  # at the top of the form, not below it
     assert [c for c in api.calls if c[0] == "PUT"] == []
 
     field(dialog, "Title").value = "Ordinance No. 7"

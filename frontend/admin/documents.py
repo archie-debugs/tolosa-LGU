@@ -147,14 +147,15 @@ def build_documents_view(
     # Status takes the place of Category, which documents no longer use.
     status_filter = dropdown("Status", [(ALL, ALL)])
     office_filter = dropdown("Office", [(ALL, ALL)])  # the office holding the document
+    stage_filter = dropdown("Stage", [(ALL, ALL)])  # a measure's legislative stage
     from_year = dropdown("From year", [(ALL, "Any")])
     to_year = dropdown("To year", [(ALL, "Any")])
     archived_by_filter = dropdown("Archived by", [(ALL, "Anyone")])
     sort_filter = dropdown("Sort", [(name, name) for name in sorts], value=default_sort)
     if archived:
-        filters = [type_filter, status_filter, office_filter, archived_by_filter, from_year, to_year]
+        filters = [type_filter, status_filter, stage_filter, office_filter, archived_by_filter, from_year, to_year]
     else:
-        filters = [type_filter, status_filter, office_filter, from_year, to_year]
+        filters = [type_filter, status_filter, stage_filter, office_filter, from_year, to_year]
     if document_type:
         filters.remove(type_filter)
     filter_boxes = {control: filter_box(control) for control in [*filters, sort_filter]}
@@ -187,7 +188,7 @@ def build_documents_view(
         if can_search and (search_field.value or "").strip():
             result["search"] = search_field.value.strip()
         if can_filter:
-            for key, control in (("document_type", type_filter), ("status", status_filter), ("current_office", office_filter), ("start_date", from_year), ("end_date", to_year), ("archived_by", archived_by_filter)):
+            for key, control in (("document_type", type_filter), ("status", status_filter), ("current_office", office_filter), ("stage", stage_filter), ("start_date", from_year), ("end_date", to_year), ("archived_by", archived_by_filter)):
                 if control.value and control.value != ALL:
                     result[key] = control.value
         quick = state["quick"]
@@ -227,6 +228,10 @@ def build_documents_view(
         set_options(to_year, list(reversed(years)), "Any")
         set_options(status_filter, payload.get("available_statuses") or [], ALL)
         set_options(office_filter, payload.get("available_offices") or [], ALL)
+        stages = payload.get("available_stages") or []
+        set_options(stage_filter, stages, ALL)
+        # Only ordinances and resolutions have a stage; other documents' pages have none to filter by.
+        filter_boxes[stage_filter].visible = bool(stages)
         set_options(archived_by_filter, payload.get("available_archivers") or [], "Anyone")
         set_options(type_filter, payload.get("available_document_types") or [], ALL)
         items = payload.get("items") or []

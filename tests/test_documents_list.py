@@ -119,3 +119,18 @@ def test_list_offers_and_filters_by_the_office_holding_the_document():
     assert payload["available_offices"] == ["Office A", "Office B"]
     payload = client.get("/documents", params={"current_office": "Office B"}, headers=headers).json()
     assert numbers(payload) == ["DOC-000003"]
+
+
+def test_list_offers_the_stages_in_order_and_filters_by_stage():
+    offices, documents = setup_documents()
+    with SessionLocal() as db:
+        db.get(models.Document, documents["DOC-000001"]).stage = "Second Reading"
+        db.get(models.Document, documents["DOC-000002"]).stage = "Filed"
+        db.commit()
+    client = TestClient(main.app)
+    headers = headers_for(client, "emp_a")
+
+    payload = client.get("/documents", headers=headers).json()
+    assert payload["available_stages"] == ["Filed", "Second Reading"]
+    payload = client.get("/documents", params={"stage": "Second Reading"}, headers=headers).json()
+    assert numbers(payload) == ["DOC-000001"]
