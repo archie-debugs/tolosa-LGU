@@ -1,7 +1,7 @@
 import frontend.admin.app  # noqa: F401  (applies the flet compatibility shims)
 import flet as ft
 
-from frontend.admin.documents import build_documents_view
+from frontend.admin.documents import DROPDOWN_EVENT, build_documents_view
 
 LONG_TITLE = "Request Letter from the Department of Health thru Secretary Teodoro Herbosa for the Construction of a Second Level Hospital"
 ITEM = {
@@ -88,7 +88,7 @@ def test_a_type_page_lists_only_that_type_under_its_name_without_a_type_filter()
     assert calls and all(params.get("page_type") == "Ordinance" for params in calls)
     shown = texts(view)
     assert "Ordinances" in shown and "Documents" not in shown
-    assert "Type" not in shown and "Category" in shown
+    assert "Type" not in shown and "Status" in shown
     register = next(c for c in walk(view) if isinstance(c, ft.FilledButton) and c.text == "Register document")
     register.on_click(None)
     assert registered == [True]
@@ -101,3 +101,29 @@ def test_an_archived_type_page_is_named_for_its_type():
     )
 
     assert "Archived Letter Requests" in texts(view)
+
+
+def test_the_filters_offer_status_and_office_instead_of_category():
+    calls = []
+
+    def recording_api(method, path, **kwargs):
+        calls.append(kwargs.get("params") or {})
+        return {**api(method, path, **kwargs), "available_statuses": ["Approved"], "available_offices": ["Office A", "Office B"]}
+
+    view, _ = build_documents_view(
+        DummyPage(), recording_api, lambda content, **_: ft.Container(content), normalize=lambda item: dict(item),
+        selection=set(), loaded=[], can_filter=True,
+    )
+
+    shown = texts(view)
+    assert "Category" not in shown
+    status = next(c for c in walk(view) if isinstance(c, ft.Dropdown) and c.data == "Status")
+    assert [o.key for o in status.options] == ["All", "Approved"]
+    status.value = "Approved"
+    getattr(status, DROPDOWN_EVENT)(None)
+    assert calls[-1]["status"] == "Approved" and "category" not in calls[-1]
+    office = next(c for c in walk(view) if isinstance(c, ft.Dropdown) and c.data == "Office")
+    assert [o.key for o in office.options] == ["All", "Office A", "Office B"]
+    office.value = "Office B"
+    getattr(office, DROPDOWN_EVENT)(None)
+    assert calls[-1]["current_office"] == "Office B" and calls[-1]["status"] == "Approved"

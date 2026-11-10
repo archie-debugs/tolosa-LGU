@@ -1863,6 +1863,7 @@ def list_documents(
     available_statuses = sorted(value for (value,) in query.with_entities(models.Document.status).distinct() if value)
     available_document_types = sorted(value for (value,) in query.with_entities(models.Document.document_type).distinct() if value)
     available_categories = sorted(value for (value,) in query.with_entities(models.Document.category).distinct() if value)
+    available_offices = sorted(value for (value,) in query.with_entities(models.Document.current_office).distinct() if value)
     available_archivers = []
     if archived:
         recent_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
@@ -1996,6 +1997,7 @@ def list_documents(
         "available_archivers": available_archivers,
         "available_document_types": available_document_types,
         "available_categories": available_categories,
+        "available_offices": available_offices,
         "summary": summary,
     }
 
