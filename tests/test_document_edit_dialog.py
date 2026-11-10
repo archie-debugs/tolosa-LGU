@@ -27,8 +27,6 @@ class FakeApi:
 
     def __call__(self, method, path, **kwargs):
         self.calls.append((method, path, kwargs))
-        if path == "/documents/edit-options":
-            return {"categories": ["Finance", "Health"], "document_types": ["Ordinance", "Resolution"]}
         if self.error:
             raise Exception(self.error)
         return {"id": 7}
@@ -83,15 +81,25 @@ def open_dialog(api, saved=None):
     return dialog
 
 
-def test_dialog_offers_the_standard_types_and_categories_used_before():
+def test_dialog_offers_the_standard_types():
     dialog = open_dialog(FakeApi())
 
     assert dialog.open is True
     assert options(field(dialog, "Document Type")) == ["Ordinance", "Resolution", "Letter Request"]
     assert field(dialog, "Document Type").value == "Ordinance"
-    assert field(dialog, "Category").value == "Old Category"
-    assert picks(dialog) == ["Finance", "Health"]
-    assert field(dialog, "Priority").value == "High"
+
+
+def test_number_category_priority_and_due_date_are_not_edited_so_saving_keeps_them():
+    # The backend only changes the fields it is sent, so leaving these out keeps their current values.
+    api = FakeApi()
+    dialog = open_dialog(api)
+
+    labels = {name(c).lower() for c in walk(dialog.content) if isinstance(c, (ft.TextField, ft.Dropdown))}
+    assert not labels & {"document number", "category", "priority", "due date"}
+    assert not picks(dialog)
+    press(dialog, "Save changes")
+    payload = api.calls[-1][2]["json"]
+    assert not payload.keys() & {"document_number", "category", "category_id", "priority", "due_date"}
 
 
 def test_dialog_offers_only_the_three_types_so_another_type_must_be_replaced():
@@ -115,7 +123,6 @@ def test_saving_sends_the_edited_fields_without_offices():
     saved = []
     dialog = open_dialog(api, saved)
     field(dialog, "Title").value = "Ordinance No. 7, amended"
-    field(dialog, "Category").value = ""
     field(dialog, "Document Type").value = "Letter Request"
 
     press(dialog, "Save changes")
@@ -124,7 +131,6 @@ def test_saving_sends_the_edited_fields_without_offices():
     assert (method, path) == ("PUT", "/documents/7")
     payload = kwargs["json"]
     assert payload["title"] == "Ordinance No. 7, amended"
-    assert payload["category"] is None
     assert payload["document_type"] == "Letter Request"
     assert payload["series_year"] == "2025"
     assert "current_office" not in payload and "originating_office" not in payload
@@ -133,7 +139,7 @@ def test_saving_sends_the_edited_fields_without_offices():
 
 
 def test_saving_needs_a_title_and_shows_the_backend_reason():
-    api = FakeApi(error="Category 'X' is not an active entry in Reference Data.")
+    api = FakeApi(error="Series year must be a four-digit year.")
     dialog = open_dialog(api)
 
     field(dialog, "Title").value = "  "
@@ -143,26 +149,8 @@ def test_saving_needs_a_title_and_shows_the_backend_reason():
 
     field(dialog, "Title").value = "Ordinance No. 7"
     press(dialog, "Save changes")
-    assert "Category 'X' is not an active entry in Reference Data." in texts(dialog.content)
+    assert "Series year must be a four-digit year." in texts(dialog.content)
     assert dialog.open is True
-
-
-def test_due_date_is_shown_edited_and_cleared():
-    api = FakeApi()
-    page = DummyPage()
-    dialog = ft.AlertDialog()
-    open_edit_document_dialog(page, dialog, api, {**DOCUMENT, "due_date": "2026-11-05"})
-    due = field(dialog, "Due date")
-    assert due.value == "2026-11-05"
-
-    due.value = "05-11-2026"
-    press(dialog, "Save changes")
-    assert "Enter the due date as YYYY-MM-DD, for example 2026-11-05." in texts(dialog.content)
-    assert [c for c in api.calls if c[0] == "PUT"] == []
-
-    due.value = ""
-    press(dialog, "Save changes")
-    assert api.calls[-1][2]["json"]["due_date"] is None
 
 
 def test_placeholder_dashes_from_the_details_screen_count_as_blank():
@@ -170,13 +158,12 @@ def test_placeholder_dashes_from_the_details_screen_count_as_blank():
     api = FakeApi()
     page = DummyPage()
     dialog = ft.AlertDialog()
-    open_edit_document_dialog(page, dialog, api, {**DOCUMENT, "category": "-", "document_type": "-", "author": "-"})
+    open_edit_document_dialog(page, dialog, api, {**DOCUMENT, "document_type": "-", "author": "-"})
 
-    assert field(dialog, "Category").value == ""
     assert field(dialog, "Document Type").value is None
     press(dialog, "Save changes")
     payload = api.calls[-1][2]["json"]
-    assert (payload["category"], payload["document_type"], payload["author"]) == (None, None, None)
+    assert (payload["document_type"], payload["author"]) == (None, None)
 
 
 def test_status_and_action_required_are_chosen_and_saved():

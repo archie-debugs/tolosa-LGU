@@ -241,3 +241,22 @@ def test_the_list_shows_the_newest_remark(client, document):
     items = client.get("/documents", headers=headers_for(client)).json()["items"]
 
     assert [i["remarks"] for i in items if i["id"] == document["id"]] == ["Second"]
+
+
+def test_saving_the_edit_form_keeps_the_number_category_priority_and_due_date(client, document):
+    # The edit form no longer shows these four, so it leaves them out of what it saves.
+    with SessionLocal() as db:
+        doc = db.get(models.Document, document["id"])
+        doc.document_number, doc.priority = "07-2025", "High"
+        doc.due_date = documents_routes._parse_due_date("2026-12-01")
+        db.commit()
+
+    response = edit(client, document, title="Ordinance No. 7, amended", series_year="2025", description=None,
+                    document_type="Ordinance", assigned_to=None, status="Approved", action_required=None,
+                    author="Hon. Cruz", new_remark=None)
+
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert saved["title"] == "Ordinance No. 7, amended"
+    assert (saved["document_number"], saved["category"], saved["priority"], saved["due_date"]) == (
+        "07-2025", "Old Category", "High", "2026-12-01")
