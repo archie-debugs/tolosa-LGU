@@ -95,7 +95,7 @@ def open_document_details(
 ):
     """Load a document into `dialog` and open it; raises when it cannot be loaded.
 
-    With `on_done`, the details fill the page instead (a phone after a QR scan), with big
+    With `on_done`, the details fill the page instead (after a QR scan), with big
     Receive / Pass on buttons and a Done button that calls `on_done()`. A scan is only for
     receiving and passing on: the file cannot be previewed or downloaded, the stage is shown but
     not changed, and the details stay folded until asked for.
@@ -474,7 +474,7 @@ def open_document_details(
 
     def next_scan_hint():
         return ft.Container(
-            content=widgets.hint("To scan the next document, point your phone's camera at its QR label."),
+            content=widgets.hint("To open the next document, scan its QR label."),
             padding=ft.Padding(0, 4, 0, 16),
         )
 
@@ -498,19 +498,24 @@ def open_document_details(
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
+        column = ft.Column(
+            [
+                top_bar,
+                ft.Divider(height=1, color=widgets.line_color()),
+                ft.Column(sections, spacing=14, scroll=ft.ScrollMode.AUTO, expand=True),
+            ],
+            spacing=10,
+            expand=True,
+        )
+        # A phone uses the whole screen; a wider screen keeps it to a readable column in the middle.
+        wide = (getattr(page, "width", None) or 0) > 760
+        content = ft.Row([ft.Container(column, width=720)], alignment=ft.MainAxisAlignment.CENTER,
+                         vertical_alignment=ft.CrossAxisAlignment.STRETCH, expand=True) if wide else column
         page.scroll = None  # the details column scrolls itself; see frontend/admin/admin_shell.py
         page.clean()
         page.add(
             ft.Container(
-                content=ft.Column(
-                    [
-                        top_bar,
-                        ft.Divider(height=1, color=widgets.line_color()),
-                        ft.Column(sections, spacing=14, scroll=ft.ScrollMode.AUTO, expand=True),
-                    ],
-                    spacing=10,
-                    expand=True,
-                ),
+                content=content,
                 padding=ft.Padding(16, 12, 16, 0),
                 bgcolor=widgets.card_color(),
                 expand=True,

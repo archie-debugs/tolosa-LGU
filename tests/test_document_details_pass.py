@@ -71,7 +71,7 @@ def test_only_the_office_dashboard_and_a_qr_scan_open_details_that_can_pass():
     source = Path(frontend.admin.app.__file__).read_text(encoding="utf-8")
 
     assert source.count("allow_pass=True") == 2
-    assert 'show_document_details({"id": document_id, "qr_token": qr_state.get("token")}, allow_pass=True)' in source
+    assert 'show_document_details({"id": document_id, "qr_token": qr_state.get("token"), "scanned": True}, allow_pass=True)' in source
     assert "open_details=lambda doc: show_document_details(doc, allow_pass=True),\n            open_pass=open_pass_document_dialog," in source
     assert "open_pass=open_pass_document_dialog if allow_pass else None," in source
 

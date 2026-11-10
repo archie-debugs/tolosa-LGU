@@ -1266,7 +1266,7 @@ def _render_qr_label_pdf(documents: list[models.Document]):
         qr_y = label_bottom + label_height - 24 - qr_side
 
         # Draw QR in the upper part of the label cell so the metadata is below it.
-        value = doc.qr_code_value or doc.tracking_number or f"DOC-{doc.id}"
+        value = _compute_qr_payload(doc) if (doc.qr_token or "").strip() else (doc.tracking_number or f"DOC-{doc.id}")
         qr_img = qrcode.make(str(value))
         qr_buffer = io.BytesIO()
         qr_img.save(qr_buffer, format="PNG")
@@ -2273,7 +2273,28 @@ PASSED_ON_LIMIT = 20
 QR_TRACKING_OVERDUE_HOURS = 24
 # A pending handoff that ended without receipt; custody never moved, so the sender still holds the document.
 CLOSED_HANDOFF_STATUSES = ("Cancelled", "Returned")
-QR_SCAN_ACTIONS = ("QR_SCAN_SUCCESS", "QR_SCAN_UNRECOGNIZED")
+# A scan is a lookup on the QR Tracking screen or a scanned link opened by office staff.
+QR_SCAN_RECOGNIZED = ("QR_SCAN_SUCCESS", "OFFICE_QR_ACCESS", "OFFICE_QR_ACCESS_DENIED")
+QR_SCAN_UNRECOGNIZED = ("QR_SCAN_UNRECOGNIZED", "OFFICE_QR_ACCESS_FAILED")
+QR_SCAN_ACTIONS = QR_SCAN_RECOGNIZED + QR_SCAN_UNRECOGNIZED
+
+
+QR_REPEAT_SCAN_MINUTES = 5
+QR_ACTIVITY_SIZES = (10, 20, 30)  # how many recent activities the QR Tracking screen may show
+
+
+def _without_repeat_scans(logs):
+    """Scan logs, oldest first, less the ones that repeat the same person's scan of the same code
+    within QR_REPEAT_SCAN_MINUTES of their previous one."""
+    last_seen, kept = {}, []
+    window = timedelta(minutes=QR_REPEAT_SCAN_MINUTES)
+    for log in logs:
+        key = (log.actor, str(log.target_id))
+        previous = last_seen.get(key)
+        last_seen[key] = log.created_at
+        if previous is None or log.created_at - previous > window:
+            kept.append(log)
+    return kept
 
 
 def _lgu_day_start_utc() -> datetime:
@@ -2381,14 +2402,21 @@ def _pending_handoff_item(row: models.DocumentHandoff, now: datetime) -> dict:
 
 
 @router.get("/qr/monitor")
-def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """Operational summary for the QR Tracking screen: today's movement, documents in transit, recent activity."""
+def monitor_qr(limit: int = 10, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Operational summary for the QR Tracking screen: today's movement, documents in transit, recent activity.
+    `limit` is how many recent activities to show: 10, 20 or 30."""
     require_permission(current_user, "view_qr_tracking")
     day_start = _lgu_day_start_utc()
     now = datetime.now(timezone.utc)
 
-    def scans_today(action):
-        return db.query(models.AuditLog).filter(models.AuditLog.action == action, models.AuditLog.created_at >= day_start).count()
+    def scans_today(actions):
+        logs = (
+            db.query(models.AuditLog)
+            .filter(models.AuditLog.action.in_(actions), models.AuditLog.created_at >= day_start)
+            .order_by(models.AuditLog.created_at.asc())
+            .all()
+        )
+        return len(_without_repeat_scans(logs))
 
     pending = (
         db.query(models.DocumentHandoff)
@@ -2399,7 +2427,7 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
     )
     in_transit = [_pending_handoff_item(row, now) for row in pending]
 
-    feed_size = 25
+    feed_size = limit if limit in QR_ACTIVITY_SIZES else QR_ACTIVITY_SIZES[0]
     events = _handoff_events(db.query(models.DocumentHandoff).order_by(models.DocumentHandoff.sent_at.desc()).limit(feed_size))
     events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).order_by(models.DocumentReceipt.confirmed_at.desc()).limit(feed_size)]
     events += [_action_event(row) for row in db.query(models.DocumentAction).order_by(models.DocumentAction.performed_at.desc()).limit(feed_size)]
@@ -2407,13 +2435,14 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
         db.query(models.AuditLog)
         .filter(models.AuditLog.action.in_(QR_SCAN_ACTIONS))
         .order_by(models.AuditLog.created_at.desc())
-        .limit(feed_size)
+        .limit(feed_size * 4)
         .all()
     )
-    scanned_ids = {int(log.target_id) for log in scan_logs if log.action == "QR_SCAN_SUCCESS" and str(log.target_id or "").isdigit()}
+    scan_logs = _without_repeat_scans(scan_logs[::-1])[::-1][:feed_size]
+    scanned_ids = {int(log.target_id) for log in scan_logs if log.action in QR_SCAN_RECOGNIZED and str(log.target_id or "").isdigit()}
     scanned_docs = {doc.id: doc for doc in db.query(models.Document).filter(models.Document.id.in_(scanned_ids))} if scanned_ids else {}
     for log in scan_logs:
-        recognized = log.action == "QR_SCAN_SUCCESS"
+        recognized = log.action in QR_SCAN_RECOGNIZED
         doc = scanned_docs.get(int(log.target_id)) if recognized and str(log.target_id or "").isdigit() else None
         events.append({
             "type": "scan" if recognized else "unrecognized",
@@ -2437,8 +2466,8 @@ def monitor_qr(db: Session = Depends(get_db), current_user: models.User = Depend
             "sent_today": db.query(models.DocumentHandoff).filter(models.DocumentHandoff.sent_at >= day_start).count(),
             "received_today": db.query(models.DocumentReceipt).filter(models.DocumentReceipt.confirmed_at >= day_start).count(),
             "actions_today": db.query(models.DocumentAction).filter(models.DocumentAction.performed_at >= day_start).count(),
-            "scans_today": scans_today("QR_SCAN_SUCCESS"),
-            "unrecognized_today": scans_today("QR_SCAN_UNRECOGNIZED"),
+            "scans_today": scans_today(QR_SCAN_RECOGNIZED),
+            "unrecognized_today": scans_today(QR_SCAN_UNRECOGNIZED),
         },
         "in_transit": in_transit,
         "recent_activity": events[:feed_size],
@@ -2563,8 +2592,9 @@ def _resolve_office_qr_access(db: Session, current_user: models.User, qr_value: 
         models.DocumentHandoff.document_id == doc.id,
         models.DocumentHandoff.receiving_office_id == current_user.office_id,
         models.DocumentHandoff.status.in_(("Pending Receipt", "Received")),
-    ).first()
-    if office_handoff is None:
+    ).order_by(models.DocumentHandoff.id.desc()).first()
+    # The office holding it (the one that registered it, say) scans it to pass it on.
+    if office_handoff is None and not _office_holds_document(db, doc, current_user.office_id):
         record_audit_log(
             db,
             actor=getattr(current_user, "username", "System"),
@@ -2599,7 +2629,7 @@ def _resolve_office_qr_access(db: Session, current_user: models.User, qr_value: 
         "description": doc.description,
         "office_name": office_name,
         "office_id": current_user.office_id,
-        "handoff_status": office_handoff.status,
+        "handoff_status": office_handoff.status if office_handoff else None,
         "assigned_to": doc.assigned_to,
         "author": doc.author,
         "qr_token": doc.qr_token,
@@ -3246,27 +3276,34 @@ def download_qr_labels_by_link(download_token: str = Query(...), db: Session = D
     )
 
 
-def _scan_document(db: Session, current_user: models.User, qr_value: str) -> models.Document:
-    """Resolve a scanned QR code or typed tracking number, recording the scan either way."""
+def _scan_document(db: Session, current_user: models.User, qr_value: str, record: bool = True) -> models.Document:
+    """Resolve a scanned QR code or typed tracking number.
+
+    Only a QR code counts as a scan: its link (a phone camera or a USB scanner gives that) or its
+    token. A typed tracking number is a lookup and is not recorded, nor is a document opened from
+    a list (`record` off). An unmatched value counts as an unrecognized scan only when it is a link."""
     doc = _find_document_by_qr_or_tracking(db, qr_value)
+    scanned = doc is not None and bool(doc.qr_token) and doc.qr_token == _extract_qr_token_from_value(qr_value)
     if not doc:
+        if record and "/qr/" in str(qr_value).lower():
+            record_audit_log(
+                db,
+                actor=getattr(current_user, "username", "System"),
+                action="QR_SCAN_UNRECOGNIZED",
+                target_type="qr_lookup",
+                target_id=str(qr_value),
+                details="QR identifier was not matched to a document",
+            )
+        raise HTTPException(status_code=404, detail="QR code not recognized")
+    if record and scanned:
         record_audit_log(
             db,
             actor=getattr(current_user, "username", "System"),
-            action="QR_SCAN_UNRECOGNIZED",
-            target_type="qr_lookup",
-            target_id=str(qr_value),
-            details="QR identifier was not matched to a document",
+            action="QR_SCAN_SUCCESS",
+            target_type="document",
+            target_id=str(doc.id),
+            details=f"QR lookup resolved to {doc.tracking_number}",
         )
-        raise HTTPException(status_code=404, detail="QR code not recognized")
-    record_audit_log(
-        db,
-        actor=getattr(current_user, "username", "System"),
-        action="QR_SCAN_SUCCESS",
-        target_type="document",
-        target_id=str(doc.id),
-        details=f"QR lookup resolved to {doc.tracking_number}",
-    )
     return doc
 
 
@@ -3299,10 +3336,14 @@ def _document_trail(db: Session, doc: models.Document, actions_of_office: int | 
     events = _handoff_events(handoffs)
     events += [_receipt_event(row) for row in db.query(models.DocumentReceipt).filter(models.DocumentReceipt.document_id == doc.id)]
     events += [_action_event(row) for row in actions]
+    first_handoff = min(handoffs, key=lambda row: row.id, default=None)
+    registered_at = doc.originating_office or (
+        first_handoff.sending_office.name if first_handoff and first_handoff.sending_office else doc.current_office
+    )
     events.append({
         "type": "registered",
         "at": _utc_iso(doc.created_at),
-        "office": doc.originating_office or doc.current_office,
+        "office": registered_at,
         "to_office": None,
         "actor": doc.created_by,
         "detail": None,
@@ -3336,10 +3377,11 @@ def _document_trail(db: Session, doc: models.Document, actions_of_office: int | 
 
 
 @router.get("/qr/{qr_value:path}/trail")
-def qr_tracking_trail(qr_value: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """Where a scanned document is now and every office it has passed through, newest first."""
+def qr_tracking_trail(qr_value: str, scan: bool = True, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Where a scanned document is now and every office it has passed through, newest first.
+    `scan=false` opens a document picked from a list, which is not counted as a scan."""
     require_permission(current_user, "view_qr_tracking")
-    doc = _scan_document(db, current_user, qr_value)
+    doc = _scan_document(db, current_user, qr_value, record=scan)
     events, location = _document_trail(db, doc)
     return {
         "document": {
