@@ -232,3 +232,84 @@ def test_a_row_without_history_fetches_it():
     dialog = open_dialog(HistoryApi())
 
     assert "From the server" in texts(dialog.content)
+
+
+class Files:
+    """Stands in for registration.PickerFiles: picks `name` and finishes its upload at once."""
+
+    def __init__(self, name="Ordinance No. 12 - Market Fees.pdf"):
+        self.name, self.uploads = name, []
+
+    def pick(self, multiple, on_picked):
+        on_picked([{"name": self.name, "size": 1234}])
+
+    def upload(self, uploads, on_progress):
+        self.uploads.append(uploads)
+        for name, _ in uploads:
+            on_progress(name, 1.0, None)
+
+
+class AttachApi(FakeApi):
+    def __init__(self, fail_on=None):
+        super().__init__()
+        self.fail_on = fail_on
+
+    def __call__(self, method, path, **kwargs):
+        if path.endswith("create_tmp_uploads"):
+            self.calls.append((method, path, kwargs))
+            return {"files": [{"ok": True, "tmp_name": "tmp_1", "upload_url": "http://backend/documents/uploads/tmp/tmp_1?upload_token=x"}]}
+        if path == self.fail_on:
+            self.calls.append((method, path, kwargs))
+            raise Exception("Duplicate file content detected in document RES-000002")
+        return super().__call__(method, path, **kwargs)
+
+
+def attach_dialog(api, files=None, saved=None):
+    dialog = ft.AlertDialog()
+    open_edit_document_dialog(DummyPage(), dialog, api, DOCUMENT, files=files or Files(),
+                              on_saved=(lambda: saved.append(True)) if saved is not None else None)
+    return dialog
+
+
+def test_attaching_fills_the_title_from_the_file_and_keeps_the_other_details():
+    api, saved = AttachApi(), []
+    dialog = attach_dialog(api, saved=saved)
+    assert "Attach File" in texts(dialog.title) and "No file chosen" in texts(dialog.content)
+    assert field(dialog, "Author").value == "Hon. Cruz" and field(dialog, "Series Year").value == "2025"
+
+    press(dialog, "Attach File")
+    assert "Choose the file to attach." in texts(dialog.content)
+    assert not [c for c in api.calls if c[0] in ("PUT", "POST")]
+
+    press(dialog, "Choose file")
+    assert field(dialog, "Title").value == "Ordinance No. 12 - Market Fees"
+    press(dialog, "Attach File")
+
+    puts = [c for c in api.calls if c[0] == "PUT"]
+    assert puts[-1][2]["json"]["title"] == "Ordinance No. 12 - Market Fees"
+    assert puts[-1][2]["json"]["author"] == "Hon. Cruz"
+    assert api.calls[-1] == ("POST", "/documents/7/attachments", {"data": {"tmp_name": "tmp_1"}})
+    assert dialog.open is False and saved == [True]
+
+
+def test_a_shortened_file_name_leaves_the_title_and_says_why():
+    dialog = attach_dialog(AttachApi(), files=Files("MUNICI~3.PDF"))
+    press(dialog, "Choose file")
+    assert field(dialog, "Title").value == "Ordinance No. 7"
+    assert any("Windows shortened" in t for t in texts(dialog.content))
+
+
+def test_a_refused_file_keeps_the_form_open_and_trying_again_reuses_the_upload():
+    api, files, saved = AttachApi(fail_on="/documents/7/attachments"), Files(), []
+    dialog = attach_dialog(api, files=files, saved=saved)
+    press(dialog, "Choose file")
+    press(dialog, "Attach File")
+    assert "Duplicate file content detected in document RES-000002" in texts(dialog.content)
+    assert dialog.open is True and saved == []
+
+    # A browser sends a picked file only once, so the retry uses the file already uploaded.
+    api.fail_on = None
+    press(dialog, "Attach File")
+    assert len(files.uploads) == 1
+    assert api.calls[-1] == ("POST", "/documents/7/attachments", {"data": {"tmp_name": "tmp_1"}})
+    assert saved == [True] and dialog.open is False

@@ -302,7 +302,8 @@ def open_document_details(
         if not scan:
             danger = ft.ButtonStyle(color=ft.Colors.RED_700)
             for label, icon, handler, shown, style in (
-                ("Replace file", ft.Icons.UPLOAD_FILE, replace_file, can_edit and attachments and not archived, None),
+                # The same dialog attaches a file to a document registered without one.
+                ("Replace file" if attachments else "Attach file", ft.Icons.UPLOAD_FILE, replace_file, can_edit and not archived, None),
                 ("Archive", ft.Icons.ARCHIVE_OUTLINED, archive, not archived, None),
                 ("Restore", ft.Icons.UNARCHIVE_OUTLINED, restore, archived, None),
                 ("Keep longer or delete", ft.Icons.MORE_TIME, keep_or_delete, archived and document.get("retain_until"), None),

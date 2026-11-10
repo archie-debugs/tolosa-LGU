@@ -359,8 +359,8 @@ def build_documents_view(
             add("Download file", ft.Icons.DOWNLOAD_OUTLINED, download)
         if can_edit:
             add("Edit details", ft.Icons.EDIT_OUTLINED, open_edit)
-            if has_file(doc):
-                add("Replace file", ft.Icons.UPLOAD_FILE, open_replace_attachment)
+            # The same dialog attaches a file to a document registered without one.
+            add("Replace file" if has_file(doc) else "Attach file", ft.Icons.UPLOAD_FILE, open_replace_attachment)
             if set_visibility:
                 public = bool(doc.get("is_public"))
                 items.append(ft.PopupMenuItem(

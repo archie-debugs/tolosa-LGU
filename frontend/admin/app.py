@@ -174,6 +174,7 @@ from frontend.admin.users_roles import (
     build_users_roles_table,
     build_users_roles_view,
 )
+from frontend.admin.attach_file import open_attach_file_dialog
 from frontend.admin.registration import PickerFiles, open_multiple_register_dialog, open_register_dialog
 # The Register Document form's look, shared by the account and office forms.
 from frontend.admin.registration import _Notice, _dialog_width, _field_style, _labelled, _primary_button, _section, _style_dialog
@@ -198,46 +199,6 @@ def clear_stale_session_state(state):
     reset["runtime_token"] = None
     reset["refresh_token"] = None
     return reset
-
-
-def _read_selected_file_bytes(selected_file):
-    if selected_file is None:
-        return None
-    try:
-        if hasattr(selected_file, "read"):
-            data = selected_file.read()
-            if data is not None:
-                return data
-    except Exception:
-        pass
-    candidate_path = getattr(selected_file, "path", None)
-    if candidate_path and os.path.exists(candidate_path):
-        try:
-            with open(candidate_path, "rb") as handle:
-                return handle.read()
-        except Exception:
-            pass
-    return None
-
-
-def _browser_selected_file_needs_upload(selected_file):
-    if selected_file is None:
-        return False
-    if getattr(selected_file, "path", None):
-        return False
-    if hasattr(selected_file, "read") or hasattr(selected_file, "bytes"):
-        return False
-    return True
-
-
-def _route_file_picker_result(current_context, event, single_handler, bulk_handler, replacement_handler):
-    if current_context == "single_registration" and callable(single_handler):
-        return single_handler(event)
-    if current_context == "bulk_registration" and callable(bulk_handler):
-        return bulk_handler(event)
-    if current_context == "replacement" and callable(replacement_handler):
-        return replacement_handler(event)
-    return None
 
 
 def main(page: ft.Page, session=None):
@@ -1292,7 +1253,6 @@ def main(page: ft.Page, session=None):
     registration_picker = ft.FilePicker()
     page.overlay.append(registration_picker)
     registration_files = PickerFiles(page, registration_picker)
-    current_file_picker_context = None
 
     print_list_dialog = ft.AlertDialog()
     page.overlay.append(print_list_dialog)
@@ -2072,125 +2032,26 @@ def main(page: ft.Page, session=None):
         except Exception as exc:
             show_document_notice(f"Document download failed: {exc}")
 
-    replace_attachment_document = None
-    replace_attachment_record = None
-    replacement_file = None
-    replacement_file_label = ft.Text("No replacement file selected", size=12, color=ft.Colors.BLUE_GREY_600)
-    replace_attachment_picker = ft.FilePicker(on_result=lambda e: None)
-    page.overlay.append(replace_attachment_picker)
-
-    def _on_replacement_file(e):
-        nonlocal replacement_file
-        try:
-            if getattr(e, "files", None):
-                selected = e.files[0]
-                path = getattr(e, "path", None) or getattr(selected, "path", None)
-                file_bytes = _read_selected_file_bytes(selected)
-                replacement_file = {"path": path, "name": getattr(selected, "name", None), "file_bytes": file_bytes, "selected_file_source": selected}
-                replacement_file_label.value = replacement_file.get("name") or "Replacement file selected"
-            else:
-                replacement_file = None
-                replacement_file_label.value = "No replacement file selected"
-        except Exception:
-            replacement_file = None
-            replacement_file_label.value = "No replacement file selected"
-        page.update()
-
-    replace_attachment_picker.on_result = lambda e: _route_file_picker_result(
-        current_file_picker_context,
-        e,
-        None,
-        None,
-        _on_replacement_file,
-    )
-    replace_attachment_dialog = ft.AlertDialog(
-        title=ft.Text("Replace Attachment", size=20, weight=ft.FontWeight.BOLD),
-        content=ft.Column(
-            [
-                ft.Text("The replacement must be a PDF, DOC, or DOCX file and must not duplicate existing file content.", size=12, color=ft.Colors.BLUE_GREY_600),
-                ft.Text("Current attachment", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
-                ft.Text("-", size=13),
-                ft.Row(
-                    [
-                        ft.Icon(ft.Icons.UPLOAD_FILE, color=ft.Colors.BLUE_700, size=22),
-                        ft.Column([ft.Text("Replacement file", size=13, weight=ft.FontWeight.BOLD), replacement_file_label], spacing=3, expand=True),
-                        ft.OutlinedButton("Choose file", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: replace_attachment_picker.pick_files(file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["pdf", "doc", "docx"])),
-                    ],
-                    spacing=10,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-            ],
-            spacing=10,
-            width=620,
-        ),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_replace_attachment_dialog()),
-            ft.Button("Replace Attachment", icon=ft.Icons.UPLOAD_FILE, on_click=lambda _: submit_replace_attachment(), bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-        ],
-    )
+    # Replace a document's file (frontend/admin/attach_file.py); one without a file gets it through the edit form.
+    replace_attachment_dialog = ft.AlertDialog()
     page.overlay.append(replace_attachment_dialog)
-
-    def close_replace_attachment_dialog(_=None):
-        nonlocal current_file_picker_context
-        current_file_picker_context = None
-        replace_attachment_dialog.open = False
-        page.update()
+    replace_attachment_picker = ft.FilePicker()
+    page.overlay.append(replace_attachment_picker)
+    replace_attachment_files = PickerFiles(page, replace_attachment_picker)
 
     def open_replace_attachment_dialog(doc):
-        nonlocal replace_attachment_document, replace_attachment_record, replacement_file, current_file_picker_context
-        current_file_picker_context = "replacement"
-        attachments = [item for item in doc.get("attachments", []) if isinstance(item, dict) and item.get("id")]
-        if not attachments:
-            show_document_notice("No attachment is available to replace.")
+        api = lambda method, path, **kw: backend_api(method, path, timeout=60, **kw)
+        if not any(isinstance(a, dict) and a.get("id") for a in doc.get("attachments") or []):
+            # No file yet: the edit form attaches it, filling the title from the file's name as registration does.
+            open_edit_dialog(page, edit_document_dialog, api, doc, files=replace_attachment_files,
+                             on_saved=lambda: (load_documents_table(), show_document_notice("File attached.")))
             return
-        replace_attachment_document = doc
-        replace_attachment_record = attachments[0]
-        replacement_file = None
-        replacement_file_label.value = "No replacement file selected"
-        current_label = replace_attachment_dialog.content.controls[2]
-        current_label.value = str(replace_attachment_record.get("original_filename") or doc.get("attachment_name") or "-")
-        replace_attachment_dialog.open = True
-        page.update()
 
-    def submit_replace_attachment(_=None):
-        if not replace_attachment_document or not replace_attachment_record:
-            show_document_notice("No attachment is selected for replacement.")
-            return
-        if not replacement_file:
-            show_document_notice("Choose a replacement file first.")
-            return
-        path = replacement_file.get("path")
-        name = replacement_file.get("name") or "replacement.pdf"
-        file_bytes = replacement_file.get("file_bytes")
-        if file_bytes is None:
-            file_bytes = _read_selected_file_bytes(replacement_file.get("selected_file_source"))
-            if file_bytes is None:
-                if not path or not os.path.exists(path):
-                    show_document_notice("Choose a replacement file first.")
-                    return
-                if not os.path.isabs(path):
-                    path = os.path.abspath(path)
-                with open(path, "rb") as handle:
-                    file_bytes = handle.read()
-        try:
-            response = http.post(
-                f"{BACKEND_URL}/documents/{replace_attachment_document.get('id')}/attachments/{replace_attachment_record.get('id')}/replace",
-                files={"file": (name, file_bytes, mimetypes.guess_type(name)[0] or "application/octet-stream")},
-                headers=get_admin_headers(),
-                verify=False,
-                timeout=60,
-            )
-            if response.status_code != 200:
-                try:
-                    detail = response.json().get("detail", response.text)
-                except Exception:
-                    detail = response.text
-                raise Exception(f"{response.status_code} {detail}")
-            close_replace_attachment_dialog()
+        def saved(message):
             load_documents_table()
-            show_document_notice("Attachment replaced successfully.")
-        except Exception as exc:
-            show_document_notice(f"Attachment replacement failed: {exc}")
+            show_document_notice(message)
+
+        open_attach_file_dialog(page, replace_attachment_dialog, api, replace_attachment_files, doc, on_saved=saved)
 
     def set_document_visibility(doc, is_public):
         document_id = doc.get("id")

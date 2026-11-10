@@ -2,14 +2,17 @@
 
 The document number, category, priority and due date are not edited here (the client's request);
 the form leaves them out of what it saves, so the backend keeps their current values.
+
+The same form attaches the file to a document registered without one: as in registration, the
+title comes from the file's name, and the other fields keep what the document already has.
 """
 
 import flet as ft
 
 from frontend.admin.definition_fields import DocumentTypeField
 from frontend.admin.registration import (
-    ACTIONS_REQUIRED, STATUSES, _Notice, _dialog_width, _field_style, _labelled, _primary_button, _section,
-    _style_dialog, error_detail,
+    ACTIONS_REQUIRED, SHORTENED_NAME_NOTE, STATUSES, _Notice, _dialog_width, _field_style, _labelled, _primary_button,
+    _section, _style_dialog, error_detail, is_shortened_name, set_label, title_from_filename, upload_finished,
 )
 from frontend.admin.tracking_ui import TrackingWidgets, remark_list
 
@@ -36,11 +39,13 @@ def _remark_history(api, document):
     return list(history or [])
 
 
-def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
+def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None, files=None):
     """Fill `dialog` with the edit form for `document` and open it.
 
     `api(method, path, **kwargs)` returns the JSON body or raises with the backend's detail.
+    With `files` (a registration.PickerFiles) the form attaches a file to the document too.
     """
+    attaching = files is not None
     ui = TrackingWidgets(page)
     style = _field_style(ui)
     # `data` names each field, since its name is drawn above it rather than as its label.
@@ -58,6 +63,11 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     new_remark = ft.TextField(data="New remark", hint_text="Leave empty to keep the remarks as they are",
                               multiline=True, min_lines=2, max_lines=3, **style)
     message = _Notice()
+    # "tmp_name": the chosen file once uploaded, reused if saving fails: a browser sends a picked file only once.
+    state = {"file": None, "busy": False, "tmp_name": None}
+    file_name = ft.Text("No file chosen", size=13, weight=ft.FontWeight.W_600, color=ui.heading_color())
+    file_hint = ft.Text("", size=11, color=ui.muted_color())
+    progress = ft.ProgressBar(value=0, visible=False)
 
     remarks = _remark_history(api, document)
     # Document details passes its display record, where a missing value is "-".
@@ -70,11 +80,82 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     def show_error(text):
         message.value = text
         page.update()
+        if text:
+            try:
+                content.scroll_to(offset=-1, duration=300)  # the message is at the bottom of a long form
+            except Exception:
+                pass  # not drawn on a page (tests)
+
+    def picked(chosen):
+        state["file"] = chosen[0] if chosen else None
+        state["tmp_name"] = None
+        name = state["file"]["name"] if state["file"] else ""
+        file_name.value = name or "No file chosen"
+        file_hint.value = SHORTENED_NAME_NOTE if is_shortened_name(name) else ""
+        if title_from_filename(name):
+            title.value = title_from_filename(name)
+        show_error("")
+
+    def set_busy(busy, label=None):
+        state["busy"] = busy
+        progress.visible = busy
+        save_button.disabled = busy
+        set_label(save_button, label or action)
+        page.update()
+
+    def fail(text):
+        set_busy(False)
+        show_error(text)
 
     def save():
+        if state["busy"]:
+            return
         if not (title.value or "").strip():
             show_error("Title is required.")
             return
+        if attaching and not state["file"]:
+            show_error("Choose the file to attach.")
+            return
+        if attaching:
+            upload()
+        else:
+            store()
+
+    def upload():
+        """Send the file to a temporary upload first; the web app never holds its bytes."""
+        chosen = state["file"]
+        if state["tmp_name"]:
+            set_busy(True, "Saving…")
+            store(state["tmp_name"])
+            return
+        set_busy(True, "Uploading…")
+        try:
+            created = api("POST", "/documents/uploads/create_tmp_uploads", json={"files": [{"filename": chosen["name"], "size": chosen["size"]}]})
+        except Exception as exc:
+            fail(f"The file could not be prepared for upload: {error_detail(exc)[0]}")
+            return
+        item = next(iter(created.get("files") or []), {})
+        if not item.get("ok"):
+            fail("Only PDF, DOC and DOCX files can be attached.")
+            return
+
+        def on_progress(name, value, error):
+            if name != chosen["name"] or not state["busy"]:
+                return
+            if error:
+                fail(f"The upload failed: {error}")
+            elif upload_finished(value):
+                state["tmp_name"] = item["tmp_name"]
+                store(item["tmp_name"])
+            else:
+                progress.value = value
+                page.update()
+
+        progress.value = 0
+        page.update()
+        files.upload([(chosen["name"], item["upload_url"])], on_progress)
+
+    def store(tmp_name=None):
         payload = {
             "title": title.value.strip(),
             "series_year": (year.value or "").strip() or None,
@@ -87,10 +168,14 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
             "new_remark": (new_remark.value or "").strip() or None,
         }
         try:
+            # The details first: if attaching then fails (say the file is a copy), saving again is safe.
             api("PUT", f"/documents/{document['id']}", json=payload)
+            if tmp_name:
+                api("POST", f"/documents/{document['id']}/attachments", data={"tmp_name": tmp_name})
         except Exception as exc:
-            show_error(error_detail(exc)[0])
+            fail(error_detail(exc)[0])
             return
+        state["busy"] = False
         close()
         if on_saved:
             on_saved()
@@ -98,8 +183,19 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
     office = document.get("current_office") or "no office"
     half = {"xs": 12, "sm": 6}
     narrow = (page.width or 1024) <= 600
+    action = "Attach File" if attaching else "Save changes"
+    save_button = _primary_button(action, ft.Icons.UPLOAD_FILE if attaching else ft.Icons.SAVE_OUTLINED, lambda _: save())
+    file_section = [_section(ui, ft.Icons.UPLOAD_FILE, "The file", [
+        ft.Row([
+            ft.Column([file_name, file_hint], spacing=2, expand=True),
+            ft.OutlinedButton("Choose file", icon=ft.Icons.FOLDER_OPEN_OUTLINED, on_click=lambda _: files.pick(False, picked)),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ft.Text("PDF, DOC or DOCX. Choosing it fills the title from its name; check the details below.", size=11, color=ui.muted_color()),
+        progress,
+    ])] if attaching else []
     content = ft.Column(
         [
+            *file_section,
             _section(ui, ft.Icons.DESCRIPTION, "The document", [
                 _labelled(ui, title, "Title", ft.Icons.TITLE, required=True),
                 ft.ResponsiveRow([
@@ -132,10 +228,11 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None):
         height=min(560, (page.height or 760) - 200) if narrow else 560,
     )
     _style_dialog(
-        dialog, ui, "Edit Document", content,
-        [ft.TextButton("Cancel", on_click=lambda _: close()), _primary_button("Save changes", ft.Icons.SAVE_OUTLINED, lambda _: save())],
+        dialog, ui, "Attach File" if attaching else "Edit Document", content,
+        [ft.TextButton("Cancel", on_click=lambda _: close()), save_button],
         _dialog_width(page, False),
-        subtitle=f"{document.get('tracking_number') or 'Document'} · update its details.", icon=ft.Icons.EDIT_DOCUMENT, on_close=close,
+        subtitle=f"{document.get('tracking_number') or 'Document'} · " + ("add its file and check its details." if attaching else "update its details."),
+        icon=ft.Icons.UPLOAD_FILE if attaching else ft.Icons.EDIT_DOCUMENT, on_close=close,
     )
     if dialog not in page.overlay:
         page.overlay.append(dialog)
