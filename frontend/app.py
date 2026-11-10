@@ -15,6 +15,7 @@ from frontend.frontend_public.public_portal import build_public_portal
 from frontend.theme import CANVAS
 import frontend.responsive  # noqa: F401  (one column on phones and tablets)
 import frontend.dialogs  # noqa: F401  (a dialog closed by clicking outside or Esc stays closed)
+import frontend.open_links  # noqa: F401  (documents open on Apple devices)
 from frontend import navigation
 
 
