@@ -157,7 +157,7 @@ def test_an_employee_registers_a_record_into_their_own_office():
     office = field(dialog, "Office")
     assert (office.value, office.disabled) == ("2", True)
     assert field(dialog, "Year").value == "2026"
-    assert "Without a file, only the record is registered." in texts(dialog)
+    assert "Without a file, only the record is registered. Photos or scans (JPG, PNG) are saved as one PDF." in texts(dialog)
 
     field(dialog, "Title").value = "Market code"
     press(dialog, "Register")
@@ -227,7 +227,7 @@ def test_several_files_register_after_their_uploads_with_their_own_titles():
     press(dialog, "Choose files")
     files.on_picked([{"name": "ordinance-1.pdf", "size": 1}, {"name": "ordinance-2.pdf", "size": 1}, {"name": "notes.txt", "size": 1}])
 
-    assert "Only PDF, DOC and DOCX files can be registered." in texts(dialog)
+    assert "Only PDF, DOC, DOCX, JPG and PNG files can be registered." in texts(dialog)
     assert button(dialog, "Waiting for uploads…").disabled is True
     files.on_progress("ordinance-1.pdf", 1.0, None)
     assert button(dialog, "Waiting for uploads…").disabled is True
@@ -464,3 +464,40 @@ def test_both_forms_show_their_message_at_the_top():
         form = next(c for c in walk(dialog) if isinstance(c, ft.Column) and c.scroll)
         box = form.controls[0]
         assert type(box).__name__ == "Container" and box.visible is False  # the red message box, empty for now
+
+
+def test_several_page_photos_register_as_one_document_once_all_are_uploaded():
+    page, dialog, files, api, _ = open_single()
+    press(dialog, "Choose file")
+    assert files.multiple is True
+    files.on_picked([{"name": "Ordinance No. 9 p1.jpg", "size": 10}, {"name": "p2.jpg", "size": 10}, {"name": "p3.png", "size": 10}])
+    assert "3 pages, joined into one PDF" in texts(dialog)
+    assert "In this order: Ordinance No. 9 p1.jpg, p2.jpg, p3.png" in texts(dialog)
+    assert field(dialog, "Title").value == "Ordinance No. 9 p1"
+
+    press(dialog, "Register")
+    assert [name for name, _ in files.uploads[0]] == ["Ordinance No. 9 p1.jpg", "p2.jpg", "p3.png"]
+    files.on_progress("Ordinance No. 9 p1.jpg", 1.0, None)
+    files.on_progress("p2.jpg", 1.0, None)
+    assert api.posted("/documents/bulk-register/confirm_tmp") == []  # still waiting for p3
+    files.on_progress("p3.png", 1.0, None)
+
+    payload = api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]
+    assert payload["tmp_names"] == ["tmp_Ordinance No. 9 p1.jpg", "tmp_p2.jpg", "tmp_p3.png"]
+    assert payload["combine_images"] is True
+    assert payload["documents"] == [{"tmp_name": "tmp_Ordinance No. 9 p1.jpg", "series_year": 2026, "title": "Ordinance No. 9 p1"}]
+    assert "DOC-000001" in texts(dialog)
+
+
+def test_one_photo_is_not_combined_and_several_documents_point_to_register_multiple():
+    page, dialog, files, api, _ = open_single()
+    press(dialog, "Choose file")
+    files.on_picked([{"name": "a.pdf", "size": 10}, {"name": "b.jpg", "size": 10}])
+    assert any("use Register multiple" in text for text in texts(dialog))
+    assert "No file chosen" in texts(dialog)
+
+    files.on_picked([{"name": "scan.jpg", "size": 10}])
+    assert "Saved as a PDF." in texts(dialog)
+    press(dialog, "Register")
+    files.on_progress("scan.jpg", 1.0, None)
+    assert "combine_images" not in api.posted("/documents/bulk-register/confirm_tmp")[0]["json"]

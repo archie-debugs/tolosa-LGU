@@ -13,11 +13,15 @@ ORDINANCE = {"id": 7, "title": "Budget ordinance", "tracking_number": "ORD-00000
 
 
 class FakeFiles:
-    def pick(self, multiple, on_picked):
-        on_picked([{"name": "MOA_health.pdf", "size": 9}])
+    chosen = [{"name": "MOA_health.pdf", "size": 9}]
+
+    def pick(self, multiple, on_picked, extensions=None):
+        self.multiple = multiple
+        on_picked(self.chosen)
 
     def upload(self, uploads, on_progress):
-        on_progress(uploads[0][0], 1.0, None)
+        for name, _ in uploads:
+            on_progress(name, 1.0, None)
 
 
 def build(archive=()):
@@ -35,7 +39,7 @@ def build(archive=()):
             entries.append({"id": 1, "kind": "Ordinance", "title": ORDINANCE["title"], "document": ORDINANCE, "archived": False})
             return entries[-1]
         if path == "/documents/uploads/create_tmp_uploads":
-            return {"files": [{"ok": True, "tmp_name": "tmp_1_MOA_health.pdf", "upload_url": "http://x/upload"}]}
+            return {"files": [{"ok": True, "tmp_name": f"tmp_1_{f['filename']}", "upload_url": "http://x/upload"} for f in kwargs["json"]["files"]]}
         if path == "/temporary-documents/moa":
             entries.append({"id": 2, "kind": "MOA", "title": kwargs["json"]["title"], "filename": "MOA_health.pdf", "archived": False})
             return entries[-1]
@@ -81,7 +85,8 @@ def test_an_moa_is_picked_titled_uploaded_and_saved_for_the_day():
     cards.title_field.value = "MOA with the Health Office"
     find(cards.day_card, "FilledButton", "Upload MOA").on_click(None)
     saved = next(call for call in calls if call[1] == "/temporary-documents/moa")
-    assert saved[2]["json"] == {"scheduled_for": "2026-11-07", "tmp_name": "tmp_1_MOA_health.pdf", "title": "MOA with the Health Office"}
+    assert saved[2]["json"] == {"scheduled_for": "2026-11-07", "tmp_name": "tmp_1_MOA_health.pdf", "page_tmp_names": [],
+                                "title": "MOA with the Health Office"}
     assert "MOA with the Health Office" in texts(cards.day_card)
 
 
@@ -139,3 +144,28 @@ def test_an_ordinance_archived_after_it_was_set_is_flagged_and_view_needs_detail
     shown = texts(cards.day_card)
     assert "Archived · hidden from members" in shown
     assert not any(type(c).__name__ == "TextButton" and c.text == "View" for c in _walk(cards.day_card)), "no details access: no dead View button"
+
+
+def test_photos_of_an_moa_s_pages_upload_as_one_moa(monkeypatch):
+    monkeypatch.setattr(FakeFiles, "chosen", [{"name": "MOA_roads_1.jpg", "size": 9}, {"name": "MOA_roads_2.jpg", "size": 9}])
+    cards, calls = build()
+    cards.load(TODAY, TODAY)
+    find(cards.day_card, "OutlinedButton", "Upload a MOA").on_click(None)
+    find(cards.day_card, "OutlinedButton", "Choose file…").on_click(None)
+    assert "2 pages, joined into one PDF" in texts(cards.day_card)
+    assert "In this order: MOA_roads_1.jpg, MOA_roads_2.jpg" in texts(cards.day_card)
+
+    find(cards.day_card, "FilledButton", "Upload MOA").on_click(None)
+    saved = next(call for call in calls if call[1] == "/temporary-documents/moa")
+    assert saved[2]["json"]["tmp_name"] == "tmp_1_MOA_roads_1.jpg"
+    assert saved[2]["json"]["page_tmp_names"] == ["tmp_1_MOA_roads_2.jpg"]
+
+
+def test_a_word_file_cannot_be_mixed_with_photos(monkeypatch):
+    monkeypatch.setattr(FakeFiles, "chosen", [{"name": "MOA.docx", "size": 9}, {"name": "page.jpg", "size": 9}])
+    cards, calls = build()
+    cards.load(TODAY, TODAY)
+    find(cards.day_card, "OutlinedButton", "Upload a MOA").on_click(None)
+    find(cards.day_card, "OutlinedButton", "Choose file…").on_click(None)
+    assert any("several photos or scans" in text for text in texts(cards.day_card))
+    assert "No file chosen" in texts(cards.day_card)
