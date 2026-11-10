@@ -488,16 +488,33 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
             padding=ft.Padding(10, 3, 10, 3),
         )
 
+    def title_cell(title):
+        """One line, cut with "…"; "Show full title" opens the whole title in the row. Hovering shows it whole too."""
+        text = ft.Text(title, size=13, weight=ft.FontWeight.W_500, color=ink, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+        cell = ft.Container(text, tooltip=title)
+        # shortcut: Flet can't measure text, so a title this short is taken to fit; measure it if short titles get cut.
+        if len(title) <= 20:
+            return cell
+        toggle = ft.TextButton("Show full title", style=ft.ButtonStyle(padding=ft.Padding(0, 0, 0, 0)))
+
+        def flip(_):
+            opening = text.max_lines == 1
+            text.max_lines = None if opening else 1
+            text.overflow = ft.TextOverflow.VISIBLE if opening else ft.TextOverflow.ELLIPSIS
+            toggle.text = "Show less" if opening else "Show full title"
+            text.update()
+            toggle.update()
+
+        toggle.on_click = flip
+        return ft.Column([cell, toggle], spacing=0, tight=True)
+
     def document_row(document, last):
         number_lines = [ft.Text(document.get("tracking_number") or document.get("number") or "-", size=13, weight=ft.FontWeight.BOLD, color=label_blue, no_wrap=True)]
         if _reference(document):
             number_lines.append(ft.Text(_reference(document), size=11, color=muted))
         return table_row(
             ft.Column(number_lines, spacing=2, tight=True),
-            ft.Container(
-                ft.Text(document.get("title") or "-", size=14, weight=ft.FontWeight.W_500, color=ink, max_lines=3, overflow=ft.TextOverflow.ELLIPSIS),
-                tooltip=document.get("title"),
-            ),
+            title_cell(document.get("title") or "-"),
             ft.Row([type_chip(document.get("type"))], tight=True),
             ft.Text(_display_date(document.get("date")), size=13, color=ink, no_wrap=True),
             _status(document, muted),
