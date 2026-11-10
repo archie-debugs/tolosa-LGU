@@ -336,6 +336,15 @@ def main(page: ft.Page, session=None):
             pass
         return None
 
+    def forget_scanned_code():
+        """The scan has its answer, so the browser stops remembering the code: otherwise every later
+        visit to the workspace in this browser would open that document again."""
+        try:
+            if hasattr(page, "client_storage"):
+                page.client_storage.remove("sb_pending_qr_token")
+        except Exception:
+            pass
+
     def clear_pending_qr_token():
         try:
             if hasattr(page, "client_storage"):
@@ -393,8 +402,8 @@ def main(page: ft.Page, session=None):
                 "You do not have permission to access this document.",
             ),
             "wrong_office": (
-                "Access Denied",
-                "This document is not associated with your assigned office.",
+                "Not for Your Office",
+                "This document is not at your office and has not been sent to it.",
             ),
             "not_found": (
                 "Document Not Found",
@@ -405,12 +414,35 @@ def main(page: ft.Page, session=None):
                 "Please try again.",
             ),
         }
-        title, message = states.get(qr_state.get("status"), states["server_error"])
-        controls = [ft.Text(title, size=20, weight=ft.FontWeight.BOLD)]
-        if message:
-            controls.append(ft.Text(message))
+        status = qr_state.get("status")
+        title, message = states.get(status, states["server_error"])
+        if status in {"checking", "authorized", "login_required"}:  # passing moments, not answers
+            controls = [ft.Text(title, size=20, weight=ft.FontWeight.BOLD)]
+            if message:
+                controls.append(ft.Text(message))
+            page.clean()
+            page.add(ft.Column(controls, spacing=8))
+            page.update()
+            return
+        # The scan could not open a document: say why, and offer a way on.
+        from frontend.admin.scan_home import build_scan_home
+
+        retry = None
+        if status in states and status != "server_error":
+            forget_scanned_code()
+        else:
+            def retry():
+                page_state, _ = _qr_authorization_state()
+                page_state.pop("qr_authorization", None)
+                show_qr_authenticated_state()
+        try:
+            office = load_current_profile().get("office")
+        except Exception:
+            office = None
+        page.scroll = None
         page.clean()
-        page.add(ft.Column(controls, spacing=8))
+        page.add(build_scan_home(page, username=current_user, office=office, on_logout=logout_user,
+                                 problem=(title, message), on_retry=retry))
         page.update()
 
     def _open_authorized_qr_document(qr_state):
@@ -427,7 +459,12 @@ def main(page: ft.Page, session=None):
         page_state["qr_authorization"] = qr_state
         page.data = page_state
         _render_qr_authorization_state(qr_state)
-        if not show_document_details({"id": document_id, "qr_token": qr_state.get("token")}, allow_pass=True):
+        if show_document_details({"id": document_id, "qr_token": qr_state.get("token"), "scanned": True}, allow_pass=True):
+            forget_scanned_code()
+        elif current_user and runtime_token:
+            # Still signed in, so the document failed to load: say so and offer Try again.
+            _render_qr_authorization_state(_save_qr_authorization_state(qr_state.get("token"), "server_error"))
+        else:
             qr_state["details_opened"] = False
             page_state["qr_authorization"] = qr_state
             page.data = page_state
@@ -509,7 +546,7 @@ def main(page: ft.Page, session=None):
                     detail = ""
                 if "office assignment required" in detail:
                     status = "no_office"
-                elif "not assigned to your office" in detail:
+                elif "not pending receipt at your office" in detail or "not assigned to your office" in detail:
                     status = "wrong_office"
                 else:
                     status = "permission_denied"
@@ -1887,8 +1924,9 @@ def main(page: ft.Page, session=None):
                 keep_or_delete=keep_or_delete_archived if has_permission("delete_documents") else None,
                 delete_permanently=confirm_permanent_delete_archived_document if has_permission("delete_documents") else None,
                 on_change=refresh_after_document_change,
-                # A phone that scanned the QR code gets the document as its own page.
-                on_done=leave_qr_document if doc.get("qr_token") and is_phone(page) else None,
+                # A scanned document is its own page, with Done, on every device: a dialog left the
+                # page behind it empty once closed.
+                on_done=leave_qr_document if doc.get("scanned") else None,
             )
         except DetailsSessionExpired:
             _return_to_login_after_qr_details_401()
@@ -3883,7 +3921,24 @@ def main(page: ft.Page, session=None):
             )
             # Five to a row on wide screens, two on tablets and beside the sidebar on a sideways tablet.
             card.col = {"xs": 10, "sm": 5, "xl": 2}
+            levitate_on_hover(card)
             return card
+
+        def levitate_on_hover(card):
+            """The card rises a little, with a deeper shadow, while the pointer is over it."""
+            resting_shadow = card.shadow
+            shadow_color = ft.Colors.with_opacity(0.30 if page.theme_mode == ft.ThemeMode.DARK else 0.16, ft.Colors.BLACK)
+            raised_shadow = ft.BoxShadow(blur_radius=22, color=shadow_color, offset=ft.Offset(0, 10), spread_radius=0)
+            card.offset = ft.transform.Offset(0, 0)
+            card.animate_offset = ft.animation.Animation(180, ft.AnimationCurve.EASE_OUT)
+
+            def hover(e):
+                raised = str(e.data).lower() == "true"
+                card.offset = ft.transform.Offset(0, -0.05 if raised else 0)
+                card.shadow = raised_shadow if raised else resting_shadow
+                card.update()
+
+            card.on_hover = hover
 
         def metric_grid(items):
             return ft.ResponsiveRow([metric_card(item) for item in items], columns=10, spacing=12, run_spacing=12)

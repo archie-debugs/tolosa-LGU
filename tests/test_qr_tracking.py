@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
@@ -113,9 +114,12 @@ def test_trail_shows_where_a_document_is_and_its_route_and_counts_as_a_scan():
     assert pending["location"] == {**pending["location"], "state": "in_transit", "office": "Office A", "to_office": "Office B"}
 
     assert client.get("/documents/qr/NOT-A-CODE/trail", headers=monitor).status_code == 404
+    unknown_link = quote("https://sb.example/qr/NOT-A-CODE", safe="")
+    assert client.get(f"/documents/qr/{unknown_link}/trail", headers=monitor).status_code == 404
 
+    # Only QR codes count: the typed DOC-000001 and the typed NOT-A-CODE are lookups, not scans.
     summary = client.get("/documents/qr/monitor", headers=monitor).json()["summary"]
-    assert (summary["scans_today"], summary["unrecognized_today"]) == (2, 1)
+    assert (summary["scans_today"], summary["unrecognized_today"]) == (1, 1)
     feed = client.get("/documents/qr/monitor", headers=monitor).json()["recent_activity"]
     assert feed[0]["type"] == "unrecognized"
     assert feed[1] == {**feed[1], "type": "scan", "tracking_number": "DOC-000002"}
@@ -127,3 +131,105 @@ def test_qr_tracking_needs_its_permission():
     clerk = headers_for(client, "clerk")
     assert client.get("/documents/qr/monitor", headers=clerk).status_code == 403
     assert client.get("/documents/qr/DOC-000001/trail", headers=clerk).status_code == 403
+
+
+def test_the_office_holding_a_document_opens_it_by_scanning_but_an_office_it_left_does_not():
+    ids = setup_offices()
+    client = TestClient(main.app)
+    sender = headers_for(client, "sender")
+    # Office A registered both and holds them: scanning opens them so A can pass them on.
+    held = client.get("/documents/qr/qr-tracking-2/office", headers=sender)
+    assert held.status_code == 200, held.text
+    assert held.json()["handoff_status"] is None
+    route_documents(client, ids)
+    # Sent to Office B and not received yet: A no longer holds it.
+    gone = client.get("/documents/qr/qr-tracking-2/office", headers=sender)
+    assert gone.status_code == 403 and "not pending receipt at your office" in gone.json()["detail"]
+
+
+def test_scans_today_counts_staff_scanning_labels_but_not_picking_from_a_list():
+    ids = setup_offices()
+    client = TestClient(main.app)
+    route_documents(client, ids)
+    receiver, monitor = headers_for(client, "receiver"), headers_for(client, "monitor")
+    client.get("/documents/qr/qr-tracking-2/office", headers=receiver)       # a label scanned with a phone
+    client.get("/documents/qr/no-such-code/office", headers=receiver)        # a label that isn't ours
+    client.get("/documents/qr/DOC-000002/trail?scan=false", headers=monitor)  # picked from the in-transit list
+
+    payload = client.get("/documents/qr/monitor", headers=monitor).json()
+    assert (payload["summary"]["scans_today"], payload["summary"]["unrecognized_today"]) == (1, 1)
+    scans = [event for event in payload["recent_activity"] if event["type"] in ("scan", "unrecognized")]
+    assert [(event["type"], event["tracking_number"]) for event in scans] == [("unrecognized", None), ("scan", "DOC-000002")]
+
+
+def test_registered_names_the_office_that_registered_it_after_it_moves():
+    ids = setup_offices()
+    client = TestClient(main.app)
+    route_documents(client, ids)  # registered with no originating office, then received by Office B
+    trail = client.get("/documents/qr/DOC-000001/trail", headers=headers_for(client, "monitor")).json()
+    assert trail["events"][-1] == {**trail["events"][-1], "type": "registered", "office": "Office A"}
+
+
+def test_qr_labels_carry_the_current_link_not_an_old_stored_one(monkeypatch):
+    import Backends.backend.routes.documents as documents
+
+    setup_offices()
+    with SessionLocal() as db:
+        doc = db.query(models.Document).filter(models.Document.qr_token == "qr-tracking-1").one()
+        doc.qr_code_value = "http://192.168.1.5:8001/qr/qr-tracking-1"  # stored before the server moved
+        db.commit()
+        encoded = []
+        monkeypatch.setattr(documents.qrcode, "make", lambda value: encoded.append(value) or documents.qrcode.QRCode().make_image())
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://new.example")
+        documents._render_qr_label_pdf([doc])
+    assert encoded == ["https://new.example/qr/qr-tracking-1"]
+
+
+def test_tracking_the_same_code_again_within_minutes_is_one_scan():
+    setup_offices()
+    client = TestClient(main.app)
+    monitor = headers_for(client, "monitor")
+    for _ in range(3):
+        assert client.get("/documents/qr/qr-tracking-1/trail", headers=monitor).status_code == 200
+    payload = client.get("/documents/qr/monitor", headers=monitor).json()
+    assert payload["summary"]["scans_today"] == 1
+    assert [event["type"] for event in payload["recent_activity"]].count("scan") == 1
+
+    # Ten minutes later it is a new scan.
+    with SessionLocal() as db:
+        db.query(models.AuditLog).filter(models.AuditLog.action == "QR_SCAN_SUCCESS").update(
+            {"created_at": datetime.now(timezone.utc) - timedelta(minutes=10)})
+        db.commit()
+    client.get("/documents/qr/qr-tracking-1/trail", headers=monitor)
+    assert client.get("/documents/qr/monitor", headers=monitor).json()["summary"]["scans_today"] == 2
+
+
+def test_recent_activity_shows_10_20_or_30():
+    ids = setup_offices()
+    client = TestClient(main.app)
+    route_documents(client, ids)
+    monitor = headers_for(client, "monitor")
+    with SessionLocal() as db:  # 25 scans by 25 people: none is a repeat
+        db.add_all([models.AuditLog(actor=f"clerk{n}", action="QR_SCAN_SUCCESS", target_type="document",
+                                    target_id=str(ids["received"]), details="scan") for n in range(25)])
+        db.commit()
+    feed = lambda query="": client.get(f"/documents/qr/monitor{query}", headers=monitor).json()["recent_activity"]
+    total = len(feed("?limit=30"))
+    assert total > 20, total  # enough activity for every choice to cut it
+    assert len(feed()) == min(10, total) and len(feed("?limit=20")) == min(20, total)
+    assert len(feed("?limit=500")) == min(10, total)  # only 10, 20 or 30
+
+
+def test_the_screen_asks_for_the_chosen_number_of_recent_activities():
+    import frontend.admin.app  # noqa: F401  (flet compatibility shims)
+    import flet as ft
+    from frontend.admin.qr_tracking import build_qr_tracking_view
+    from tests.test_document_details_pass import DummyPage, walk
+
+    asked = []
+    view = build_qr_tracking_view(DummyPage(), lambda method, path, **_: asked.append(path) or {}, lambda content, **_: content)
+    choice = next(c for c in walk(view) if isinstance(c, ft.Dropdown))
+    assert [o.key for o in choice.options] == ["10", "20", "30"] and asked == ["/documents/qr/monitor?limit=10"]
+    choice.value = "30"
+    choice.on_change(None)
+    assert asked[-1] == "/documents/qr/monitor?limit=30"

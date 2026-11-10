@@ -29,6 +29,16 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
     transit_title = ft.Text("In transit", size=17, weight=ft.FontWeight.BOLD, color=link_color())
     transit_list = ft.Column(spacing=0)
     activity_list = ft.Column(spacing=0)
+    # How many recent activities to show; the backend takes 10, 20 or 30.
+    activity_size = ft.Dropdown(
+        value="10",
+        options=[ft.dropdown.Option(str(size), f"{size} recent") for size in (10, 20, 30)],
+        width=140,
+        text_size=13,
+        content_padding=ft.Padding(12, 8, 4, 8),
+        border_radius=10,
+        tooltip="How many recent activities to show",
+    )
 
     # The box around it draws the border, so the field itself has none.
     scan_field = ft.TextField(
@@ -42,7 +52,7 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
     trail_panel = ft.Column(spacing=10, visible=False)
 
     def event_row(event, show_document):
-        return widgets.event_row(event, show_document, on_open=track)
+        return widgets.event_row(event, show_document, on_open=lambda value: track(value, scan=False))
 
     def render_monitor(payload):
         summary = payload.get("summary") or {}
@@ -74,7 +84,7 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
                     ),
                     widgets.waiting_chip(item),
                 ],
-                on_click=lambda _, value=item.get("tracking_number"): track(value),
+                on_click=lambda _, value=item.get("tracking_number"): track(value, scan=False),
             ))
         transit_list.controls = rows or [widgets.empty_box("Nothing in transit. Every handed-off document has been received.")]
 
@@ -87,7 +97,7 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
     def refresh(_=None, update=True):
         error_text.visible = False
         try:
-            render_monitor(api("GET", "/documents/qr/monitor"))
+            render_monitor(api("GET", f"/documents/qr/monitor?limit={activity_size.value or 10}"))
         except Exception as exc:
             error_text.value = f"Unable to load QR tracking: {exc}"
             error_text.visible = True
@@ -149,13 +159,14 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
         ]
         trail_panel.visible = True
 
-    def track(value=None):
+    def track(value=None, scan=True):
+        """Show a document's route. `scan` is off for a document picked from a list: that isn't a scan."""
         value = (value if isinstance(value, str) else scan_field.value or "").strip()
         if not value:
             return
         scan_field.value = value
         try:
-            render_trail(api("GET", f"/documents/qr/{quote(value, safe='')}/trail"))
+            render_trail(api("GET", f"/documents/qr/{quote(value, safe='')}/trail" + ("" if scan else "?scan=false")))
         except Exception as exc:
             message = "No document matches that QR code or tracking number." if "not recognized" in str(exc).lower() else f"Lookup failed: {exc}"
             trail_panel.controls = [ft.Row([ft.Icon(ft.Icons.ERROR_OUTLINE, color=ft.Colors.RED_700), ft.Text(message, size=13, color=ft.Colors.RED_700)], spacing=8)]
@@ -171,6 +182,7 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
         page.update()
 
     scan_field.on_submit = lambda _: track()
+    activity_size.on_change = refresh
 
     scan_box = ft.Container(
         content=ft.Row(
@@ -230,7 +242,14 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
                     ),
                     ft.Container(
                         surface_card(
-                            ft.Column([widgets.card_title("Recent activity", ft.Icons.SCHEDULE, trailing=updated_text), activity_list], spacing=16),
+                            ft.Column(
+                                [
+                                    widgets.card_title("Recent activity", ft.Icons.SCHEDULE, trailing=activity_size),
+                                    updated_text,
+                                    activity_list,
+                                ],
+                                spacing=12,
+                            ),
                             padding=20,
                         ),
                         col={"xs": 12, "xl": 5},
