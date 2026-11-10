@@ -40,6 +40,8 @@ def setup_offices():
             for index, title in [(1, "Budget ordinance"), (2, "Road resolution")]
         ]
         db.add_all(docs)
+        db.flush()
+        db.add_all([models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf") for doc in docs])  # only documents with a file can be passed on
         db.commit()
         return {"A": office_a.id, "B": office_b.id, "received": docs[0].id, "pending": docs[1].id}
 

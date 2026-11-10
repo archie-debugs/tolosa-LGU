@@ -31,8 +31,11 @@ def setup():
             user("viewer_a", office_ids["A"], ["view_office_documents", "view_office_document_details"]),
             user("admin", None, ["*"], role="Super Administrator"),
         ])
-        db.add(models.Document(tracking_number="DOC-000001", title="Budget ordinance", status="Approved", priority="Medium",
-                               qr_token="cancel-return-1", current_office="Office A", current_office_id=office_ids["A"]))
+        doc = models.Document(tracking_number="DOC-000001", title="Budget ordinance", status="Approved", priority="Medium",
+                              qr_token="cancel-return-1", current_office="Office A", current_office_id=office_ids["A"])
+        db.add(doc)
+        db.flush()
+        db.add(models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf"))  # only documents with a file can be passed on
         db.commit()
 
     client = TestClient(main.app)

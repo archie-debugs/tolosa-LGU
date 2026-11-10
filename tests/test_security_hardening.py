@@ -62,6 +62,7 @@ def seed_three_offices(*, archived=False):
         db.add(doc)
         db.commit()
         db.add(models.DocumentOffice(document_id=doc.id, office_id=offices[0].id))
+        db.add(models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf"))  # only documents with a file can be passed on
         for index, office in enumerate(offices):
             db.add(models.User(
                 username=f"employee{'abc'[index]}",

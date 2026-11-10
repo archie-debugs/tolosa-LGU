@@ -1074,6 +1074,7 @@ def test_document_receipt_confirmation_and_history_are_office_scoped():
         db.add(doc)
         db.commit()
         db.refresh(doc)
+        db.add(models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf"))  # only documents with a file can be passed on
         if not db.query(models.DocumentOffice).filter(
             models.DocumentOffice.document_id == doc.id,
             models.DocumentOffice.office_id == office_b_id,

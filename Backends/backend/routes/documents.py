@@ -2727,6 +2727,8 @@ def create_document_handoff(
         raise HTTPException(status_code=404, detail="Document not found")
     if doc.archived:
         raise HTTPException(status_code=400, detail="Archived documents cannot be handed off")
+    if db.query(models.Attachment.id).filter(models.Attachment.document_id == document_id).first() is None:
+        raise HTTPException(status_code=400, detail="Attach the document's file before passing it on.")
 
     # Only the office currently holding the document may pass it on. Documents without a
     # recorded current office fall back to their office association.

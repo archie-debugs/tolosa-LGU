@@ -32,6 +32,8 @@ def setup_documents():
             for index in range(1, 4)
         ]
         db.add_all(documents)
+        db.flush()
+        db.add_all([models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf") for doc in documents])  # only documents with a file can be passed on
         db.commit()
         return {code: office.id for code, office in offices.items()}, {doc.tracking_number: doc.id for doc in documents}
 

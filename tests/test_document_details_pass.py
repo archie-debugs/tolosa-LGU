@@ -5,7 +5,7 @@ from frontend.admin.document_details import PASS_FROM_DASHBOARD, open_document_d
 
 HELD = {
     "document": {"id": 7, "tracking_number": "ORD-2026-0001", "title": "Ordinance No. 7", "status": "Approved",
-                 "current_office": "Records Office", "attachments": []},
+                 "current_office": "Records Office", "attachments": [{"id": 3, "original_filename": "ordinance.pdf"}]},
     "location": {}, "events": [], "can": {"pass": True, "receive": False, "record_action": False},
 }
 
@@ -47,6 +47,18 @@ def test_details_opened_from_the_office_dashboard_or_a_scan_can_pass_the_documen
 
     assert "Pass on" in buttons
     assert PASS_FROM_DASHBOARD not in texts
+
+
+def test_a_document_without_its_file_cannot_be_passed_on():
+    dialog = ft.AlertDialog()
+    payload = {**HELD, "document": {**HELD["document"], "attachments": []}}
+    open_document_details(DummyPage(), dialog, lambda method, path, **kw: payload, 7,
+                          normalize=lambda doc: doc, open_pass=lambda doc: None)
+
+    pass_button = next(c for c in walk(dialog.content) if isinstance(c, ft.FilledButton) and c.text == "Pass on")
+
+    assert pass_button.disabled
+    assert "Attach the document's file" in pass_button.tooltip
 
 
 def test_details_opened_elsewhere_point_to_the_office_dashboard_instead():

@@ -38,6 +38,7 @@ def setup_offices():
         db.add(doc)
         db.flush()
         db.add(models.DocumentOffice(document_id=doc.id, office_id=ids["A"]))
+        db.add(models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf"))  # only documents with a file can be passed on
         db.commit()
         ids["doc"] = doc.id
     return ids

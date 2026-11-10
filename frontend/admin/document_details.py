@@ -283,7 +283,9 @@ def open_document_details(
             else:
                 buttons.append(ft.FilledButton("Receive", icon=ft.Icons.MOVE_TO_INBOX_OUTLINED, on_click=lambda _: set_state(confirming=True)))
         if can.get("pass") and open_pass:
-            buttons.append(ft.FilledButton("Pass on", icon=ft.Icons.SEND_OUTLINED, on_click=pass_on))
+            # The backend refuses to pass on a document without its file.
+            buttons.append(ft.FilledButton("Pass on", icon=ft.Icons.SEND_OUTLINED, on_click=pass_on, disabled=not attachments,
+                                           tooltip=None if attachments else "Attach the document's file before passing it on."))
         if can.get("record_action") and state["action"] is None:
             buttons.append(ft.OutlinedButton("Record action", icon=ft.Icons.TASK_ALT, on_click=lambda _: set_state(action="")))
         if has_pdf and (can_download or can_print) and preview and not scan:

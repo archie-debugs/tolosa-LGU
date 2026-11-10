@@ -33,12 +33,15 @@ def setup_offices():
             models.User(username="admin", hashed_password=get_password_hash("pw123"), role="Super Administrator",
                         permissions="['*']", office_id=office_ids["A"], status="Active", is_active=True),
         ])
-        db.add_all([
+        documents = [
             models.Document(tracking_number=f"DOC-00000{index}", title=f"Document {index}", status="Approved", priority="Medium",
                             qr_token=f"office-queue-{index}", current_office="Office A", current_office_id=office_ids["A"],
                             archived=index == 4)
             for index in range(1, 6)
-        ])
+        ]
+        db.add_all(documents)
+        db.flush()
+        db.add_all([models.Attachment(document_id=doc.id, original_filename="file.pdf", stored_path="missing.pdf", mime_type="application/pdf") for doc in documents])  # only documents with a file can be passed on
         db.commit()
     return office_ids
 
