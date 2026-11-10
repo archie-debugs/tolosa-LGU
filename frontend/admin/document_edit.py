@@ -78,13 +78,8 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None, fil
         page.update()
 
     def show_error(text):
-        message.value = text
+        message.value = text  # scrolls the form up to it
         page.update()
-        if text:
-            try:
-                content.scroll_to(offset=-1, duration=300)  # the message is at the bottom of a long form
-            except Exception:
-                pass  # not drawn on a page (tests)
 
     def picked(chosen):
         state["file"] = chosen[0] if chosen else None
@@ -195,6 +190,7 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None, fil
     ])] if attaching else []
     content = ft.Column(
         [
+            message.box,
             *file_section,
             _section(ui, ft.Icons.DESCRIPTION, "The document", [
                 _labelled(ui, title, "Title", ft.Icons.TITLE, required=True),
@@ -221,12 +217,12 @@ def open_edit_document_dialog(page, dialog, api, document, *, on_saved=None, fil
                 *([remark_list(ui, remarks)] if remarks else [ui.hint("No remarks yet.")]),
                 _labelled(ui, new_remark, "New remark", ft.Icons.ADD_COMMENT_OUTLINED),
             ]),
-            message.box,
         ],
         spacing=14,
         scroll=ft.ScrollMode.AUTO,
         height=min(560, (page.height or 760) - 200) if narrow else 560,
     )
+    message.form = content
     _style_dialog(
         dialog, ui, "Attach File" if attaching else "Edit Document", content,
         [ft.TextButton("Cancel", on_click=lambda _: close()), save_button],

@@ -8,6 +8,7 @@ from datetime import date
 
 import flet as ft
 
+from frontend.admin.council import date_field as calendar_field
 from frontend.admin.documents import DROPDOWN_EVENT
 from frontend.admin.tracking_ui import TrackingWidgets, stage_color
 
@@ -72,7 +73,8 @@ def build_stage_section(page, api, document_id, *, can_change, on_saved=None):
         stage_field = ft.Dropdown(label="Correct stage" if correcting else "New stage", width=260,
                                   options=[ft.dropdown.Option(choice) for choice in choices],
                                   **{DROPDOWN_EVENT: lambda _: show_fields()})
-        date_field = ft.TextField(label="Date it happened", hint_text="YYYY-MM-DD, blank for today", width=220)
+        # Picked from a calendar; left empty, the backend records today.
+        date_field, date_box = calendar_field(page, "Date it happened (blank for today)", "", width=260, clearable=True)
         committee_field = ft.Dropdown(label="Committee", width=320, visible=False,
                                       options=[ft.dropdown.Option(key=str(item["id"]), text=item["name"]) for item in committees()])
         needs_number = not (info.get("document_number") and info.get("series_year"))
@@ -126,7 +128,7 @@ def build_stage_section(page, api, document_id, *, can_change, on_saved=None):
             content=ft.Column([
                 ui.title("Correct the stage" if correcting else "Change the stage"),
                 *([ui.hint("Use this to fix a mistake. The wrong entry stays in the history.")] if correcting else []),
-                ft.Row([stage_field, date_field], spacing=12, wrap=True),
+                ft.Row([stage_field, date_box], spacing=12, wrap=True),
                 committee_field,
                 ft.Row([number_field, year_field], spacing=12, wrap=True),
                 note_field,

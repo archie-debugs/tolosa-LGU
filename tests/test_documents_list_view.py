@@ -127,3 +127,29 @@ def test_the_filters_offer_status_and_office_instead_of_category():
     office.value = "Office B"
     getattr(office, DROPDOWN_EVENT)(None)
     assert calls[-1]["current_office"] == "Office B" and calls[-1]["status"] == "Approved"
+
+
+def test_the_stage_filter_lists_the_stages_and_hides_when_there_are_none():
+    calls = []
+    stages = [["Filed", "First Reading"]]
+
+    def recording_api(method, path, **kwargs):
+        calls.append(kwargs.get("params") or {})
+        return {**api(method, path, **kwargs), "available_stages": stages[0]}
+
+    view, _ = build_documents_view(
+        DummyPage(), recording_api, lambda content, **_: ft.Container(content), normalize=lambda item: dict(item),
+        selection=set(), loaded=[], can_filter=True,
+    )
+
+    stage = next(c for c in walk(view) if isinstance(c, ft.Dropdown) and c.data == "Stage")
+    assert [o.key for o in stage.options] == ["All", "Filed", "First Reading"]
+    stage.value = "First Reading"
+    getattr(stage, DROPDOWN_EVENT)(None)
+    assert calls[-1]["stage"] == "First Reading"
+
+    stages[0] = []
+    stage.value = "All"
+    getattr(stage, DROPDOWN_EVENT)(None)
+    box = next(c for c in walk(view) if getattr(c, "content", None) is stage or stage in (getattr(c, "controls", None) or []))
+    assert box.visible is False
