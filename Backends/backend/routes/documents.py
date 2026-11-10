@@ -92,8 +92,8 @@ def _tmp_meta(safe_name: str) -> dict:
 
 
 def _require_upload_permission(user):
-    """Registering documents, or uploading a MOA as a temporary document for SB Members."""
-    if not user_has_permission(user, "set_documents_for_sb_members"):
+    """Registering documents, attaching or replacing a document's file, or uploading a MOA for SB Members."""
+    if not (user_has_permission(user, "set_documents_for_sb_members") or user_has_permission(user, "edit_documents")):
         require_permission(user, "register_documents")
 
 
@@ -3625,11 +3625,125 @@ def download_attachment(document_id: int, attachment_id: int, db: Session = Depe
     )
 
 
+def _checked_upload(db: Session, current_user, file: UploadFile | None, tmp_name: str | None, replacing_id: int | None = None):
+    """The upload's name, type, bytes, checksum and its staged temp files, refused if it is not an allowed, new file.
+
+    The file comes in the request, or, from the browser app, as `tmp_name`: a file this user staged
+    through /uploads/create_tmp_uploads (the web app cannot send the bytes itself).
+    """
+    staged = []
+    if tmp_name:
+        safe_name = os.path.basename(tmp_name)
+        tmp_path = os.path.join(TEMP_UPLOAD_DIR, safe_name)
+        meta = _tmp_meta(safe_name)
+        # Only the person who uploaded the file may use it.
+        if not safe_name or not os.path.isfile(tmp_path) or meta.get("username") != current_user.username:
+            raise HTTPException(status_code=404, detail="Uploaded file not found. Upload it again.")
+        filename = os.path.basename(meta.get("original_filename") or safe_name)
+        content_type = mimetypes.guess_type(filename)[0]
+        with open(tmp_path, "rb") as handle:
+            content = handle.read(MAX_FILE_SIZE + 1)
+        staged = [tmp_path, f"{tmp_path}.meta.json"]
+    elif file is not None:
+        filename = os.path.basename(file.filename or "")
+        content_type = getattr(file, "content_type", None)
+        content = file.file.read(MAX_FILE_SIZE + 1)
+    else:
+        raise HTTPException(status_code=400, detail="Choose a file to upload.")
+    valid, validation_errors = _is_allowed_file(filename, content_type)
+    if not valid:
+        raise HTTPException(status_code=400, detail="; ".join(validation_errors))
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
+
+    checksum = hashlib.sha256(content).hexdigest()
+    duplicate = db.query(models.Attachment).filter(models.Attachment.checksum == checksum)
+    if replacing_id is not None:
+        duplicate = duplicate.filter(models.Attachment.id != replacing_id)
+    duplicate = duplicate.first()
+    if duplicate:
+        duplicate_doc = db.query(models.Document).filter(models.Document.id == duplicate.document_id).first()
+        reference = duplicate_doc.tracking_number if duplicate_doc else str(duplicate.document_id)
+        raise HTTPException(status_code=409, detail=f"Duplicate file content detected in document {reference}")
+    return filename, content_type, content, checksum, staged
+
+
+def _remove_staged(paths):
+    for path in paths:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+
+@router.post("/{document_id:int}/attachments")
+def attach_file(
+    document_id: int,
+    file: UploadFile | None = File(None),
+    tmp_name: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Add the file to a document registered without one."""
+    require_permission(current_user, "edit_documents")
+    doc = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if db.query(models.Attachment).filter(models.Attachment.document_id == document_id).first():
+        raise HTTPException(status_code=409, detail="This document already has a file. Use Replace file to change it.")
+
+    filename, content_type, content, checksum, staged = _checked_upload(db, current_user, file, tmp_name)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    stored_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{filename}"
+    path = os.path.join(UPLOAD_DIR, stored_name)
+    try:
+        with open(path, "wb") as handle:
+            handle.write(content)
+        attachment = models.Attachment(
+            document_id=doc.id, original_filename=filename, stored_path=path,
+            mime_type=content_type or mimetypes.guess_type(filename)[0], size=len(content), checksum=checksum,
+        )
+        db.add(attachment)
+        doc.attachment_name = stored_name
+        db.commit()
+        db.refresh(attachment)
+    except Exception as exc:
+        db.rollback()
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"Failed to attach the file: {exc}") from exc
+    _remove_staged(staged)
+
+    record_audit_log(
+        db,
+        actor=getattr(current_user, "username", "System"),
+        action="ADD_DOCUMENT_ATTACHMENT",
+        target_type="document",
+        target_id=str(doc.id),
+        details=f"Attached a file to {doc.tracking_number}: {filename}",
+    )
+    return {
+        "message": "File attached successfully",
+        "document_id": doc.id,
+        "attachment_id": attachment.id,
+        "original_filename": attachment.original_filename,
+        "checksum": attachment.checksum,
+    }
+
+
 @router.post("/{document_id:int}/attachments/{attachment_id:int}/replace")
 def replace_attachment(
     document_id: int,
     attachment_id: int,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+    tmp_name: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -3645,29 +3759,7 @@ def replace_attachment(
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
-    filename = os.path.basename(file.filename or "")
-    content_type = getattr(file, "content_type", None)
-    valid, validation_errors = _is_allowed_file(filename, content_type)
-    if not valid:
-        raise HTTPException(status_code=400, detail="; ".join(validation_errors))
-
-    content = file.file.read(MAX_FILE_SIZE + 1)
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
-
-    checksum = hashlib.sha256(content).hexdigest()
-    duplicate = (
-        db.query(models.Attachment)
-        .filter(models.Attachment.checksum == checksum, models.Attachment.id != attachment_id)
-        .first()
-    )
-    if duplicate:
-        duplicate_doc = db.query(models.Document).filter(models.Document.id == duplicate.document_id).first()
-        reference = duplicate_doc.tracking_number if duplicate_doc else str(duplicate.document_id)
-        raise HTTPException(status_code=409, detail=f"Duplicate file content detected in document {reference}")
-
+    filename, content_type, content, checksum, staged = _checked_upload(db, current_user, file, tmp_name, replacing_id=attachment_id)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     stored_name = f"{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(8)}_{filename}"
     new_path = os.path.join(UPLOAD_DIR, stored_name)
@@ -3693,6 +3785,7 @@ def replace_attachment(
         except OSError:
             pass
         raise HTTPException(status_code=500, detail=f"Failed to replace attachment: {exc}") from exc
+    _remove_staged(staged)
 
     if old_path and old_path != new_path:
         try:

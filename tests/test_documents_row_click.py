@@ -78,3 +78,21 @@ def test_details_carry_the_actions_the_menu_had():
 
     dialog, _, _ = open_details(document(archived=True), restore=handlers["restore"])
     assert button(dialog, "Restore") is not None and button(dialog, "Delete permanently") is None
+
+
+def test_a_document_without_a_file_offers_attach_file_where_one_with_a_file_offers_replace():
+    done = []
+    dialog, _, _ = open_details(document(attachments=[]), can_edit=True, replace_file=done.append)
+    assert button(dialog, "Replace file") is None
+    button(dialog, "Attach file").on_click(None)
+    assert len(done) == 1
+
+    for attachments, label in (([], "Attach file"), ([{"id": 1, "original_filename": "a.pdf"}], "Replace file")):
+        view, _ = build_documents_view(
+            DummyPage(1600), lambda *a, **k: {"items": [{**ITEM, "attachments": attachments}], "total": 1, "total_pages": 1},
+            lambda content, **_: ft.Container(content), normalize=dict, selection=set(), loaded=[],
+            can_edit=True, open_edit=lambda d: None, open_replace_attachment=lambda d: None,
+        )
+        menu = next(c for c in walk(view) if isinstance(c, ft.PopupMenuButton))
+        labels = [t.value for item in menu.items for t in walk(item.content) if isinstance(t, ft.Text)]
+        assert label in labels and {"Attach file", "Replace file"} - {label} & set(labels) == set()
