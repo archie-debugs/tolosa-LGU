@@ -144,16 +144,17 @@ def build_documents_view(
         **{**field_style, "content_padding": ft.Padding(14, 14, 14, 14)},
     )
     type_filter = dropdown("Type", [(ALL, ALL)])
-    category_filter = dropdown("Category", [(ALL, ALL)])
+    # Status takes the place of Category, which documents no longer use.
     status_filter = dropdown("Status", [(ALL, ALL)])
+    office_filter = dropdown("Office", [(ALL, ALL)])  # the office holding the document
     from_year = dropdown("From year", [(ALL, "Any")])
     to_year = dropdown("To year", [(ALL, "Any")])
     archived_by_filter = dropdown("Archived by", [(ALL, "Anyone")])
     sort_filter = dropdown("Sort", [(name, name) for name in sorts], value=default_sort)
     if archived:
-        filters = [type_filter, category_filter, archived_by_filter, status_filter, from_year, to_year]
+        filters = [type_filter, status_filter, office_filter, archived_by_filter, from_year, to_year]
     else:
-        filters = [type_filter, category_filter, status_filter, from_year, to_year]
+        filters = [type_filter, status_filter, office_filter, from_year, to_year]
     if document_type:
         filters.remove(type_filter)
     filter_boxes = {control: filter_box(control) for control in [*filters, sort_filter]}
@@ -186,7 +187,7 @@ def build_documents_view(
         if can_search and (search_field.value or "").strip():
             result["search"] = search_field.value.strip()
         if can_filter:
-            for key, control in (("document_type", type_filter), ("category", category_filter), ("status", status_filter), ("start_date", from_year), ("end_date", to_year), ("archived_by", archived_by_filter)):
+            for key, control in (("document_type", type_filter), ("status", status_filter), ("current_office", office_filter), ("start_date", from_year), ("end_date", to_year), ("archived_by", archived_by_filter)):
                 if control.value and control.value != ALL:
                     result[key] = control.value
         quick = state["quick"]
@@ -224,12 +225,10 @@ def build_documents_view(
         years = payload.get("available_years") or []
         set_options(from_year, years, "Any")
         set_options(to_year, list(reversed(years)), "Any")
-        statuses = payload.get("available_statuses") or []
-        set_options(status_filter, statuses, ALL)
-        filter_boxes[status_filter].visible = len(statuses) > 1 or status_filter.value != ALL
+        set_options(status_filter, payload.get("available_statuses") or [], ALL)
+        set_options(office_filter, payload.get("available_offices") or [], ALL)
         set_options(archived_by_filter, payload.get("available_archivers") or [], "Anyone")
         set_options(type_filter, payload.get("available_document_types") or [], ALL)
-        set_options(category_filter, payload.get("available_categories") or [], ALL)
         items = payload.get("items") or []
         loaded[:] = [{**normalize(item), "in_transit_to": item.get("in_transit_to"), "in_transit_since": item.get("in_transit_since"),
                       "retain_until": item.get("retain_until")} for item in items]

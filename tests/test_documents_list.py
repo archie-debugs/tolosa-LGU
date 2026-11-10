@@ -105,3 +105,17 @@ def test_qr_labels_download_through_a_short_lived_link():
     attachment_token = create_download_token({"sub": "emp_a", "document_id": documents["DOC-000001"], "attachment_id": 1})
     assert client.get("/documents/qr/labels/file", params={"download_token": attachment_token}).status_code == 403
     assert client.get("/documents/qr/labels/file", params={"download_token": "not-a-token"}).status_code == 401
+
+
+def test_list_offers_and_filters_by_the_office_holding_the_document():
+    offices, documents = setup_documents()
+    with SessionLocal() as db:
+        db.get(models.Document, documents["DOC-000003"]).current_office = "Office B"
+        db.commit()
+    client = TestClient(main.app)
+    headers = headers_for(client, "emp_a")
+
+    payload = client.get("/documents", headers=headers).json()
+    assert payload["available_offices"] == ["Office A", "Office B"]
+    payload = client.get("/documents", params={"current_office": "Office B"}, headers=headers).json()
+    assert numbers(payload) == ["DOC-000003"]
