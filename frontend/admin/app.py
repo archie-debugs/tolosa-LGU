@@ -154,6 +154,7 @@ if os.getenv("DEV_HTTP", "0").lower() in ("1", "true", "yes"):
 
 import frontend.responsive  # noqa: F401  (one column on phones and tablets)
 import frontend.dialogs  # noqa: F401  (a dialog closed by clicking outside or Esc stays closed)
+import frontend.open_links  # noqa: F401  (documents open on Apple devices)
 from frontend.admin.council import POSITIONS as SB_POSITIONS, build_members_committees_view
 from frontend.admin.council_sessions import build_sessions_view
 from frontend.admin.documents import build_documents_view, format_date
