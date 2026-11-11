@@ -61,10 +61,11 @@ def group_keys(groups):
     return {name: [(permission_key(label), label) for label in labels] for name, labels in groups.items()}
 
 
-def build_permission_list(widgets, selected, groups, refresh, state):
+def build_permission_list(widgets, selected, groups, refresh, state, locked=frozenset()):
     """Switches for every permission in `groups` ({group: [labels]}), grouped, with a search box.
 
-    `state` is a dict the dialog keeps between redraws (it holds the search box)."""
+    `state` is a dict the dialog keeps between redraws (it holds the search box). Permissions in
+    `locked` stay on and their switches are greyed out."""
     groups = group_keys(groups)
     if "search" not in state:
         state["search"] = ft.TextField(
@@ -75,6 +76,7 @@ def build_permission_list(widgets, selected, groups, refresh, state):
 
     def switch(keys, on):
         (selected.update if on else selected.difference_update)(keys)
+        selected.update(locked)
         refresh()
 
     rows = []
@@ -94,7 +96,9 @@ def build_permission_list(widgets, selected, groups, refresh, state):
         ], spacing=6))
         for key, label in shown:
             rows.append(ft.Row([
-                ft.Switch(value=key in selected, on_change=lambda e, key=key: switch([key], e.control.value)),
+                ft.Switch(value=key in selected or key in locked, disabled=key in locked,
+                          tooltip="Always on for employees" if key in locked else None,
+                          on_change=lambda e, key=key: switch([key], e.control.value)),
                 ft.Column([
                     ft.Text(label, size=13, weight=ft.FontWeight.W_600, color=widgets.body_color()),
                     ft.Text(DESCRIPTIONS.get(key, ""), size=11, color=widgets.muted_color()),

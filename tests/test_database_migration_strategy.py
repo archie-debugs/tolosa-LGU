@@ -99,7 +99,8 @@ def test_upgrade_brings_legacy_base_tables_up_to_the_model(migration_engine):
         user_created_at = connection.execute(text("SELECT count(*) FROM users WHERE created_at IS NULL")).scalar_one()
         tokens = [row[0] for row in connection.execute(text("SELECT qr_token FROM documents")).fetchall()]
     assert users == {"old-admin": "Super Administrator", "old-staff": "Employee"}
-    assert user_defaults == [("Active", 1, "[]")]
+    # The employee also gets the basic document permissions (0038); the Super Administrator needs none.
+    assert sorted(user_defaults) == [("Active", 1, "['download_documents', 'filter_documents', 'print_documents', 'search_documents', 'view_document_details', 'view_documents']"), ("Active", 1, "[]")]
     assert user_created_at == 0
     assert all(tokens) and len(set(tokens)) == len(tokens)
     assert "ix_documents_qr_token" in {index["name"] for index in inspect(migration_engine).get_indexes("documents")}

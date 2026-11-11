@@ -170,7 +170,11 @@ from frontend.admin.users_roles import (
     OFFICE_EMPLOYEE_PERMISSION_GROUP,
     EMPLOYEE_PERMISSION_GROUPS,
     SB_MEMBER_PERMISSIONS,
+    EMPLOYEE_BASE_KEYS,
+    OFFICE_USER,
     build_offices_table,
+    display_role,
+    is_office_user,
     build_users_roles_table,
     build_users_roles_view,
 )
@@ -2568,7 +2572,10 @@ def main(page: ft.Page, session=None):
     user_no_users_notice = ft.Container(width="100%", visible=False)
 
     def update_users_role_view(_=None):
-        visible_users = filter_user_data()
+        matching_users = filter_user_data()
+        size = user_page_size.value or "10"
+        visible_users = matching_users if size == "All" else matching_users[:int(size)]
+        user_count_text.value = f"Showing {len(visible_users)} of {len(matching_users)} user{'s' if len(matching_users) != 1 else ''}"
         user_table_holder.content = build_users_roles_table(
             visible_users,
             lambda item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
@@ -2605,12 +2612,22 @@ def main(page: ft.Page, session=None):
         options=[
             ft.dropdown.Option("All"),
             ft.dropdown.Option("Employee"),
+            ft.dropdown.Option(OFFICE_USER),
             ft.dropdown.Option("SB Member"),
             ft.dropdown.Option("Super Administrator"),
         ],
         value="All",
         on_change=update_users_role_view,
     )
+    # How many of the matching users the table shows.
+    user_page_size = ft.Dropdown(
+        label="Show",
+        width=110,
+        options=[ft.dropdown.Option(size) for size in ("10", "25", "50", "All")],
+        value="10",
+        on_change=update_users_role_view,
+    )
+    user_count_text = ft.Text("")
     user_status_filter = ft.Dropdown(
         label="Account Status",
         width=180,
@@ -2626,35 +2643,11 @@ def main(page: ft.Page, session=None):
         label="Permission",
         width=260,
         options=[
-            ft.dropdown.Option("All"),
-            ft.dropdown.Option("View Documents"),
-            ft.dropdown.Option("Search Documents"),
-            ft.dropdown.Option("Filter Documents"),
-            ft.dropdown.Option("View Document Details"),
-            ft.dropdown.Option("Download Documents"),
-            ft.dropdown.Option("Print Documents"),
-            ft.dropdown.Option("Register Documents"),
-            ft.dropdown.Option("Edit Documents"),
-            ft.dropdown.Option("Delete Documents"),
-            ft.dropdown.Option("Archive Documents"),
-            ft.dropdown.Option("Restore Documents"),
-            ft.dropdown.Option("Generate QR Codes"),
-            ft.dropdown.Option("Print QR Codes"),
-            ft.dropdown.Option("View QR Tracking"),
-            ft.dropdown.Option("Create Users"),
-            ft.dropdown.Option("Edit Users"),
-            ft.dropdown.Option("Reset Passwords"),
-            ft.dropdown.Option("Activate Users"),
-            ft.dropdown.Option("Deactivate Users"),
-            ft.dropdown.Option("Delete Users"),
-            ft.dropdown.Option("Assign Roles"),
-            ft.dropdown.Option("Manage Permissions"),
-            ft.dropdown.Option("Change Measure Stage"),
-            ft.dropdown.Option("Manage Members And Committees"),
-            ft.dropdown.Option("Manage Sessions"),
-            ft.dropdown.Option("View Audit Logs"),
-            ft.dropdown.Option("Export Audit Logs"),
-            ft.dropdown.Option("Modify System Settings"),
+            ft.dropdown.Option(label)
+            for label in ["All", *dict.fromkeys(
+                label for groups in (OFFICE_EMPLOYEE_PERMISSION_GROUP, EMPLOYEE_PERMISSION_GROUPS)
+                for labels in groups.values() for label in labels
+            ), "Modify System Settings"]
         ],
         value="All",
         on_change=update_users_role_view,
@@ -2696,7 +2689,7 @@ def main(page: ft.Page, session=None):
         for item in user_management_data:
             if terms and not all(matches_term(item, term) for term in terms):
                 continue
-            if role_value != "All" and item.get("role") != role_value:
+            if role_value != "All" and display_role(item) != role_value:
                 continue
             if status_value != "All" and item.get("status") != status_value:
                 continue
@@ -2704,8 +2697,9 @@ def main(page: ft.Page, session=None):
                 continue
             permission_value = user_permission_filter.value or "All"
             if permission_value != "All":
-                permissions = [p.lower() for p in (item.get("permissions") or [])]
-                if permission_value.lower() not in permissions:
+                # Accounts store keys (view_documents); the filter lists labels (View Documents).
+                permissions = {permission_key(p) for p in (item.get("permissions") or [])}
+                if permission_key(permission_value) not in permissions:
                     continue
             visible.append(item)
         return visible
@@ -2740,6 +2734,8 @@ def main(page: ft.Page, session=None):
             office_table_holder=office_table_holder,
             create_employee=lambda _: open_create_user_dialog(employee_only=True),
             unlock_user=unlock_user if current_user_role == "Super Administrator" else None,
+            page_size_filter=user_page_size,
+            count_text=user_count_text,
         )
         update_users_role_view()
         return view
@@ -2918,7 +2914,7 @@ def main(page: ft.Page, session=None):
         sb_position_block = _labelled(widgets, sb_position_choice, "SB position", ft.Icons.EVENT_SEAT_OUTLINED, required=True, col=half)
 
         permission_area = ft.Column([], spacing=8)
-        selected_create_permissions = set()
+        selected_create_permissions = set(EMPLOYEE_BASE_KEYS)
         picker_state = {}
         office_permission_labels = OFFICE_EMPLOYEE_PERMISSION_GROUP["Office Workflow"]
 
@@ -2961,9 +2957,13 @@ def main(page: ft.Page, session=None):
                         "Office permissions start switched on. Turn on anything else this employee may do."
                     ))
                 else:
-                    permission_area.controls.append(widgets.hint("Turn on what this employee may do. Nothing is on until you turn it on."))
+                    permission_area.controls.append(widgets.hint("Turn on what this employee may do."))
+                permission_area.controls.append(widgets.hint(
+                    "Viewing, searching, filtering, opening, downloading and printing documents are always on for employees."
+                ))
                 permission_area.controls.append(build_permission_list(
                     widgets, selected_create_permissions, create_permission_groups(), render_permission_section, picker_state,
+                    locked=EMPLOYEE_BASE_KEYS,
                 ))
             else:
                 permission_area.controls.append(widgets.hint("SB Members get read-only access:"))
@@ -3180,6 +3180,7 @@ def main(page: ft.Page, session=None):
             (item for item in edit_office_options if item.get("id") == user.get("office_id")),
             None,
         )
+        office_user = is_office_user(user)
         role_choice = ft.Dropdown(
             label="Role",
             value=user.get("role", "Employee"),
@@ -3199,7 +3200,8 @@ def main(page: ft.Page, session=None):
 
         office_choice = ft.Dropdown(
             label="Department/Office",
-            options=[ft.dropdown.Option("Unassigned")] + [
+            # An office user always has an office.
+            options=([] if office_user else [ft.dropdown.Option("Unassigned")]) + [
                 ft.dropdown.Option(item["name"])
                 for item in edit_office_options
                 if item.get("name")
@@ -3234,7 +3236,13 @@ def main(page: ft.Page, session=None):
         def edit_has_office():
             return role_choice.value == "Employee" and office_choice.value not in (None, "", "Unassigned")
 
+        def staying_office_user():
+            return office_user and role_choice.value == "Employee"
+
         def edit_permission_groups():
+            # An office user account can only have office permissions.
+            if staying_office_user():
+                return dict(OFFICE_EMPLOYEE_PERMISSION_GROUP)
             # Office permissions only work with an office, so they are listed only for office employees.
             return {**OFFICE_EMPLOYEE_PERMISSION_GROUP, **EMPLOYEE_PERMISSION_GROUPS} if edit_has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
 
@@ -3249,7 +3257,15 @@ def main(page: ft.Page, session=None):
             elif role_choice.value == "SB Member":
                 permission_cards.controls.append(widgets.hint("SB Members get read-only access: " + ", ".join(SB_MEMBER_PERMISSIONS) + "."))
             else:
-                if edit_has_office():
+                locked = frozenset() if staying_office_user() else EMPLOYEE_BASE_KEYS
+                selected_permissions.update(locked)
+                if staying_office_user():
+                    permission_cards.controls.append(widgets.hint("This is an office user account, so it can only have office permissions."))
+                else:
+                    permission_cards.controls.append(widgets.hint(
+                        "Viewing, searching, filtering, opening, downloading and printing documents are always on for employees."
+                    ))
+                if edit_has_office() and not staying_office_user():
                     # Moving an employee into an office starts with all office permissions on.
                     office_keys = {permission_key(label) for labels in OFFICE_EMPLOYEE_PERMISSION_GROUP.values() for label in labels}
                     if not selected_permissions & office_keys and not picker_state.get("office_defaults"):
@@ -3265,7 +3281,7 @@ def main(page: ft.Page, session=None):
                         size=12, color=ft.Colors.ORANGE_800,
                     ))
                 permission_cards.controls.append(build_permission_list(
-                    widgets, selected_permissions, edit_permission_groups(), render_permission_cards, picker_state,
+                    widgets, selected_permissions, edit_permission_groups(), render_permission_cards, picker_state, locked=locked,
                 ))
             page.update()
 

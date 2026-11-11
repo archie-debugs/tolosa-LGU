@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 import Backends.backend.main as main
 from Backends.backend import models
-from Backends.backend.core import get_password_hash
+from Backends.backend.core import EMPLOYEE_BASE_PERMISSIONS, get_password_hash
 from Backends.backend.database import SessionLocal, engine
 
 models.Base.metadata.create_all(bind=engine)
@@ -51,9 +51,11 @@ def test_create_users_alone_cannot_give_permissions():
 
     assert register(client, "hr", username="a", permissions=["*"]).status_code == 400
     assert register(client, "hr", username="b", permissions=["delete_users"]).status_code == 403
-    assert register(client, "hr", username="c", permissions=["view_documents"]).status_code == 403
+    assert register(client, "hr", username="c", permissions=["register_documents"]).status_code == 403
+    # The basic document permissions come with every employee, so they need no Manage Permissions.
+    assert register(client, "hr", username="c", permissions=["view_documents"]).status_code == 200
     nothing = register(client, "hr", username="d")
-    assert nothing.status_code == 200 and saved_permissions("d") == []
+    assert nothing.status_code == 200 and saved_permissions("d") == sorted(EMPLOYEE_BASE_PERMISSIONS)
 
 
 def test_a_manager_gives_only_permissions_they_have():
@@ -96,7 +98,7 @@ def test_office_employees_keep_general_permissions_too_when_edited():
     })
 
     assert response.status_code == 200, response.text
-    assert saved_permissions("clerk") == ["pass_office_documents", "register_documents", "scan_qr"]
+    assert saved_permissions("clerk") == sorted({"pass_office_documents", "register_documents", "scan_qr"} | EMPLOYEE_BASE_PERMISSIONS)
 
 
 def test_new_accounts_need_a_real_email_and_an_eight_character_password():

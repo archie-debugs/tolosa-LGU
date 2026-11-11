@@ -178,7 +178,8 @@ def test_migration_swaps_request_permissions_for_set_documents_for_sb_members(tm
         tables = {row[0] for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))}
     migration_engine.dispose()
     assert permissions == {
-        "employee": "['view_documents', 'set_documents_for_sb_members']",
+        # set_documents_for_sb_members from 0021, then the basic document permissions from 0038
+        "employee": "['download_documents', 'filter_documents', 'print_documents', 'search_documents', 'set_documents_for_sb_members', 'view_document_details', 'view_documents']",
         "member": "['view_documents']",
         "admin": "['*']",
     }

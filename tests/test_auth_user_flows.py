@@ -11,7 +11,7 @@ from Backends.backend import models
 from Backends.backend.core import UPLOAD_DIR, get_password_hash, verify_password
 from Backends.backend.auth_jwt import create_access_token
 from Backends.backend.database import SessionLocal, engine
-from Backends.backend.core import OFFICE_WORKFLOW_PERMISSIONS, get_default_permissions_for_role, require_permission
+from Backends.backend.core import EMPLOYEE_BASE_PERMISSIONS, OFFICE_WORKFLOW_PERMISSIONS, get_default_permissions_for_role, require_permission
 from Backends.backend.routes import documents as documents_routes
 from fastapi import HTTPException
 from tests.registration_fields import FILLED
@@ -730,8 +730,8 @@ def test_user_offices_support_assignment_update_and_unassigned_users():
     assert office_user["office_id"] == office_id
     assert office_user["department"] == "SB Secretariat"
     office_permissions = office_user["permissions"]
-    # An office employee keeps general permissions as well as office ones.
-    assert set(office_permissions) == {"register_documents", "manage_permissions", "view_office_documents"}
+    # An office employee keeps general permissions as well as office ones, and the basic document ones every employee has.
+    assert set(office_permissions) == {"register_documents", "manage_permissions", "view_office_documents"} | EMPLOYEE_BASE_PERMISSIONS
 
     updated = client.put(
         f"/auth/users/{office_user['id']}",
@@ -1229,8 +1229,8 @@ def test_super_admin_office_management_and_inactive_assignment_retention():
     )
     assert internal_user.status_code == 200, internal_user.text
     assert internal_user.json()["office_id"] is None
-    # An employee gets only the permissions chosen for them; none chosen means none.
-    assert internal_user.json()["permissions"] == []
+    # An employee gets the permissions chosen for them plus the basic document ones every employee has.
+    assert internal_user.json()["permissions"] == sorted(EMPLOYEE_BASE_PERMISSIONS)
 
     permission_account = client.post(
         "/auth/register",
