@@ -169,8 +169,14 @@ def test_the_user_table_shows_10_at_a_time_and_filters_by_office_user_and_permis
     extra += [(f"emp{number:02}", "Employee", BASE_KEYS, False) for number in range(12)]
     page = open_users_page(monkeypatch, extra)
 
-    assert len(listed_usernames(page)) == 10 and "Showing 10 of 15 users" in texts(page.controls[0])
-    fire(dropdown(page, "Show"), "on_change", "All")
+    first_page = listed_usernames(page)
+    assert len(first_page) == 10 and "Showing 1–10 of 15 users" in texts(page.controls[0])
+    assert "Page 1 of 2" in texts(page.controls[0])
+    next_page = next(c for c in walk(page.controls[0]) if isinstance(c, ft.IconButton) and c.tooltip == "Next page")
+    next_page.on_click(None)
+    assert len(listed_usernames(page)) == 5 and not set(listed_usernames(page)) & set(first_page)
+    assert "Showing 11–15 of 15 users" in texts(page.controls[0])
+    fire(dropdown(page, "Per page"), "on_change", "All")
     assert len(listed_usernames(page)) == 15
 
     fire(dropdown(page, "Role"), "on_change", "Office User")

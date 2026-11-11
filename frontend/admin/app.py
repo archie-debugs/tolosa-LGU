@@ -2571,7 +2571,7 @@ def main(page: ft.Page, session=None):
             page.snack_bar = ft.SnackBar(ft.Text(f"Unable to load users: {exc}"), open=True)
             user_management_data = previous_data
         finally:
-            update_users_role_view()
+            update_users_role_view(keep_page=True)  # after an edit or delete, stay on the same page
 
     user_management_data = []
 
@@ -2579,11 +2579,30 @@ def main(page: ft.Page, session=None):
     office_table_holder = ft.Container(width="100%")
     user_no_users_notice = ft.Container(width="100%", visible=False)
 
-    def update_users_role_view(_=None):
+    user_page = {"number": 1}
+
+    def go_to_user_page(step):
+        user_page["number"] += step
+        update_users_role_view(keep_page=True)
+
+    def update_users_role_view(_=None, keep_page=False):
+        if not keep_page:
+            user_page["number"] = 1  # a new search, filter or page size starts on page 1
         matching_users = filter_user_data()
         size = user_page_size.value or "10"
-        visible_users = matching_users if size == "All" else matching_users[:int(size)]
-        user_count_text.value = f"Showing {len(visible_users)} of {len(matching_users)} user{'s' if len(matching_users) != 1 else ''}"
+        per_page = (len(matching_users) or 1) if size == "All" else int(size)
+        page_count = max(1, -(-len(matching_users) // per_page))
+        current = user_page["number"] = min(max(1, user_page["number"]), page_count)
+        start = (current - 1) * per_page
+        visible_users = matching_users[start:start + per_page]
+        user_count_text.value = (f"Showing {start + 1 if visible_users else 0}–{start + len(visible_users)} of "
+                                 f"{len(matching_users)} user{'s' if len(matching_users) != 1 else ''}")
+        user_pager.controls = [
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous page", disabled=current <= 1, on_click=lambda _: go_to_user_page(-1)),
+            ft.Text(f"Page {current} of {page_count}", size=13),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next page", disabled=current >= page_count, on_click=lambda _: go_to_user_page(1)),
+        ]
+        user_pager.visible = page_count > 1
         user_table_holder.content = build_users_roles_table(
             visible_users,
             lambda item=None: open_view_user_dialog(item or visible_users[0] if visible_users else {}),
@@ -2627,15 +2646,16 @@ def main(page: ft.Page, session=None):
         value="All",
         on_change=update_users_role_view,
     )
-    # How many of the matching users the table shows.
+    # How many of the matching users each page of the table shows.
     user_page_size = ft.Dropdown(
-        label="Show",
+        label="Per page",
         width=110,
         options=[ft.dropdown.Option(size) for size in ("10", "25", "50", "All")],
         value="10",
         on_change=update_users_role_view,
     )
     user_count_text = ft.Text("")
+    user_pager = ft.Row(spacing=4, alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER, visible=False)
     user_status_filter = ft.Dropdown(
         label="Account Status",
         width=180,
@@ -2742,6 +2762,7 @@ def main(page: ft.Page, session=None):
             office_table_holder=office_table_holder,
             unlock_user=unlock_user if current_user_role == "Super Administrator" else None,
             page_size_filter=user_page_size,
+            pager=user_pager,
             count_text=user_count_text,
         )
         update_users_role_view()
