@@ -1,12 +1,24 @@
+import base64
+import html
+import io
 import json
+import os
+import secrets
+from functools import lru_cache
+from pathlib import Path
+from string import Template
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+import qrcode
+from PIL import Image
+from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core import DEFAULT_SYSTEM_SETTINGS, SYSTEM_SETTING_TYPES, get_current_admin_user, record_audit_log
+from ..authentication import get_current_user
 from ..database import get_db
 
 router = APIRouter()
@@ -185,3 +197,73 @@ def update_system_settings(
 def get_public_announcements(db: Session = Depends(get_db)):
     """The homepage's announcements; anyone may read them."""
     return {"announcements": _load_settings(db)["homepage_announcements"]}
+
+
+def _system_link() -> str:
+    """The address people open the system at: FRONTEND_PUBLIC_URL, or this computer's LAN address in development."""
+    link = os.getenv("FRONTEND_PUBLIC_URL", "").strip().rstrip("/")
+    if not link:
+        raise HTTPException(status_code=503, detail="The system's public link is not configured (FRONTEND_PUBLIC_URL).")
+    return link
+
+
+def _qr_png(text: str) -> bytes:
+    out = io.BytesIO()
+    qrcode.make(text, box_size=12, border=4).save(out, format="PNG")
+    return out.getvalue()
+
+
+@router.get("/system-link")
+def get_system_link(current_user: models.User = Depends(get_current_user)):
+    """The system's link and its QR code, for sharing it from Settings."""
+    from .documents import _public_base_url  # documents imports this module, so not at the top
+
+    link = _system_link()
+    return {"url": link, "qr_png_base64": base64.b64encode(_qr_png(link)).decode("ascii"),
+            "qr_image_url": f"{_public_base_url()}/system-link/qr"}
+
+
+ASSETS = Path(__file__).resolve().parents[3] / "frontend" / "frontend_public" / "assets"
+QR_PAGE = Path(__file__).resolve().parents[1] / "system_qr_page.html"
+
+
+@lru_cache(maxsize=None)
+def _asset_data_uri(name: str, side: int, kind: str) -> str | None:
+    """A shrunk copy of a login-page image as a data URI, made once; None when the image is missing."""
+    try:
+        image = Image.open(ASSETS / name).convert("RGB")
+    except OSError:
+        return None
+    image.thumbnail((side, side))
+    out = io.BytesIO()
+    image.save(out, kind, quality=70) if kind == "JPEG" else image.save(out, kind, optimize=True)
+    return f"data:image/{kind.lower()};base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
+
+
+@router.get("/system-link/qr", tags=["public"], response_class=HTMLResponse)
+def get_system_link_qr_page():
+    """The QR code on a page in the system's look, with the link, to copy, save or print. It only holds the public link."""
+    nonce = secrets.token_urlsafe(16)
+    seal = _asset_data_uri("login_seal.png", 176, "PNG")
+    building = _asset_data_uri("login_municipal_building.png", 900, "JPEG")
+    page = Template(QR_PAGE.read_text(encoding="utf-8")).safe_substitute(
+        link=html.escape(_system_link()),
+        nonce=nonce,
+        seal=f'<div class="seal"><img src="{seal}" alt="Seal of the Sangguniang Bayan of Tolosa"></div>' if seal else "",
+        building=f"url({building})" if building else "none",
+    )
+    # The app's default policy (main.py) refuses inline styles, scripts and data: images; this page needs
+    # its own style and script (by nonce), its embedded seal and photo, and Google Fonts, and nothing else.
+    policy = (
+        f"default-src 'none'; style-src 'nonce-{nonce}' https://fonts.googleapis.com; script-src 'nonce-{nonce}'; "
+        "img-src 'self' data:; font-src https://fonts.gstatic.com; connect-src 'self'; "
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+    )
+    return HTMLResponse(page, headers={"Content-Security-Policy": policy})
+
+
+@router.get("/system-link/qr.png", tags=["public"])
+def get_system_link_qr():
+    """The QR image on its own, opened in a browser tab to copy or save. It only holds the public link."""
+    return Response(_qr_png(_system_link()), media_type="image/png",
+                    headers={"Content-Disposition": 'inline; filename="sb-tolosa-system-qr.png"'})

@@ -51,8 +51,9 @@ def initials(profile):
     return "".join(part[0] for part in name.split()[:2]).upper() or "?"
 
 
-def build_employee_settings_view(page, *, profile, change_password, edit_profile):
-    """`profile` is GET /auth/me. `change_password()` and `edit_profile()` open the existing dialogs."""
+def build_employee_settings_view(page, *, profile, change_password, edit_profile, api=None):
+    """`profile` is GET /auth/me. `change_password()` and `edit_profile()` open the existing dialogs.
+    With `api` the page also offers the system's link and QR code to share."""
     ui = TrackingWidgets(page)
     return _settings_page(ui, "Your profile, password and preferences.", left=[
         _profile_card(ui, profile, edit_profile,
@@ -68,6 +69,7 @@ def build_employee_settings_view(page, *, profile, change_password, edit_profile
             _row(ui, "Account status", _status(ui, profile.get("status") or "Active")),
             _note(ui, "If you see a sign-in you don't recognise, change your password and tell a Super Administrator.", ft.Icons.WARNING_AMBER),
         ]),
+        *([share_system_card(page, ui, api)] if api else []),
     ])
 
 
@@ -85,6 +87,7 @@ def build_super_admin_settings_view(page, *, api, profile, change_password, edit
             _note(ui, "Changing your password signs you out on every other device. See everyone's sessions in Active Sessions."),
         ]),
         _preferences_card(ui),
+        share_system_card(page, ui, api),
     ], right=[
         _card(ui, "Administration", "User, office, session and audit management have their own pages.",
               ft.Icons.ADMIN_PANEL_SETTINGS_OUTLINED, [_admin_link(ui, entry, open_page) for entry in links] or [
@@ -403,3 +406,36 @@ def _system_information_card(ui, api):
             _row(ui, "Checked", _value(ui, format_datetime(health.get("generated_at")))),
         ]
     return _card(ui, "System Information", "Backend, database and migration status.", ft.Icons.INFO_OUTLINE, rows)
+
+
+def share_system_card(page, ui, api):
+    """The system's link and QR code, to share with others: copy the link, or open the QR image to copy or save it."""
+    try:
+        link = api("GET", "/system-link")
+        link["url"], link["qr_png_base64"], link["qr_image_url"]  # a reply without them is unusable
+    except Exception as exc:
+        return _card(ui, "Share the System", "Its link and QR code.", ft.Icons.QR_CODE_2, [
+            _note(ui, f"Unable to load the system's link: {exc}", ft.Icons.ERROR_OUTLINE)])
+    copied = ft.Text("", size=12, color=ft.Colors.GREEN_700)
+
+    def copy(_):
+        page.set_clipboard(link["url"])
+        copied.value = "Link copied."
+        page.update()
+
+    return _card(ui, "Share the System", "Anyone with the link or QR code can open the system.", ft.Icons.QR_CODE_2, [
+        ft.Row([
+            ft.Container(ft.Image(src_base64=link["qr_png_base64"], width=160, height=160), bgcolor=ft.Colors.WHITE,
+                         border_radius=12, padding=6),
+            ft.Column([
+                ft.Text(link["url"], size=13, weight=ft.FontWeight.W_600, color=ui.heading_color(), selectable=True),
+                ft.Row([
+                    ft.OutlinedButton("Copy link", icon=ft.Icons.COPY, on_click=copy),
+                    ft.OutlinedButton("Open QR image", icon=ft.Icons.OPEN_IN_NEW,
+                                      on_click=lambda _: page.launch_url(link["qr_image_url"])),
+                ], spacing=8, wrap=True),
+                copied,
+            ], spacing=10, expand=True),
+        ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),  # not wrap: an expanding column in a wrapping row draws as a gray box
+        _note(ui, "Open the QR image to copy or save it, then paste it in a message or print it."),
+    ])
