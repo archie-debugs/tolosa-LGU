@@ -27,10 +27,11 @@ def _parse_date(value, label):
         raise ValueError(f"{label} must be a date like 2025-07-01.")
 
 
-def date_field(page, label, value, width=200, clearable=False):
+def date_field(page, label, value, width=200, clearable=False, fmt="%Y-%m-%d"):
     """A date box that can't be typed in: clicking it opens a calendar. Returns (field, control to show).
 
-    `clearable` adds a button to empty it, for optional dates.
+    `clearable` adds a button to empty it, for optional dates. `fmt` is how the picked date is written.
+    With no `width` the box fills the space it is given.
     """
     field = ft.TextField(label=label, hint_text="Pick a date", value=value or "", width=width, read_only=True,
                          suffix_icon=ft.Icons.CALENDAR_MONTH_OUTLINED)
@@ -38,7 +39,7 @@ def date_field(page, label, value, width=200, clearable=False):
     def picked(e):
         day = picked_date(e.control.value)
         if day:
-            field.value = day.isoformat()
+            field.value = day.strftime(fmt)
             page.update()
 
     def pick(_):
@@ -48,7 +49,7 @@ def date_field(page, label, value, width=200, clearable=False):
             picker = page._council_date_picker = ft.DatePicker(first_date=datetime(2000, 1, 1), last_date=datetime(2100, 12, 31))
         picker.on_change = picked
         try:
-            current = date.fromisoformat(field.value)
+            current = datetime.strptime(field.value, fmt).date()
         except ValueError:
             current = None
         picker.value = datetime.combine(current, datetime.min.time()) if current else None
@@ -65,7 +66,8 @@ def date_field(page, label, value, width=200, clearable=False):
         page.update()
 
     # A see-through layer over the box takes the click, since a read-only text field keeps it.
-    box = ft.Stack([field, ft.Container(left=0, top=0, right=0, bottom=0, on_click=pick)], width=width)
+    box = ft.Stack([field, ft.Container(left=0, top=0, right=0, bottom=0, on_click=pick)], width=width,
+                   expand=clearable and width is None)
     if clearable:
         box = ft.Row([box, ft.IconButton(ft.Icons.CLOSE, tooltip="Clear the date", on_click=clear)], spacing=4)
     return field, box

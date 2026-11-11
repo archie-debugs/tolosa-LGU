@@ -5,6 +5,7 @@ Super Administrators only; the backend stores the list as the homepage_announcem
 
 import flet as ft
 
+from frontend.admin.council import date_field
 from frontend.admin.tracking_ui import TrackingWidgets
 
 MAX_ANNOUNCEMENTS = 10  # the backend enforces the same limit
@@ -31,12 +32,18 @@ def build_announcements_view(page, surface_card, api):
 
     def fields_for(item):
         third = {"xs": 12, "md": 4}
+        # The date is picked on a calendar and written as the homepage shows it, e.g. "Oct 27, 2026".
+        date_box, date_control = date_field(page, "Date", item.get("date") or "", width=None, clearable=True, fmt="%b %d, %Y")
+        for key, value in style.items():
+            setattr(date_box, key, value)
+        date_control.col = third
         return {
             "category": ft.TextField(label="Category", hint_text="e.g. Public notice", value=item.get("category") or "", max_length=40, col=third, **style),
             "title": ft.TextField(label="Title", value=item.get("title") or "", max_length=120, col=third, **style),
-            "date": ft.TextField(label="Date", hint_text="e.g. Oct 27, 2026", value=item.get("date") or "", max_length=40, col=third, **style),
+            "date": date_box,
             "details": ft.TextField(label="Details (optional)", value=item.get("details") or "",
                                     multiline=True, min_lines=2, max_lines=4, max_length=300, **style),
+            "date_control": date_control,
         }
 
     try:
@@ -71,7 +78,7 @@ def build_announcements_view(page, surface_card, api):
             )
             body = ft.Container(
                 content=ft.Column([
-                    ft.ResponsiveRow([fields["category"], fields["title"], fields["date"]], spacing=14, run_spacing=4),
+                    ft.ResponsiveRow([fields["category"], fields["title"], fields["date_control"]], spacing=14, run_spacing=4),
                     fields["details"],
                 ], spacing=4),
                 padding=ft.Padding(14, 16, 14, 6),
@@ -106,7 +113,7 @@ def build_announcements_view(page, surface_card, api):
         refresh()
 
     def save():
-        announcements = [{key: (field.value or "").strip() for key, field in fields.items()} for fields in entries]
+        announcements = [{key: (fields[key].value or "").strip() for key in ("category", "title", "date", "details")} for fields in entries]
         missing = [str(number) for number, item in enumerate(announcements, start=1) if not item["title"]]
         if missing:
             message.value, message.color = f"Add a title to announcement {', '.join(missing)}.", ft.Colors.RED_700
