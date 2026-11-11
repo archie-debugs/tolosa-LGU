@@ -167,3 +167,20 @@ def test_readers_get_no_buttons_or_fields():
 def test_quorum_text():
     assert quorum_text({"in_office": 0}) == "No members in office on this date"
     assert quorum_text(QUORUM) == "Attendance not taken yet"
+
+
+def test_managers_are_told_a_draft_is_hidden_from_sb_members_until_scheduled():
+    draft = {**LISTED[0], "id": 5, "title": "3rd Regular Session", "status": "Draft"}
+    api = FakeApi()
+    LISTED.insert(0, draft)
+    try:
+        _, view = build(api)
+        assert texts(view).count("Draft: SB Members don't see it yet.") == 1  # only the draft row
+        _, reader_view = build(FakeApi(), can_manage=False)
+        assert "Draft: SB Members don't see it yet." not in texts(reader_view)
+    finally:
+        LISTED.remove(draft)
+
+    page, view = build(FakeApi(session=detail("Draft")))
+    open_first_session(view)
+    assert any("SB Members don't see it yet. Press Schedule" in text for text in texts(view))

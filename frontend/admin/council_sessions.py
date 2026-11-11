@@ -19,6 +19,8 @@ MARKS = ["Present", "Absent", "On leave", "Excused"]
 NOT_MARKED = "none"  # dropdown key for "not marked yet"
 MARK_COLORS = {"Present": ft.Colors.GREEN_700, "Absent": ft.Colors.RED_700, "On leave": ft.Colors.AMBER_800,
                "Excused": ft.Colors.BLUE_GREY_600}
+# SB Members only see sessions that are Scheduled or Held.
+HIDDEN_DRAFT = "Draft: SB Members don't see it yet."
 STATUS_COLORS = {"Draft": ft.Colors.BLUE_GREY_600, "Scheduled": ft.Colors.BLUE_700, "Held": ft.Colors.GREEN_700}
 # The button for each move a session can make.
 STATUS_ACTIONS = {"Scheduled": ("Schedule", ft.Icons.EVENT_AVAILABLE), "Held": ("Mark as held", ft.Icons.TASK_ALT),
@@ -109,6 +111,7 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
                     ft.Text(item["title"], size=15, weight=ft.FontWeight.W_600, color=ui.link_color()),
                     ft.Text(f"{_date_text(item['held_on'])} · {quorum_text(quorum)}", size=12,
                             color=ft.Colors.AMBER_800 if warn else ui.muted_color()),
+                    *([ft.Text(HIDDEN_DRAFT, size=12, color=ft.Colors.AMBER_800)] if item["status"] == "Draft" and can_manage else []),
                 ], spacing=2, expand=True),
                 ui.chip(item["status"], STATUS_COLORS.get(item["status"], ft.Colors.BLUE_GREY_600)),
                 ft.Icon(ft.Icons.CHEVRON_RIGHT, color=ui.muted_color()),
@@ -272,6 +275,9 @@ def build_sessions_view(page, surface_card, api, *, can_manage):
                             color=ft.Colors.AMBER_800 if warn else ui.body_color()),
                 ], spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 *([ft.Row(actions, spacing=8, wrap=True)] if actions else []),
+                *([ft.Row([ft.Icon(ft.Icons.VISIBILITY_OFF_OUTLINED, size=16, color=ft.Colors.AMBER_800),
+                           ft.Text(HIDDEN_DRAFT + " Press Schedule when the date is final.", size=12, color=ft.Colors.AMBER_800, expand=True)],
+                          spacing=6)] if session["status"] == "Draft" and can_manage else []),
             ], spacing=12), padding=20),
             surface_card(ft.Column([
                 ui.card_title("Attendance", ft.Icons.HOW_TO_REG_OUTLINED, subtitle=subtitle),
