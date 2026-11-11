@@ -14,6 +14,21 @@ LOCATION_STYLES = {
     "unrouted": ("Not routed yet", ft.Icons.HOURGLASS_EMPTY, ft.Colors.BLUE_GREY_600),
 }
 
+IN_TRANSIT = "in_transit"
+CARD_LIST_SIZE = 10  # a clicked card lists its 10 latest; the backend sends no more
+# Each count card, and what the list beside Recent activity shows while it is clicked:
+# key, title, list subtitle, message when the list is empty.
+CARDS = {
+    IN_TRANSIT: ("In transit", "Oldest first. Select a document to see its route.",
+                 "Nothing in transit. Every handed-off document has been received."),
+    "overdue": ("Overdue", "Waiting longest first. Select a document to see its route.",
+                "Nothing overdue. Every document in transit is within its time."),
+    "sent_today": ("Sent today", "Latest first. Select a document to see its route.", "Nothing has been sent today."),
+    "received_today": ("Received today", "Latest first. Select a document to see its route.", "Nothing has been received today."),
+    "actions_today": ("Actions today", "Latest first. Select a document to see its route.", "No actions have been recorded today."),
+    "scans_today": ("Scans today", "Latest first, unrecognized codes included.", "Nothing has been scanned today."),
+}
+
 
 def build_qr_tracking_view(page, api, surface_card, open_details=None):
     """`api(method, path, **kwargs)` calls the main backend and returns parsed JSON or raises.
@@ -27,7 +42,10 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
     error_text = ft.Text("", size=12, color=ft.Colors.RED_700, visible=False)
     kpi_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
     transit_title = ft.Text("In transit", size=17, weight=ft.FontWeight.BOLD, color=link_color())
+    transit_header = ft.Container()
     transit_list = ft.Column(spacing=0)
+    # Which count card is filtering the list; In transit when none is.
+    state = {"card": IN_TRANSIT, "payload": {}}
     activity_list = ft.Column(spacing=0)
     # How many recent activities to show; the backend takes 10, 20 or 30.
     activity_size = ft.Dropdown(
@@ -54,39 +72,65 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
     def event_row(event, show_document):
         return widgets.event_row(event, show_document, on_open=lambda value: track(value, scan=False))
 
+    def choose_card(key):
+        """Show only the clicked card's list; clicking it again goes back to In transit."""
+        state["card"] = IN_TRANSIT if state["card"] == key else key
+        render_monitor(state["payload"])
+        page.update()
+
+    def transit_row(item):
+        return list_row(
+            [
+                widgets.document_cell(item),
+                ft.Column(
+                    [
+                        ft.Text(f"{item.get('from_office') or '-'} → {item.get('to_office') or '-'}", size=12, color=body_color()),
+                        ft.Text(f"Sent {format_time(item.get('sent_at'))}" + (f" by {item['sent_by']}" if item.get("sent_by") else ""), size=11, color=muted_color()),
+                    ],
+                    spacing=1,
+                    expand=True,
+                ),
+                widgets.waiting_chip(item),
+            ],
+            on_click=lambda _, value=item.get("tracking_number"): track(value, scan=False),
+        )
+
     def render_monitor(payload):
+        state["payload"] = payload
         summary = payload.get("summary") or {}
         overdue_hours = payload.get("overdue_hours") or 24
         counts = [
-            ("In transit", summary.get("in_transit", 0), "Sent, awaiting receipt", ft.Icons.LOCAL_SHIPPING_OUTLINED, ft.Colors.AMBER_700),
-            ("Overdue", summary.get("overdue", 0), f"Waiting {overdue_hours}h or more", ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_400),
-            ("Sent today", summary.get("sent_today", 0), "Handoffs started", ft.Icons.SEND_OUTLINED, ft.Colors.BLUE_700),
-            ("Received today", summary.get("received_today", 0), "Receipts confirmed", ft.Icons.MOVE_TO_INBOX_OUTLINED, ft.Colors.GREEN_600),
-            ("Actions today", summary.get("actions_today", 0), "Signed, reviewed, noted…", ft.Icons.TASK_ALT, ft.Colors.DEEP_PURPLE_300),
-            ("Scans today", summary.get("scans_today", 0), f"{summary.get('unrecognized_today', 0)} unrecognized", ft.Icons.QR_CODE_SCANNER, ft.Colors.TEAL_600),
+            (IN_TRANSIT, summary.get("in_transit", 0), "Sent, awaiting receipt", ft.Icons.LOCAL_SHIPPING_OUTLINED, ft.Colors.AMBER_700),
+            ("overdue", summary.get("overdue", 0), f"Waiting {overdue_hours}h or more", ft.Icons.WARNING_AMBER_ROUNDED, ft.Colors.RED_400),
+            ("sent_today", summary.get("sent_today", 0), "Handoffs started", ft.Icons.SEND_OUTLINED, ft.Colors.BLUE_700),
+            ("received_today", summary.get("received_today", 0), "Receipts confirmed", ft.Icons.MOVE_TO_INBOX_OUTLINED, ft.Colors.GREEN_600),
+            ("actions_today", summary.get("actions_today", 0), "Signed, reviewed, noted…", ft.Icons.TASK_ALT, ft.Colors.DEEP_PURPLE_300),
+            ("scans_today", summary.get("scans_today", 0), f"{summary.get('unrecognized_today', 0)} unrecognized", ft.Icons.QR_CODE_SCANNER, ft.Colors.TEAL_600),
         ]
-        kpi_row.controls = [widgets.stat_card(*count, col={"xs": 6, "md": 4, "xl": 2}) for count in counts]
+        cards = []
+        for key, value, detail, icon, color in counts:
+            showing = state["card"] == key and key != IN_TRANSIT
+            card = widgets.stat_card(CARDS[key][0], value, "Showing these" if showing else detail, icon, color,
+                                     col={"xs": 6, "md": 4, "xl": 2}, active=state["card"] == key)
+            card.on_click = lambda _, k=key: choose_card(k)
+            card.ink = True
+            widgets.levitate_on_hover(card)
+            card.tooltip = "Show what is in transit" if key == IN_TRANSIT or showing else f"Show only: {CARDS[key][0].lower()}"
+            cards.append(card)
+        kpi_row.controls = cards
 
+        key = state["card"]
+        title, subtitle, nothing = CARDS[key]
         in_transit = payload.get("in_transit") or []
-        transit_title.value = f"In transit ({len(in_transit)})"
-        rows = []
-        for item in in_transit:
-            rows.append(list_row(
-                [
-                    widgets.document_cell(item),
-                    ft.Column(
-                        [
-                            ft.Text(f"{item.get('from_office') or '-'} → {item.get('to_office') or '-'}", size=12, color=body_color()),
-                            ft.Text(f"Sent {format_time(item.get('sent_at'))}" + (f" by {item['sent_by']}" if item.get("sent_by") else ""), size=11, color=muted_color()),
-                        ],
-                        spacing=1,
-                        expand=True,
-                    ),
-                    widgets.waiting_chip(item),
-                ],
-                on_click=lambda _, value=item.get("tracking_number"): track(value, scan=False),
-            ))
-        transit_list.controls = rows or [widgets.empty_box("Nothing in transit. Every handed-off document has been received.")]
+        if key == IN_TRANSIT:
+            rows = [transit_row(item) for item in in_transit]
+        elif key == "overdue":
+            rows = [transit_row(item) for item in in_transit if item.get("overdue")][:CARD_LIST_SIZE]
+        else:
+            rows = [event_row(event, show_document=True) for event in ((payload.get("card_lists") or {}).get(key) or [])[:CARD_LIST_SIZE]]
+        transit_title.value = f"{title} ({len(rows)})"
+        transit_header.content = widgets.card_title(transit_title, ft.Icons.DESCRIPTION_OUTLINED, subtitle=subtitle)
+        transit_list.controls = rows or [widgets.empty_box(nothing)]
 
         events = payload.get("recent_activity") or []
         activity_list.controls = [event_row(event, show_document=True) for event in events] or [
@@ -233,7 +277,7 @@ def build_qr_tracking_view(page, api, surface_card, open_details=None):
                     ft.Container(
                         surface_card(
                             ft.Column(
-                                [widgets.card_title(transit_title, ft.Icons.DESCRIPTION_OUTLINED, subtitle="Oldest first. Select a document to see its route."), transit_list],
+                                [transit_header, transit_list],
                                 spacing=16,
                             ),
                             padding=20,

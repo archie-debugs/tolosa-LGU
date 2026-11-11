@@ -185,6 +185,23 @@ class TrackingWidgets:
     def tone(self, light, dark):
         return dark if self.page.theme_mode == ft.ThemeMode.DARK else light
 
+    def levitate_on_hover(self, card):
+        """The card rises a little, with a deeper shadow, while the pointer is over it. Returns the card."""
+        resting_shadow = card.shadow
+        raised_shadow = ft.BoxShadow(blur_radius=22, color=ft.Colors.with_opacity(self.tone(0.16, 0.30), ft.Colors.BLACK),
+                                     offset=ft.Offset(0, 10), spread_radius=0)
+        card.offset = ft.transform.Offset(0, 0)
+        card.animate_offset = ft.animation.Animation(180, ft.AnimationCurve.EASE_OUT)
+
+        def hover(e):
+            raised = str(e.data).lower() == "true"
+            card.offset = ft.transform.Offset(0, -0.05 if raised else 0)
+            card.shadow = raised_shadow if raised else resting_shadow
+            card.update()
+
+        card.on_hover = hover
+        return card
+
     def heading_color(self):
         return self.tone(ft.Colors.BLUE_GREY_900, ft.Colors.BLUE_GREY_50)
 

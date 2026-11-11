@@ -235,3 +235,70 @@ def test_the_screen_asks_for_the_chosen_number_of_recent_activities():
     choice.value = "30"
     choice.on_change(None)
     assert asked[-1] == "/documents/qr/monitor?limit=30"
+
+
+def test_each_today_card_lists_its_own_latest_items():
+    ids = setup_offices()
+    client = TestClient(main.app)
+    route_documents(client, ids)
+    client.get("/documents/qr/no-such-code/office", headers=headers_for(client, "receiver"))
+
+    lists = client.get("/documents/qr/monitor", headers=headers_for(client, "monitor")).json()["card_lists"]
+
+    # The other handoff was sent yesterday, so only today's shows under Sent today.
+    assert [(e["type"], e["tracking_number"]) for e in lists["sent_today"]] == [("sent", "DOC-000001")]
+    assert [(e["type"], e["tracking_number"]) for e in lists["received_today"]] == [("received", "DOC-000001")]
+    assert [(e["type"], e["detail"]) for e in lists["actions_today"]] == [("action", "Signed: by the Vice Mayor")]
+    assert [e["type"] for e in lists["scans_today"]] == ["unrecognized"]
+
+
+def test_clicking_a_card_shows_only_its_list_and_clicking_it_again_goes_back_to_in_transit():
+    import frontend.admin.app  # noqa: F401  (flet compatibility shims)
+    import flet as ft
+    from frontend.admin.qr_tracking import build_qr_tracking_view
+    from tests.test_account_menu_ui import click
+    from tests.test_document_details_pass import DummyPage, walk
+
+    waiting = {"tracking_number": "DOC-1", "title": "Late one", "from_office": "A", "to_office": "B", "overdue": True}
+    fresh = {"tracking_number": "DOC-2", "title": "Fresh one", "from_office": "A", "to_office": "B", "overdue": False}
+    sent = {"type": "sent", "at": "2026-11-11T01:00:00+00:00", "tracking_number": "DOC-3", "title": "Sent one", "office": "A", "to_office": "B"}
+    payload = {"summary": {"in_transit": 2, "overdue": 1, "sent_today": 1}, "in_transit": [waiting, fresh],
+               "card_lists": {"sent_today": [sent], "received_today": []}, "recent_activity": []}
+    view = build_qr_tracking_view(DummyPage(), lambda method, path, **_: payload, lambda content, **_: content)
+
+    def texts():
+        return [c.value for c in walk(view) if isinstance(c, ft.Text) and isinstance(c.value, str)]
+
+    def card(title):
+        return next(c for c in walk(view) if isinstance(c, ft.Container) and c.on_click and any(
+            isinstance(t, ft.Text) and t.value == title for t in walk(c)))
+
+    assert "In transit (2)" in texts() and "Late one" in texts() and "Fresh one" in texts()
+    click(card("Overdue"))
+    assert "Overdue (1)" in texts() and "Late one" in texts() and "Fresh one" not in texts()
+    assert "Showing these" in texts()
+    click(card("Sent today"))
+    assert "Sent today (1)" in texts() and "DOC-3 · Sent one" in texts() and "Late one" not in texts()
+    click(card("Received today"))
+    assert "Received today (0)" in texts() and "Nothing has been received today." in texts()
+    click(card("Received today"))  # clicked again: back to In transit
+    assert "In transit (2)" in texts() and "Fresh one" in texts()
+
+
+def test_the_cards_rise_while_hovered():
+    import frontend.admin.app  # noqa: F401  (flet compatibility shims)
+    import flet as ft
+    from frontend.admin.qr_tracking import build_qr_tracking_view
+    from tests.test_document_details_pass import DummyPage, walk
+
+    view = build_qr_tracking_view(DummyPage(), lambda method, path, **_: {"summary": {}}, lambda content, **_: content)
+    card = next(c for c in walk(view) if isinstance(c, ft.Container) and c.on_hover)
+    card.update = lambda: None  # not on a real page
+    handler = card.on_hover
+    hover = handler if callable(handler) else lambda e: [fn(e) for fn in list(handler._EventHandler__handlers)]
+
+    resting = card.shadow
+    hover(type("E", (), {"data": "true"})())
+    assert card.offset.y < 0 and card.shadow is not resting
+    hover(type("E", (), {"data": "false"})())
+    assert card.offset.y == 0 and card.shadow is resting

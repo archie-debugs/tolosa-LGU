@@ -2342,6 +2342,7 @@ QR_SCAN_ACTIONS = QR_SCAN_RECOGNIZED + QR_SCAN_UNRECOGNIZED
 
 
 QR_REPEAT_SCAN_MINUTES = 5
+QR_CARD_LIST_SIZE = 10  # items a clicked count card lists on the QR Tracking screen
 QR_ACTIVITY_SIZES = (10, 20, 30)  # how many recent activities the QR Tracking screen may show
 
 
@@ -2500,23 +2501,27 @@ def monitor_qr(limit: int = 10, db: Session = Depends(get_db), current_user: mod
         .limit(feed_size * 4)
         .all()
     )
-    scan_logs = _without_repeat_scans(scan_logs[::-1])[::-1][:feed_size]
-    scanned_ids = {int(log.target_id) for log in scan_logs if log.action in QR_SCAN_RECOGNIZED and str(log.target_id or "").isdigit()}
-    scanned_docs = {doc.id: doc for doc in db.query(models.Document).filter(models.Document.id.in_(scanned_ids))} if scanned_ids else {}
-    for log in scan_logs:
-        recognized = log.action in QR_SCAN_RECOGNIZED
-        doc = scanned_docs.get(int(log.target_id)) if recognized and str(log.target_id or "").isdigit() else None
-        events.append({
-            "type": "scan" if recognized else "unrecognized",
-            "at": _utc_iso(log.created_at),
-            "office": None,
-            "to_office": None,
-            "actor": log.actor,
-            "detail": None if recognized else f"Unrecognized code: {log.target_id}",
-            **_document_brief(doc),
-        })
+    events += _scan_events(db, _without_repeat_scans(scan_logs[::-1])[::-1][:feed_size])
     # every "at" is UTC ISO text, so it sorts chronologically
     events.sort(key=lambda event: event["at"] or "", reverse=True)
+
+    # Each "today" count card lists its own latest items when it is clicked.
+    def today(model, column):
+        return db.query(model).filter(column >= day_start).order_by(column.desc()).limit(QR_CARD_LIST_SIZE)
+
+    scans_since_today = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.action.in_(QR_SCAN_ACTIONS), models.AuditLog.created_at >= day_start)
+        .order_by(models.AuditLog.created_at.desc())
+        .limit(QR_CARD_LIST_SIZE * 4)
+        .all()
+    )
+    card_lists = {
+        "sent_today": [_handoff_event(row) for row in today(models.DocumentHandoff, models.DocumentHandoff.sent_at)],
+        "received_today": [_receipt_event(row) for row in today(models.DocumentReceipt, models.DocumentReceipt.confirmed_at)],
+        "actions_today": [_action_event(row) for row in today(models.DocumentAction, models.DocumentAction.performed_at)],
+        "scans_today": _scan_events(db, _without_repeat_scans(scans_since_today[::-1])[::-1][:QR_CARD_LIST_SIZE]),
+    }
 
     return {
         "generated_at": now.isoformat(),
@@ -2533,7 +2538,28 @@ def monitor_qr(limit: int = 10, db: Session = Depends(get_db), current_user: mod
         },
         "in_transit": in_transit,
         "recent_activity": events[:feed_size],
+        "card_lists": card_lists,
     }
+
+
+def _scan_events(db: Session, scan_logs) -> list[dict]:
+    """Scan audit entries as activity events, with the scanned document when it was recognized."""
+    scanned_ids = {int(log.target_id) for log in scan_logs if log.action in QR_SCAN_RECOGNIZED and str(log.target_id or "").isdigit()}
+    scanned_docs = {doc.id: doc for doc in db.query(models.Document).filter(models.Document.id.in_(scanned_ids))} if scanned_ids else {}
+    events = []
+    for log in scan_logs:
+        recognized = log.action in QR_SCAN_RECOGNIZED
+        doc = scanned_docs.get(int(log.target_id)) if recognized and str(log.target_id or "").isdigit() else None
+        events.append({
+            "type": "scan" if recognized else "unrecognized",
+            "at": _utc_iso(log.created_at),
+            "office": None,
+            "to_office": None,
+            "actor": log.actor,
+            "detail": None if recognized else f"Unrecognized code: {log.target_id}",
+            **_document_brief(doc),
+        })
+    return events
 
 
 @public_qr_router.get("/qr/{qr_value:path}")
