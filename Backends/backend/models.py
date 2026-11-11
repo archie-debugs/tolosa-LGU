@@ -286,8 +286,8 @@ class Document(Base):
 
     # user references: keep legacy `created_by` string, but add FK to users
     created_by = Column(String, nullable=True, index=True)
-    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    assigned_to_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    assigned_to_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     created_by_rel = relationship("User", foreign_keys=[created_by_id])
     assigned_to_rel = relationship("User", foreign_keys=[assigned_to_id])
