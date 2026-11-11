@@ -39,6 +39,7 @@ def main(page: ft.Page):
         if len(route_parts) == 3 and route_parts[1] == "qr" and route_parts[2]:
             page_state = page.data if isinstance(page.data, dict) else {}
             page_state.pop("qr_authorization", None)
+            page_state["scan_session"] = True  # this tab came from a QR code: it never opens the workspace
             page.data = page_state
             try:
                 page.client_storage.set("sb_pending_qr_token", route_parts[2])
@@ -54,6 +55,7 @@ def main(page: ft.Page):
                 pass
             page_state = page.data if isinstance(page.data, dict) else {}
             page_state.pop("qr_authorization", None)
+            page_state.pop("scan_session", None)
             page.data = page_state
             content = build_homepage_view(page)
         page.clean()

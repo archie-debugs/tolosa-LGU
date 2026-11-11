@@ -497,3 +497,15 @@ def test_the_bell_picks_up_new_notifications_without_a_screen_change():
 
     assert badge_texts(shell) == ["1"]
     _notification_polls.pop(id(shell.page), None)
+
+
+def test_a_resize_after_the_workspace_was_replaced_leaves_the_new_page_alone():
+    # An office user opens a scanned document on the phone: its page replaces the workspace, and the
+    # address bar sliding away then resizes the window. The Office Dashboard must not come back.
+    shell = Shell(width=1280)
+    scanned = ft.Text("Scanned document")
+    shell.page.controls = [scanned]
+
+    resize(shell.page, 390)
+
+    assert shell.page.controls == [scanned]

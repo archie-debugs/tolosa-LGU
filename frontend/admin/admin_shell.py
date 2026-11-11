@@ -821,9 +821,13 @@ def render_shell(
         shell_root[:] = [layout()]
         page.add(shell_root[0])
 
+    def shell_showing():
+        """False once something else replaced the workspace on the page (a scanned document, the login)."""
+        return bool(shell_root) and shell_root[0] in (getattr(page, "controls", None) or [])
+
     def phone_back(route):
         """The phone's Back: close a dialog or the menu, else the screen before; never leave the workspace."""
-        if not shell_root or shell_root[0] not in (getattr(page, "controls", None) or []):
+        if not shell_showing():
             return False  # signed out: the public pages handle it
         target = next((i for i, item in enumerate(shell_nav_items) if navigation.slug(item[1]) == navigation.route_screen(route)), None)
         if navigation.close_open_dialog(page) or drawer_open or notifications_panel.visible:
@@ -842,7 +846,9 @@ def render_shell(
         """Screens lay themselves out for the screen size, so a new size redraws the open one."""
         nonlocal size, compact, drawer_open
         now = screen_size(page)
-        if now == size:
+        # A phone resizes when its address bar or keyboard moves: that must not redraw the workspace
+        # over a scanned document's page.
+        if now == size or not shell_showing():
             return
         size = now
         compact = size != DESKTOP

@@ -55,3 +55,59 @@ def test_scan_states_lead_somewhere_and_the_browser_forgets_an_answered_code():
     assert "forget_scanned_code()" in opened
     # The scanned document is a page with Done on every device, not a dialog over an empty page.
     assert 'on_done=leave_qr_document if doc.get("scanned") else None,' in source
+
+
+def scanned_login_page(monkeypatch, token="unknown-code"):
+    """A phone browser opened from a QR code, on the login screen."""
+    import frontend.admin.app as admin_app
+    from tests.test_session_revocation import AppPage, BackendSession, on_login_screen, reset_db
+
+    reset_db()
+    monkeypatch.setattr(admin_app.requests, "Session", BackendSession)
+    page = AppPage()
+    page.route = f"/qr/{token}"
+    page.data = {"scan_session": True}
+    page.client_storage.set("sb_pending_qr_token", token)
+    admin_app.main(page)
+    assert on_login_screen(page)
+    return page
+
+
+def fill_login(page, username="clerk"):
+    import flet as ft
+    from tests.test_account_menu_ui import walk
+
+    fields = {c.hint_text: c for control in page.controls for c in walk(control) if isinstance(c, ft.TextField)}
+    fields["Enter your username"].value = username
+    fields["Enter your password"].value = "pw123"
+    return fields["Enter your password"]
+
+
+def test_a_scan_login_sent_twice_by_the_phone_does_not_open_the_workspace(monkeypatch):
+    # The phone's Go key and a tap on Log in both send the form. The second one used to find the
+    # scanned code already answered and open the workspace (the Office Dashboard) over the scan.
+    from tests.test_account_menu_ui import texts
+    from tests.test_login_after_restart import open_sessions
+
+    page = scanned_login_page(monkeypatch)
+    password = fill_login(page)
+    password.on_submit(None)
+    password.on_submit(None)
+
+    shown = [t for control in page.controls for t in texts(control)]
+    assert "Signed in as clerk" in shown  # the scan screen
+    assert "Documents" not in shown and "Office Dashboard" not in shown
+    assert open_sessions("clerk") == 1  # signed in once
+
+
+def test_a_tab_opened_from_a_qr_code_returns_to_the_scan_screen_after_logging_in_again(monkeypatch):
+    import frontend.admin.app as admin_app
+    from tests.test_account_menu_ui import texts
+
+    page = scanned_login_page(monkeypatch)
+    page.client_storage.remove("sb_pending_qr_token")  # the code was answered earlier in this tab
+    fill_login(page).on_submit(None)
+
+    shown = [t for control in page.controls for t in texts(control)]
+    assert "Documents" not in shown
+    assert any("scan" in t.lower() for t in shown)
