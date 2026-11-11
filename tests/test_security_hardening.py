@@ -48,7 +48,7 @@ def login(client, username, password="pw123"):
 def seed_three_offices(*, archived=False):
     """Office A holds DOC-000001; one employee per office."""
     with SessionLocal() as db:
-        offices = [models.Office(name=f"Office {code}", office_code=code) for code in ("A", "B", "C")]
+        offices = [models.Office(name=f"Office {code}", office_code=code, is_main=code == "A") for code in ("A", "B", "C")]
         db.add_all(offices)
         db.commit()
         doc = models.Document(

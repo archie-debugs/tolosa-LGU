@@ -89,7 +89,7 @@ OFFICE_USER = "Office User"
 
 
 def is_office_user(user):
-    """An Employee with an office and only office permissions (Create Office User Account).
+    """An Employee with an office and only office permissions.
     Same rule as is_office_user in Backends/backend/core.py."""
     return (user.get("role") == "Employee" and user.get("office_id") not in (None, "")
             and {permission_key(item) for item in (user.get("permissions") or [])} <= OFFICE_PERMISSION_KEYS)
@@ -363,7 +363,8 @@ def build_offices_table(offices_data, open_edit_office_dialog, view_office_users
                         ft.Column(
                             [
                                 ft.Text(office.get("name") or "-", size=14, weight=ft.FontWeight.W_600),
-                                ft.Text(f"Code {office.get('office_code') or '-'} · {office.get('user_count', 0)} users", size=11, color=ft.Colors.BLUE_GREY_600),
+                                ft.Text(f"Code {office.get('office_code') or '-'} · {office.get('user_count', 0)} users"
+                                        + (" · Main office" if office.get("is_main") else ""), size=11, color=ft.Colors.BLUE_GREY_600),
                             ],
                             spacing=1,
                             expand=True,
@@ -382,7 +383,7 @@ def build_offices_table(offices_data, open_edit_office_dialog, view_office_users
         rows.append(
             ft.DataRow(
                 cells=[
-                    ft.DataCell(ft.Text(office.get("name") or "-", size=13)),
+                    ft.DataCell(ft.Text((office.get("name") or "-") + (" (Main)" if office.get("is_main") else ""), size=13)),
                     ft.DataCell(ft.Text(office.get("office_code") or "-", size=13)),
                     ft.DataCell(_status_badge("Active" if office.get("is_active") else "Inactive")),
                     ft.DataCell(ft.Text(str(office.get("user_count", 0)), size=13)),
@@ -427,7 +428,6 @@ def build_users_roles_view(
     edit_office=None,
     view_office_users=None,
     office_table_holder=None,
-    create_employee=None,
     unlock_user=None,
     page_size_filter=None,
     count_text=None,
@@ -599,16 +599,10 @@ def build_users_roles_view(
             edit_office or (lambda _office: None),
             view_office_users or (lambda _office: None),
         )
-        office_actions = []
-        if create_employee:
-            office_actions.append(ft.OutlinedButton(
-                "Create Office User Account", icon=ft.Icons.BADGE_OUTLINED, on_click=create_employee, height=40,
-                style=ft.ButtonStyle(shape=pill, color=widgets.accent(), side=ft.BorderSide(1, widgets.accent())),
-            ))
-        office_actions.append(ft.FilledButton(
+        office_actions = [ft.FilledButton(
             "Add Office", icon=ft.Icons.ADD, on_click=create_office, height=40,
             style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
-        ))
+        )]
         sections.append(
             surface_card(
                 ft.Column(

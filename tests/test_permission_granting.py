@@ -18,7 +18,7 @@ def setup():
     with SessionLocal() as db:
         for table in reversed(models.Base.metadata.sorted_tables):
             db.execute(table.delete())
-        office = models.Office(name="Records", office_code="REC")
+        office = models.Office(name="Records", office_code="REC", is_main=True)
         db.add(office)
         for username, permissions in (
             ("admin", ["*"]),
@@ -108,3 +108,79 @@ def test_new_accounts_need_a_real_email_and_an_eight_character_password():
     assert register(client, "admin", username="a", email="not-an-email").json()["detail"] == "Enter a valid email address."
     assert register(client, "admin", username="b", password="short").status_code == 400
     assert register(client, "admin", username="c").status_code == 200
+
+
+def test_an_outside_office_account_only_ever_works_its_own_documents():
+    main_office_id = setup()
+    client = TestClient(main.app)
+    with SessionLocal() as db:
+        outside = models.Office(name="Outside", office_code="OUT")
+        db.add(outside)
+        db.flush()
+        mine = models.Document(tracking_number="DOC-1", title="Passed to Outside", current_office_id=outside.id)
+        other = models.Document(tracking_number="DOC-2", title="SB only", current_office_id=main_office_id)
+        db.add_all([mine, other])
+        db.flush()
+        db.add(models.DocumentOffice(document_id=mine.id, office_id=outside.id))
+        db.commit()
+        outside_id = outside.id
+
+    # Creating or editing it with anything beyond office permissions is refused.
+    assert register(client, "admin", username="out", office_id=outside_id, permissions=["register_documents"]).status_code == 400
+    assert register(client, "admin", username="out", office_id=outside_id).status_code == 200
+    assert saved_permissions("out") == sorted({"view_office_documents", "search_office_documents", "view_office_document_details",
+                                               "scan_qr", "pass_office_documents", "confirm_document_receipt", "view_office_history"})
+
+    # Even with general permissions forced into the account, it only sees its office's documents.
+    with SessionLocal() as db:
+        user = db.query(models.User).filter_by(username="out").one()
+        user.permissions = str(saved_permissions("out") + ["view_documents", "view_document_details"])
+        user.hashed_password = get_password_hash("pw123")
+        db.commit()
+    out = headers(client, "out")
+    assert client.get("/documents", headers=out).status_code == 403
+    office_list = client.get("/documents/office", headers=out)
+    assert office_list.status_code == 200, office_list.text
+    assert [item["title"] for item in office_list.json()["items"]] == ["Passed to Outside"]
+
+    # A main-office employee still sees everything.
+    assert register(client, "admin", username="sb", office_id=main_office_id, permissions=["register_documents"]).status_code == 200
+    with SessionLocal() as db:
+        db.query(models.User).filter_by(username="sb").one().hashed_password = get_password_hash("pw123")
+        db.commit()
+    everything = client.get("/documents", headers=headers(client, "sb"))
+    assert everything.status_code == 200 and everything.json()["total"] == 2
+
+
+def test_only_one_office_is_main():
+    first_id = setup()
+    client = TestClient(main.app)
+    admin = headers(client, "admin")
+    second = client.post("/offices", json={"name": "New Main", "office_code": "NEW", "is_main": True}, headers=admin)
+    assert second.status_code == 200, second.text
+    mains = [office["id"] for office in client.get("/offices", headers=admin).json() if office["is_main"]]
+    assert mains == [second.json()["id"]]
+
+    # Editing without is_main (an older client) keeps it as it is.
+    kept = client.put(f"/offices/{first_id}", json={"name": "Records", "office_code": "REC", "is_active": True}, headers=admin)
+    assert kept.status_code == 200 and kept.json()["is_main"] is False
+
+
+def test_an_office_only_account_moved_to_the_main_office_can_get_more():
+    main_office_id = setup()
+    client = TestClient(main.app)
+    with SessionLocal() as db:
+        outside = models.Office(name="Outside", office_code="OUT")
+        db.add(outside)
+        db.commit()
+        outside_id = outside.id
+    assert register(client, "admin", username="moved", office_id=outside_id).status_code == 200
+    with SessionLocal() as db:
+        moved_id = db.query(models.User.id).filter_by(username="moved").scalar()
+
+    response = client.put(f"/auth/users/{moved_id}", headers=headers(client, "admin"), json={
+        "full_name": "M", "username": "moved", "email": "m@example.com", "role": "Employee", "status": "Active",
+        "office_id": main_office_id, "permissions": ["scan_qr", "register_documents"],
+    })
+    assert response.status_code == 200, response.text
+    assert saved_permissions("moved") == sorted({"scan_qr", "register_documents"} | EMPLOYEE_BASE_PERMISSIONS)

@@ -23,7 +23,7 @@ def reset_db():
     with SessionLocal() as db:
         for table in reversed(models.Base.metadata.sorted_tables):
             db.execute(table.delete())
-        db.add(models.Office(name="Records Office", office_code="REC"))
+        db.add(models.Office(name="Records Office", office_code="REC", is_main=True))
         db.add(models.User(username="admin", hashed_password=get_password_hash("pw123"), role="Super Administrator",
                            permissions="['*']", status="Active", is_active=True, full_name="Admin", email="admin@example.com"))
         db.add(models.User(username="clerk", hashed_password=get_password_hash("pw123"), role="Employee", full_name="Clerk",
@@ -43,10 +43,11 @@ def fire(control, event_name, value=None):
             fn(event)
 
 
-def open_users_page(monkeypatch, extra=()):
+def open_users_page(monkeypatch, extra=(), main_office=True):
     reset_db()
     with SessionLocal() as db:
         office_id = db.query(models.Office.id).scalar()
+        db.query(models.Office).update({models.Office.is_main: main_office})
         for username, role, permissions, in_office in extra:
             db.add(models.User(username=username, hashed_password="x", role=role, full_name=username.title(), email=f"{username}@example.com",
                                permissions=str(permissions), status="Active", is_active=True, office_id=office_id if in_office else None))
@@ -184,8 +185,8 @@ def test_the_user_table_shows_10_at_a_time_and_filters_by_office_user_and_permis
     assert listed_usernames(page) == ["clerk"]
 
 
-def test_an_office_user_can_only_be_given_office_permissions(monkeypatch):
-    page = open_users_page(monkeypatch, [("desk", "Employee", ["scan_qr"], True)])
+def test_an_outside_office_account_can_only_be_given_office_permissions(monkeypatch):
+    page = open_users_page(monkeypatch, [("desk", "Employee", ["scan_qr"], True)], main_office=False)
     row = next(r for c in walk_tables(page.controls[0]) for r in getattr(c, "rows", None) or []
                if "desk" in [t for cell in r.cells for t in texts(cell.content)])
     next(c for cell in row.cells for c in walk(cell.content) if isinstance(c, ft.PopupMenuItem) and texts(c) == ["Edit"]).on_click(None)
@@ -199,7 +200,7 @@ def test_an_office_user_can_only_be_given_office_permissions(monkeypatch):
     click(button(dialog(page), "Save Changes"))
     assert saved_permissions("desk") == ["pass_office_documents", "scan_qr"]
 
-    # The backend refuses employee permissions for an office user too.
+    # The backend refuses employee permissions for an outside office too.
     client = TestClient(main.app)
     with SessionLocal() as db:
         desk = db.query(models.User).filter_by(username="desk").one()

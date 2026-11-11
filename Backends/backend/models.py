@@ -25,6 +25,8 @@ class Office(Base):
     name = Column(String, unique=True, nullable=False, index=True)
     office_code = Column(String(32), unique=True, index=True, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="true", index=True)
+    # The SB's own office. Employees anywhere else are outside offices and only ever get office permissions.
+    is_main = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     users = relationship("User", back_populates="office", foreign_keys="User.office_id")

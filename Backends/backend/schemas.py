@@ -187,9 +187,11 @@ class OfficeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=160)
     office_code: str = Field(..., min_length=1, max_length=32)
     is_active: bool = True
+    is_main: bool = False
 
 
 class OfficeUpdate(BaseModel):
     name: str = Field(..., min_length=1, max_length=160)
     office_code: str = Field(..., min_length=1, max_length=32)
     is_active: bool
+    is_main: bool | None = None  # left out: unchanged

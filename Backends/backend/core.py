@@ -351,9 +351,18 @@ def is_temporary_email(email) -> bool:
 
 def is_office_user(role, office_id, permissions) -> bool:
     """An office user account: an Employee with an office and nothing beyond the office workflow
-    permissions (made by Create Office User Account). It may only ever hold office permissions."""
+    permissions. It may only ever hold office permissions."""
     return (normalize_user_role(role) == "Employee" and office_id not in (None, "")
             and normalize_permissions(permissions) <= OFFICE_WORKFLOW_PERMISSIONS)
+
+
+def is_outside_office(office) -> bool:
+    """An office that isn't the main office: its employees only ever get office permissions."""
+    return office is not None and not getattr(office, "is_main", False)
+
+
+def in_outside_office(user) -> bool:
+    return normalize_user_role(getattr(user, "role", None)) == "Employee" and is_outside_office(getattr(user, "office", None))
 
 
 def user_has_permission(user: models.User, permission: str) -> bool:
@@ -368,6 +377,9 @@ def user_has_permission(user: models.User, permission: str) -> bool:
     if normalized_permission in OFFICE_WORKFLOW_PERMISSIONS and (
         role != "Employee" or getattr(user, "office_id", None) is None
     ):
+        return False
+    # An outside office only works its own documents, whatever was saved on the account.
+    if normalized_permission not in OFFICE_WORKFLOW_PERMISSIONS and in_outside_office(user):
         return False
     # SB Members are read-only, whatever was saved on their account.
     if role == "SB Member" and normalized_permission not in DEFAULT_ROLE_PERMISSIONS["SB Member"]:

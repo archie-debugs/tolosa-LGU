@@ -23,6 +23,7 @@ def _serialize_office(office, user_count=0):
         "office_name": office.name,
         "office_code": office.office_code,
         "is_active": bool(office.is_active),
+        "is_main": bool(office.is_main),
         "user_count": user_count,
         "created_at": office.created_at.isoformat() if office.created_at else None,
         "updated_at": office.updated_at.isoformat() if office.updated_at else None,
@@ -53,6 +54,12 @@ def _ensure_unique(db, name, office_code, office_id=None):
         query = query.filter(models.Office.id != office_id)
     if query.first():
         raise HTTPException(status_code=409, detail="Office code already exists")
+
+
+def _make_only_main(db, office):
+    """There is one main office: marking this one unmarks the rest."""
+    db.query(models.Office).filter(models.Office.id != office.id, models.Office.is_main.is_(True)).update(
+        {models.Office.is_main: False}, synchronize_session=False)
 
 
 def _find_office(db, office_id):
@@ -155,8 +162,11 @@ def create_office(
     _require_super_admin(current_user)
     name, office_code = _normalized_values(payload)
     _ensure_unique(db, name, office_code)
-    office = models.Office(name=name, office_code=office_code, is_active=payload.is_active)
+    office = models.Office(name=name, office_code=office_code, is_active=payload.is_active, is_main=payload.is_main)
     db.add(office)
+    if office.is_main:
+        db.flush()
+        _make_only_main(db, office)
     try:
         db.commit()
         db.refresh(office)
@@ -169,7 +179,7 @@ def create_office(
         action="OFFICE_CREATED",
         target_type="Office",
         target_id=str(office.id),
-        details=f"Created office {office.name} ({office.office_code})",
+        details=f"Created office {office.name} ({office.office_code}){', main office' if office.is_main else ''}",
     )
     return _serialize_office(office)
 
@@ -185,10 +195,14 @@ def update_office(
     office = _find_office(db, office_id)
     name, office_code = _normalized_values(payload)
     _ensure_unique(db, name, office_code, office_id)
-    previous = (office.name, office.office_code, bool(office.is_active))
+    previous = (office.name, office.office_code, bool(office.is_active), bool(office.is_main))
     office.name = name
     office.office_code = office_code
     office.is_active = payload.is_active
+    if payload.is_main is not None:
+        office.is_main = payload.is_main
+        if office.is_main:
+            _make_only_main(db, office)
     try:
         db.commit()
         db.refresh(office)
@@ -203,7 +217,8 @@ def update_office(
         target_id=str(office.id),
         details=(
             f"Updated office {office.id}: name={previous[0]}->{office.name}, "
-            f"code={previous[1]}->{office.office_code}, active={previous[2]}->{bool(office.is_active)}"
+            f"code={previous[1]}->{office.office_code}, active={previous[2]}->{bool(office.is_active)}, "
+            f"main={previous[3]}->{bool(office.is_main)}"
         ),
     )
     user_count = db.query(models.User).filter(models.User.office_id == office.id).count()
