@@ -22,7 +22,6 @@ LOCATION_STYLES = {
     "unrouted": (ft.Icons.HOURGLASS_EMPTY, ft.Colors.BLUE_GREY_600),
 }
 
-PRIORITY_COLORS = {"high": ft.Colors.RED_700, "medium": ft.Colors.AMBER_800, "low": ft.Colors.BLUE_GREY_600}
 
 # Flet 0.28 takes base64 text in `src_base64`; newer releases take the bytes in `src`.
 IMAGE_TAKES_BASE64 = "src_base64" in inspect.signature(ft.Image.__init__).parameters
@@ -216,8 +215,6 @@ def open_document_details(
             chips.append(widgets.chip(document["stage"], stage_color(document["stage"])))
         if "is_public" in document:
             chips.append(widgets.chip("Public", ft.Colors.TEAL_700) if document.get("is_public") else widgets.chip("Private", ft.Colors.BLUE_GREY_600))
-        if document.get("priority"):
-            chips.append(widgets.chip(f"{document['priority']} priority", PRIORITY_COLORS.get(str(document["priority"]).lower(), ft.Colors.BLUE_GREY_600)))
         if document.get("status"):
             chips.append(widgets.chip(document["status"], ft.Colors.INDIGO_600))
         due = widgets.due_chip(document)

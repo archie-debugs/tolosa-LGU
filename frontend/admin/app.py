@@ -1925,7 +1925,6 @@ def main(page: ft.Page, session=None):
             "current_office": doc.get("current_office") or "-",
             "assigned_to": doc.get("assigned_to") or "-",
             "status": doc.get("status") or "Pending",
-            "priority": doc.get("priority") or "Medium",
             "date_received": doc.get("created_at") or doc.get("date_received") or "-",
             "last_updated": doc.get("updated_at") or doc.get("last_updated") or doc.get("created_at") or "-",
             "date_archived": doc.get("date_archived") or doc.get("archived_at") or "-",

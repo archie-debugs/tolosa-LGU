@@ -191,3 +191,10 @@ def test_a_scan_shows_the_action_first_and_the_details_only_on_request(monkeypat
     buttons, texts = labels(page)
     assert "Document type" in texts and "Hide details" in buttons
     assert "Download" not in buttons and "Preview" not in buttons
+
+
+def test_details_do_not_show_a_priority():
+    # The panel asked to remove priority: documents still store one, but it is never shown.
+    payload = {**HELD, "document": {**HELD["document"], "priority": "High"}}
+    _, texts = shown(payload, open_pass=None)
+    assert not any("priority" in str(text).lower() for text in texts)
