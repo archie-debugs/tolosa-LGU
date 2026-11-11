@@ -3859,6 +3859,7 @@ def main(page: ft.Page, session=None):
         return users_roles_view()
 
     def sessions_view():
+        SESSIONS_SHOWN = 20
         widgets = TrackingWidgets(page)
         rows_column = ft.Column(spacing=12)
         count_text = ft.Text("", size=13, color=widgets.body_color())
@@ -3882,7 +3883,9 @@ def main(page: ft.Page, session=None):
             else:
                 action = ft.OutlinedButton(
                     "Revoke", icon=ft.Icons.BLOCK, on_click=lambda _, session_id=item.get("session_id"): revoke_session(session_id),
-                    style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=ft.Colors.RED_600, side=ft.BorderSide(1, ft.Colors.RED_300)),
+                    height=36,
+                    style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=ft.Colors.RED_600, side=ft.BorderSide(1, ft.Colors.RED_300),
+                                         padding=ft.Padding(14, 0, 16, 0)),
                 )
             avatar = ft.CircleAvatar(content=ft.Text(username[:2].upper(), size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE), bgcolor=ft.Colors.BLUE_700, radius=21)
             who = ft.Column(
@@ -3912,7 +3915,8 @@ def main(page: ft.Page, session=None):
                 )
             else:
                 content = ft.Row(
-                    [avatar, who, *times, ft.Container(action, width=110, alignment=ft.Alignment(1, 0))],
+                    # Wide enough for the Revoke button (icon, label and padding) so it isn't cut off.
+                    [avatar, who, *times, ft.Container(action, width=124, alignment=ft.Alignment(1, 0))],
                     spacing=16,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
@@ -3935,8 +3939,10 @@ def main(page: ft.Page, session=None):
                 if response.status_code != 200:
                     raise Exception(response.text)
                 sessions = response.json() or []
-                rows_column.controls = [session_row(item) for item in sessions] or [widgets.empty_box("No active sessions.")]
-                count_text.value = f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}"
+                shown = sessions[:SESSIONS_SHOWN]  # the backend sends the most recently active first
+                rows_column.controls = [session_row(item) for item in shown] or [widgets.empty_box("No active sessions.")]
+                count_text.value = (f"Showing {len(shown)} of {len(sessions)} sessions" if len(sessions) > len(shown)
+                                    else f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}")
                 notice.value = ""
             except Exception as exc:
                 rows_column.controls = []

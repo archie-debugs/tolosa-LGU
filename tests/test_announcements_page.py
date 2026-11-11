@@ -117,3 +117,28 @@ def test_employees_do_not_get_the_announcements_page(monkeypatch):
     except StopIteration:
         return
     raise AssertionError("an Employee sees the Announcements page")
+
+
+def test_the_date_is_picked_on_a_calendar_and_saved_as_the_homepage_shows_it(monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    api = AnnouncementsApi([{"category": "Update", "title": "Session", "date": "", "details": ""}])
+    page = DummyPage()
+    view = build_announcements_view(page, surface_card, api)
+    date = next(f for f in announcement_fields(view) if f.label == "Date")
+    assert date.read_only  # it can't be typed in
+
+    monkeypatch.setattr(ft.DatePicker, "pick_date", lambda self: None, raising=False)
+    monkeypatch.setattr(type(page), "open", lambda self, control: None, raising=False)
+    stack = next(c for c in walk(view) if isinstance(c, ft.Stack) and date in c.controls)
+    click(stack.controls[1])  # the layer over the box opens the calendar
+    picker = page._council_date_picker
+    picker.value = datetime(2026, 10, 27)
+    picker.on_change(SimpleNamespace(control=picker, data=None))
+    assert date.value == "Oct 27, 2026"
+
+    buttons(view, "Save announcements")[0].on_click(None)
+    assert api.saved[-1]["homepage_announcements"][0]["date"] == "Oct 27, 2026"
+    next(c for c in walk(view) if isinstance(c, ft.IconButton) and c.tooltip == "Clear the date").on_click(None)
+    assert date.value == ""
