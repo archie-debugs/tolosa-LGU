@@ -38,39 +38,7 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
     date_hint.size = 13
     date_picker = ft.DatePicker(first_date=datetime(2020, 1, 1), last_date=datetime(2100, 12, 31))
 
-    def accent():
-        return widgets.tone(ft.Colors.BLUE_700, ft.Colors.BLUE_300)
-
-    def tint():
-        return widgets.tone("#F4F8FE", "#1B2430")
-
-    def card_title(icon, title, *extra, subtitle=None):
-        """A card's title with its round icon badge."""
-        heading = ft.Row(
-            [ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color=widgets.link_color()), *extra],
-            spacing=20, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        )
-        badge = ft.Container(
-            content=ft.Icon(icon, size=24, color=accent()),
-            width=44, height=44, border_radius=22,
-            alignment=ft.Alignment(0, 0),
-            bgcolor=ft.Colors.with_opacity(0.10, accent()),
-        )
-        lines = [heading, widgets.hint(subtitle)] if subtitle and not widgets.phone else [heading]
-        return ft.Row([badge, ft.Column(lines, spacing=4, expand=True)], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-
-    def empty_state(message):
-        return ft.Container(
-            content=ft.Row(
-                [ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=20, color=widgets.muted_color()), ft.Text(message, size=13, color=widgets.muted_color(), expand=True)],
-                spacing=14,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            padding=18,
-            bgcolor=tint(),
-            border=ft.border.all(1, widgets.line_color()),
-            border_radius=10,
-        )
+    accent, tint, card_title, empty_state = _card_parts(widgets)
 
     def boxed(control):
         """A date-bar button in its own framed tile."""
@@ -136,6 +104,67 @@ def build_todays_documents_view(page, api, surface_card, today=None, open_detail
             surface_card(date_bar, padding=ft.Padding(14, 18, 18, 18)),
             surface_card(temporary.day_card, padding=20),
             surface_card(temporary.archive_card, padding=20),
+        ],
+        spacing=16,
+    )
+
+
+def _card_parts(widgets):
+    """The page's accent and tint colours, card titles with a round icon badge, and empty-list boxes."""
+
+    def accent():
+        return widgets.tone(ft.Colors.BLUE_700, ft.Colors.BLUE_300)
+
+    def tint():
+        return widgets.tone("#F4F8FE", "#1B2430")
+
+    def card_title(icon, title, *extra, subtitle=None):
+        """A card's title with its round icon badge."""
+        heading = ft.Row(
+            [ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color=widgets.link_color()), *extra],
+            spacing=20, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        badge = ft.Container(
+            content=ft.Icon(icon, size=24, color=accent()),
+            width=44, height=44, border_radius=22,
+            alignment=ft.Alignment(0, 0),
+            bgcolor=ft.Colors.with_opacity(0.10, accent()),
+        )
+        lines = [heading, widgets.hint(subtitle)] if subtitle and not widgets.phone else [heading]
+        return ft.Row([badge, ft.Column(lines, spacing=4, expand=True)], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def empty_state(message):
+        return ft.Container(
+            content=ft.Row(
+                [ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=20, color=widgets.muted_color()), ft.Text(message, size=13, color=widgets.muted_color(), expand=True)],
+                spacing=14,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=18,
+            bgcolor=tint(),
+            border=ft.border.all(1, widgets.line_color()),
+            border_radius=10,
+        )
+
+    return accent, tint, card_title, empty_state
+
+
+def build_archived_temporary_view(page, api, surface_card, today=None, open_details=None):
+    """Archived Documents → Temporary Docs: the temporary documents of Documents for SB Members whose day
+    has passed, the same archive card as on that page (view, keep 30 more days, delete)."""
+    from frontend.admin.temporary_documents import TemporaryDocuments
+
+    widgets = TrackingWidgets(page)
+    today = today or date.today()
+    _, _, card_title, empty_state = _card_parts(widgets)
+    temporary = TemporaryDocuments(page, api, widgets, None, card_title, empty_state, open_details=open_details)
+    temporary.load(today, today)
+    return ft.Column(
+        [
+            widgets.banner("Archived Temporary Docs", "MOAs from Documents for SB Members whose day has passed. Ordinances are not archived.",
+                           ft.Icons.INVENTORY_2_OUTLINED),
+            # The day card is not on this page, so its messages ("Deleted for good.") show here.
+            surface_card(ft.Column([temporary.notice_text, temporary.archive_card], spacing=12), padding=20),
         ],
         spacing=16,
     )

@@ -183,7 +183,7 @@ from frontend.admin.office_dashboard import build_office_overview_view, build_of
 from frontend.admin.qr_tracking import build_qr_tracking_view
 from frontend.admin.announcements import build_announcements_view
 from frontend.admin.settings import build_employee_settings_view, build_super_admin_settings_view
-from frontend.admin.todays_documents import build_todays_documents_view
+from frontend.admin.todays_documents import build_archived_temporary_view, build_todays_documents_view
 from frontend.admin.admin_shell import MENU_SECTION, render_shell
 from frontend.admin.change_password import open_change_password_dialog
 from frontend.admin.edit_profile import open_edit_profile_dialog as open_profile_dialog
@@ -3608,6 +3608,12 @@ def main(page: ft.Page, session=None):
             files=registration_files,
         )
 
+    def archived_temporary_page():
+        return build_archived_temporary_view(
+            page, backend_api, surface_card,
+            open_details=show_document_details if has_permission("view_document_details") else None,
+        )
+
     def users_role_page():
         return users_roles_view()
 
@@ -4162,6 +4168,10 @@ def main(page: ft.Page, session=None):
         if has_permission("view_documents"):
             items.append((ft.Icons.ARCHIVE_OUTLINED, "Archived Documents", lambda: archived_documents_view(), "Documents"))
             items.extend(document_type_items("Archived ", archived_documents_view, "Archived Documents"))
+            if has_permission("set_documents_for_sb_members"):
+                # Temporary documents (Documents for SB Members) whose day has passed.
+                items.append((ft.Icons.HOURGLASS_BOTTOM, "Archived Temporary Docs", archived_temporary_page, "Documents",
+                              "Archived Documents", "Temporary Docs"))
 
         # Legislative
         if not is_employee() or has_permission("view_documents"):

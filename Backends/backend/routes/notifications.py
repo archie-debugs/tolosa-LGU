@@ -17,7 +17,7 @@ from ..core import LGU_TIMEZONE, lgu_today, normalize_user_role, user_has_permis
 from ..database import get_db
 from ..retention import RETENTION_WARNING_DAYS, documents_due
 from .documents import QR_TRACKING_OVERDUE_HOURS
-from .temporary_documents import due_on as temporary_due_on
+from .temporary_documents import archived_moas, due_on as temporary_due_on
 
 router = APIRouter()
 
@@ -157,9 +157,9 @@ def _retention_items(db, now):
 
 
 def _temporary_items(db, today):
-    """Archived temporary documents due for deletion (priority) or due within TEMPORARY_WARNING_DAYS."""
+    """Archived MOAs due for deletion (priority) or due within TEMPORARY_WARNING_DAYS."""
     items = []
-    for entry in db.query(models.TemporaryDocument).filter(models.TemporaryDocument.scheduled_for < today):
+    for entry in archived_moas(db, today):
         due = temporary_due_on(entry)
         if due > today + timedelta(days=TEMPORARY_WARNING_DAYS):
             continue

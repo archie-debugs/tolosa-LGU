@@ -169,3 +169,25 @@ def test_a_word_file_cannot_be_mixed_with_photos(monkeypatch):
     find(cards.day_card, "OutlinedButton", "Choose file…").on_click(None)
     assert any("several photos or scans" in text for text in texts(cards.day_card))
     assert "No file chosen" in texts(cards.day_card)
+
+
+def test_archived_documents_has_a_temporary_docs_page_listing_the_archive():
+    from frontend.admin.todays_documents import build_archived_temporary_view
+
+    archived = {"id": 5, "kind": "MOA", "title": "Old MOA", "filename": "old.pdf", "scheduled_for": "2026-10-01",
+                "archived": True, "due_on": "2026-11-01", "days_left": -6}
+    calls = []
+
+    def api(method, path, **kwargs):
+        calls.append((method, path))
+        if path == "/temporary-documents/archive":
+            return {"items": [archived]} if ("DELETE", "/temporary-documents/5") not in calls else {"items": []}
+        return {"items": [], "today": TODAY.isoformat()}
+
+    view = build_archived_temporary_view(DummyPage(), api, lambda content, **_: content, today=TODAY)
+    shown = texts(view)
+    assert "Archived Temporary Docs" in shown and "Old MOA" in shown and "Due for deletion" in shown
+    find(view, "TextButton", "Delete").on_click(None)
+    find(view, "FilledButton", "Confirm delete").on_click(None)
+    assert ("DELETE", "/temporary-documents/5") in calls
+    assert "Deleted for good." in texts(view) and "Old MOA" not in texts(view)

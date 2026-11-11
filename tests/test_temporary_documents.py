@@ -77,20 +77,24 @@ def test_an_uploaded_moa_is_stored_listed_downloadable_and_its_file_removed_with
     assert not os.path.exists(stored)
 
 
-def test_past_entries_are_archived_due_30_days_later_and_can_be_kept_longer():
+def test_past_moas_are_archived_due_30_days_later_and_can_be_kept_longer_but_ordinances_are_not():
     ids, client, employee = prepare()
     today = lgu_today()
-    old = add_past(today - timedelta(days=40), document_id=ids["Budget ordinance"])
+    ordinance = add_past(today - timedelta(days=40), document_id=ids["Budget ordinance"])
+    old = add_past(today - timedelta(days=40), title="Old MOA", original_filename="old.pdf")
     recent = add_past(today - timedelta(days=2), title="Road MOA", original_filename="road.pdf")
     archive = client.get("/temporary-documents/archive", headers=employee).json()["items"]
     assert [item["id"] for item in archive] == [old, recent]
+    past_day = client.get("/temporary-documents", params={"date": (today - timedelta(days=40)).isoformat()}, headers=employee).json()["items"]
+    assert {item["id"]: item["archived"] for item in past_day} == {ordinance: False, old: True}
+    assert client.post(f"/temporary-documents/{ordinance}/keep", headers=employee).status_code == 400
     assert archive[0]["due_on"] == (today - timedelta(days=9)).isoformat() and archive[0]["days_left"] == -9
     assert archive[1]["days_left"] == 29
 
     kept = client.post(f"/temporary-documents/{old}/keep", headers=employee).json()
     assert kept["due_on"] == (today + timedelta(days=30)).isoformat()
     assert client.post(f"/temporary-documents/{recent}/keep", headers=employee).json()["due_on"] == (today + timedelta(days=59)).isoformat()
-    assert client.delete(f"/temporary-documents/{old}", headers=employee).status_code == 200
+    assert client.delete(f"/temporary-documents/{ordinance}", headers=employee).status_code == 200
     with SessionLocal() as db:
         assert db.get(models.Document, ids["Budget ordinance"]).archived is False  # the ordinance itself stays
 
@@ -98,7 +102,8 @@ def test_past_entries_are_archived_due_30_days_later_and_can_be_kept_longer():
 def test_due_archived_entries_are_flagged_in_notifications():
     ids, client, employee = prepare()
     today = lgu_today()
-    due = add_past(today - timedelta(days=31), document_id=ids["Budget ordinance"])
+    add_past(today - timedelta(days=31), document_id=ids["Budget ordinance"])  # ordinances are never archived
+    due = add_past(today - timedelta(days=31), title="Due MOA", original_filename="due.pdf")
     soon = add_past(today - timedelta(days=26), title="Soon MOA", original_filename="soon.pdf")
     add_past(today - timedelta(days=2), title="Fresh MOA", original_filename="fresh.pdf")
     items = {item["id"]: item for item in client.get("/notifications", headers=employee).json()["items"]}

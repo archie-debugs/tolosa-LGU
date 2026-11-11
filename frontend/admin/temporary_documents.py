@@ -1,6 +1,6 @@
 """Temporary documents on Documents for SB Members: ordinances and uploaded MOAs for one day.
 
-After its day an entry is archived for 30 days (Backends/backend/routes/temporary_documents.py);
+After its day an MOA is archived for 30 days; an ordinance is not (Backends/backend/routes/temporary_documents.py);
 the archive card lets an employee keep it 30 more days or delete it.
 """
 
@@ -44,11 +44,11 @@ class TemporaryDocuments:
         self.progress = ft.ProgressBar(value=None, visible=False)
         self.day_card = ft.Column([
             card_title(ft.Icons.HOURGLASS_TOP, "Temporary documents", self.count_text,
-                       subtitle="Ordinances and MOAs for this day only. After the day they move to the archive below."),
+                       subtitle="Ordinances and MOAs for this day only. After the day, MOAs move to the archive below."),
             self.notice_text, self.list_column, self.add_column,
         ], spacing=12)
         self.archive_card = ft.Column([
-            card_title(ft.Icons.INVENTORY_2_OUTLINED, "Archived temporary documents", self.due_badge,
+            card_title(ft.Icons.INVENTORY_2_OUTLINED, "Archived MOAs", self.due_badge,
                        subtitle="Kept 30 days after their day, then flagged here and in notifications. Keep or delete."),
             self.archive_column,
         ], spacing=12)

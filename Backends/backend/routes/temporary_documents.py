@@ -1,7 +1,8 @@
 """Temporary documents: ordinances and uploaded MOAs that employees set for SB Members for one day.
 
-Members see them with that day's documents (Backends/SBmem_backend). After the day an entry is
-archived; the ordinance itself stays an active document. An archived entry is due for deletion
+Members see them with that day's documents (Backends/SBmem_backend). After the day an MOA is
+archived; an ordinance is not (it stays an active document and its entry only stays on its day's
+list). An archived MOA is due for deletion
 TEMPORARY_KEEP_DAYS after it was archived, or on kept_until; nothing is deleted on its own: an
 employee deletes it or keeps it longer (notifications flag the due ones).
 """
@@ -56,6 +57,12 @@ def due_on(entry: models.TemporaryDocument) -> date:
     return max(due, entry.kept_until) if entry.kept_until else due
 
 
+def archived_moas(db: Session, today: date):
+    """MOAs whose day has passed. Ordinances are never archived."""
+    return db.query(models.TemporaryDocument).filter(
+        models.TemporaryDocument.scheduled_for < today, models.TemporaryDocument.document_id.is_(None))
+
+
 def entry_label(entry: models.TemporaryDocument) -> str:
     return entry.document.tracking_number if entry.document_id else f"MOA \"{entry.title}\""
 
@@ -67,7 +74,7 @@ def serialize(entry: models.TemporaryDocument, today: date) -> dict:
         "scheduled_for": entry.scheduled_for.isoformat(),
         "kind": "Ordinance" if entry.document_id else "MOA",
         "added_by": (entry.added_by.full_name or entry.added_by.username) if entry.added_by else None,
-        "archived": entry.scheduled_for < today,
+        "archived": entry.document_id is None and entry.scheduled_for < today,
     }
     if doc is not None:
         item.update(title=doc.title, document={
@@ -118,7 +125,7 @@ def list_day(scheduled_for: date | None = Query(default=None, alias="date"), db:
 def list_archive(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     require_permission(current_user, PERMISSION)
     today = lgu_today()
-    entries = db.query(models.TemporaryDocument).filter(models.TemporaryDocument.scheduled_for < today).all()
+    entries = archived_moas(db, today).all()
     entries.sort(key=lambda entry: (due_on(entry), entry.id))
     return {"today": today.isoformat(), "items": [serialize(entry, today) for entry in entries]}
 
@@ -213,8 +220,8 @@ def keep_longer(entry_id: int, db: Session = Depends(get_db), current_user: mode
     require_permission(current_user, PERMISSION)
     entry = _entry(db, entry_id)
     today = lgu_today()
-    if entry.scheduled_for >= today:
-        raise HTTPException(status_code=400, detail="Only archived temporary documents can be kept longer")
+    if entry.document_id or entry.scheduled_for >= today:
+        raise HTTPException(status_code=400, detail="Only archived MOAs can be kept longer")
     entry.kept_until = max(due_on(entry), today) + timedelta(days=TEMPORARY_KEEP_DAYS)
     _audit(db, current_user, "TEMPORARY_DOCUMENT_KEPT", entry, f"{entry_label(entry)} kept until {entry.kept_until.isoformat()}")
     db.commit()
