@@ -2145,6 +2145,7 @@ def main(page: ft.Page, session=None):
         if is_employee():
             return build_employee_settings_view(
                 page,
+                api=backend_api,
                 profile=profile,
                 change_password=open_change_password,
                 edit_profile=lambda: open_profile_dialog(page, edit_profile_dialog, backend_api, profile, on_saved=settings_profile_saved),

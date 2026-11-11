@@ -127,6 +127,8 @@ class FakeApi:
         self.calls.append((method, path))
         if path in self.fail:
             raise Exception("Super Administrator access required")
+        if path == "/system-link":
+            return {"url": "https://sb-tolosa.example", "qr_png_base64": "iVBORw0KGgo=", "qr_image_url": "https://api.example/system-link/qr"}
         if path == "/system-settings":
             return {"settings": {"organization_name": "LGU Tolosa", "maintenance_mode": False}}
         if path == "/system-health":
@@ -229,3 +231,51 @@ def test_announcements_have_their_own_page_linked_from_settings():
     assert not [c for c in walk(view) if isinstance(c, ft.TextField) and c.label == "Title"]
     buttons(view, "Open Announcements")[0].on_click(None)
     assert opened == ["Announcements"]
+
+
+def test_settings_share_the_system_link_and_its_qr_code():
+    page = DummyPage()
+    page.clipboard, page.launched = [], []
+    page.set_clipboard = page.clipboard.append
+    page.launch_url = page.launched.append
+    for view in (
+        build_super_admin_settings_view(page, api=FakeApi(), profile={**PROFILE, "role": "Super Administrator"}, change_password=lambda: None,
+                                        edit_profile=lambda: None, two_step=ft.Text(""), open_page=lambda _: None, pages=set()),
+        build_employee_settings_view(page, api=FakeApi(), profile=PROFILE, change_password=lambda: None, edit_profile=lambda: None),
+    ):
+        shown = words(view)
+        assert "Share the System" in shown and "https://sb-tolosa.example" in shown
+        assert any(isinstance(c, ft.Image) and c.src_base64 == "iVBORw0KGgo=" for c in walk(view))
+        buttons(view, "Copy link")[0].on_click(None)
+        assert "Link copied." in words(view)
+        buttons(view, "Open QR image")[0].on_click(None)
+    assert page.clipboard == ["https://sb-tolosa.example"] * 2
+    assert page.launched == ["https://api.example/system-link/qr"] * 2
+
+
+def test_the_backend_gives_the_system_link_and_its_qr_image(monkeypatch):
+    import base64
+
+    monkeypatch.setenv("FRONTEND_PUBLIC_URL", "https://sb-tolosa.example/")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.example")
+    reset_db()
+    add_user("clerk", "Employee", ["view_documents"])
+    client = TestClient(main.app)
+
+    link = client.get("/system-link", headers=headers_for(client, "clerk")).json()
+    assert link["url"] == "https://sb-tolosa.example"
+    assert base64.b64decode(link["qr_png_base64"])[1:4] == b"PNG"
+    assert link["qr_image_url"] == "https://api.example/system-link/qr"
+    shown = client.get("/system-link/qr")
+    # The app's strict default policy would leave the page unstyled; it allows only its own nonce'd style and script.
+    policy = shown.headers["content-security-policy"]
+    nonce = policy.split("'nonce-")[1].split("'")[0]
+    assert f'<style nonce="{nonce}">' in shown.text and f'<script nonce="{nonce}">' in shown.text
+    assert "img-src 'self' data:" in policy and 'onclick="' not in shown.text
+    assert shown.status_code == 200 and 'src="qr.png"' in shown.text and "data:image/png;base64" in shown.text and "https://sb-tolosa.example" in shown.text
+    image = client.get("/system-link/qr.png")
+    assert image.status_code == 200 and image.headers["content-type"] == "image/png"
+    assert client.get("/system-link").status_code == 401
+
+    monkeypatch.setenv("FRONTEND_PUBLIC_URL", "")
+    assert client.get("/system-link", headers=headers_for(client, "clerk")).status_code == 503
