@@ -229,7 +229,6 @@ def build_analytics_view(
             status = str(item.get("status") or "-")
             meta = [part for part in (item.get("document_type"), item.get("current_office"), item.get("date_registered")) if part]
             chips = [
-                *([widgets.chip(str(item["priority"]), ft.Colors.RED_700 if str(item["priority"]).lower() in {"high", "urgent"} else ft.Colors.BLUE_GREY_600)] if item.get("priority") else []),
                 widgets.chip(status, status_color(status)),
             ]
             text = [
