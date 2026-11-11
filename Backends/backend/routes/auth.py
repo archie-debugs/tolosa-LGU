@@ -22,12 +22,14 @@ from ..core import (
     get_default_permissions_for_role,
     OFFICE_WORKFLOW_PERMISSIONS,
     EMPLOYEE_BASE_PERMISSIONS,
+    is_temporary_email,
+    temporary_email,
     is_office_user,
     require_permission,
     require_user_management_permission,
     user_has_permission,
 )
-from ..authentication import get_current_user, get_current_user_for_user_management, oauth2_scheme, session_user
+from ..authentication import end_if_idle, get_current_user, get_current_user_for_user_management, oauth2_scheme, session_user
 from ..auth_jwt import create_access_token, create_refresh_token, decode_access_token, decode_refresh_token
 from .council import POSITIONS as COUNCIL_POSITIONS
 
@@ -128,13 +130,14 @@ async def register_user(
     role = data.get("role", "Employee")
     permissions = data.get("permissions")
 
-    if not username or not password or not full_name or not email:
-        raise HTTPException(status_code=400, detail="Full name, email, username, and password are required")
+    if not username or not password or not full_name:
+        raise HTTPException(status_code=400, detail="Full name, username, and password are required")
 
     username = str(username).strip()
-    email = str(email).strip()
     if not username:
-        raise HTTPException(status_code=400, detail="Full name, email, username, and password are required")
+        raise HTTPException(status_code=400, detail="Full name, username, and password are required")
+    # The user replaces a temporary email with their own and verifies it with Google in Settings.
+    email = str(email or "").strip() or temporary_email(username)
     if not EMAIL_PATTERN.match(email):
         raise HTTPException(status_code=400, detail="Enter a valid email address.")
     validate_reset_password(password)
@@ -241,6 +244,7 @@ def list_users(
             "full_name": getattr(user, "full_name", None) or user.username,
             "username": user.username,
             "email": getattr(user, "email", None) or None,
+            "email_verified": user.email_verified_at is not None,
             "office_id": getattr(user, "office_id", None),
             "department": user.office.name if getattr(user, "office", None) else None,
             "role": normalize_user_role(user.role),
@@ -351,6 +355,8 @@ def update_user(
     previous_username = user.username
     user.full_name = payload.full_name.strip()
     user.username = payload.username.strip()
+    if user.email != payload.email.strip():
+        user.email_verified_at = None
     user.email = payload.email.strip()
     user.office_id = office.id if office else None
     user.role = normalized_role
@@ -515,6 +521,9 @@ def _my_account(user: models.User) -> dict:
         "username": user.username,
         "full_name": getattr(user, "full_name", None) or None,
         "email": getattr(user, "email", None) or None,
+        "email_verified": user.email_verified_at is not None,
+        "email_temporary": is_temporary_email(user.email),
+        "avatar": user.avatar or None,
         "role": normalize_user_role(user.role),
         "office": user.office.name if getattr(user, "office", None) else None,
         "status": getattr(user, "status", None) or "Active",
@@ -549,7 +558,11 @@ def update_my_account(
         raise HTTPException(status_code=400, detail="Enter a valid email address.")
 
     user = db.query(models.User).filter(models.User.id == current_user.id).one()
+    if is_temporary_email(email) and email != user.email:
+        raise HTTPException(status_code=400, detail="Enter your own email address.")
     changed = [field for field, value in (("full_name", full_name), ("email", email)) if getattr(user, field) != value]
+    if "email" in changed:
+        user.email_verified_at = None  # the new address has to be verified again
     user.full_name = full_name
     user.email = email
     db.commit()
@@ -837,6 +850,7 @@ def refresh_access_token(
     expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
     if not session or session.revoked_at or not expires_at or expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Session is no longer active")
+    end_if_idle(db, session, datetime.now(timezone.utc))
     if not user or not getattr(user, "is_active", True) or getattr(user, "status", "Active") != "Active":
         raise HTTPException(status_code=401, detail="User no longer active")
 

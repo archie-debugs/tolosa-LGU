@@ -17,7 +17,9 @@ def open_edit_profile_dialog(page, dialog, api, profile, *, on_saved=None):
     ui = TrackingWidgets(page)
     field_style = _field_style(ui)
     name = ft.TextField(hint_text="e.g. Juan Dela Cruz", value=profile.get("full_name") or "", autofocus=True, **field_style)
-    email = ft.TextField(hint_text="name@example.com", value=profile.get("email") or "", **field_style)
+    temporary = bool(profile.get("email_temporary"))
+    # A temporary email starts the box empty, so the user types their own.
+    email = ft.TextField(hint_text="yourname@gmail.com", value="" if temporary else profile.get("email") or "", **field_style)
     message = _Notice()
 
     def close():
@@ -30,7 +32,8 @@ def open_edit_profile_dialog(page, dialog, api, profile, *, on_saved=None):
 
     def save():
         full_name = (name.value or "").strip()
-        address = (email.value or "").strip()
+        # Left empty, a temporary email stays until the user types their own.
+        address = (email.value or "").strip() or (profile.get("email") if temporary else "")
         if not full_name:
             show_error("Full name is required.")
             return
@@ -55,6 +58,12 @@ def open_edit_profile_dialog(page, dialog, api, profile, *, on_saved=None):
             ft.Row(
                 [ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=ui.muted_color()),
                  ft.Text("Your username, role and office are managed by the Super Admin.", size=11, color=ui.muted_color(), expand=True)],
+                spacing=8,
+            ),
+            ft.Row(
+                [ft.Icon(ft.Icons.MARK_EMAIL_UNREAD_OUTLINED, size=16, color=ui.muted_color()),
+                 ft.Text("Use your own Gmail or Google email. After saving, verify it with Google in Settings; "
+                         "a changed email has to be verified again.", size=11, color=ui.muted_color(), expand=True)],
                 spacing=8,
             ),
             message.box,

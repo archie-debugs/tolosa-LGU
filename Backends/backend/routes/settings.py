@@ -24,6 +24,11 @@ from ..database import get_db
 router = APIRouter()
 
 
+# The smallest and largest value each number setting may have.
+SETTING_RANGES = {"session_timeout_minutes": (5, 1440), "upload_max_size_mb": (1, 100)}
+SETTING_NAMES = {"session_timeout_minutes": "Session timeout (minutes)", "upload_max_size_mb": "Max upload size (MB)"}
+
+
 class SystemSettingsUpdate(BaseModel):
     settings: dict[str, Any]
 
@@ -45,14 +50,17 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
     if expected_type is int:
         if isinstance(value, bool):
             raise HTTPException(status_code=400, detail=f"Setting '{key}' must be an integer")
-        if isinstance(value, int):
-            return value
         if isinstance(value, str):
             try:
-                return int(value)
+                value = int(value)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Setting '{key}' must be an integer") from exc
-        raise HTTPException(status_code=400, detail=f"Setting '{key}' must be an integer")
+        if not isinstance(value, int):
+            raise HTTPException(status_code=400, detail=f"Setting '{key}' must be an integer")
+        low, high = SETTING_RANGES.get(key, (None, None))
+        if low is not None and not low <= value <= high:
+            raise HTTPException(status_code=400, detail=f"{SETTING_NAMES[key]} must be {low} to {high}")
+        return value
 
     if expected_type is str:
         if value is None:
@@ -141,6 +149,21 @@ def _load_settings(db: Session) -> dict[str, Any]:
     return settings
 
 
+def max_upload_bytes(db: Session) -> int:
+    """The Max Upload Size setting, in bytes."""
+    return _load_settings(db)["upload_max_size_mb"] * 1024 * 1024
+
+
+def too_large(db: Session) -> str:
+    return f"The file is larger than the {_load_settings(db)['upload_max_size_mb']} MB upload limit."
+
+
+def require_public_portal(db: Session = Depends(get_db)) -> None:
+    """The public pages' data is closed while Public Portal Enabled is off; staff login and QR scanning stay open."""
+    if not _load_settings(db)["public_portal_enabled"]:
+        raise HTTPException(status_code=503, detail="The public portal is closed for now.")
+
+
 def retention_months(db: Session) -> dict[str, int | None]:
     """Months each document type is kept after it is archived; None keeps it permanently."""
     return _load_settings(db)["retention_months"]
@@ -193,7 +216,14 @@ def update_system_settings(
     return {"message": "System settings updated", "settings": settings}
 
 
-@router.get("/public/announcements", tags=["public"])
+@router.get("/public/site", tags=["public"])
+def get_public_site(db: Session = Depends(get_db)):
+    """What the login page and public pages show before anyone signs in: the names, and whether the portal is open."""
+    settings = _load_settings(db)
+    return {key: settings[key] for key in ("organization_name", "system_name", "public_portal_enabled")}
+
+
+@router.get("/public/announcements", tags=["public"], dependencies=[Depends(require_public_portal)])
 def get_public_announcements(db: Session = Depends(get_db)):
     """The homepage's announcements; anyone may read them."""
     return {"announcements": _load_settings(db)["homepage_announcements"]}

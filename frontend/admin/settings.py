@@ -8,6 +8,8 @@ import inspect
 
 import flet as ft
 
+from frontend.admin.registration import error_detail, upload_finished
+
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
 
 LABEL_WIDTH = 150
@@ -51,13 +53,15 @@ def initials(profile):
     return "".join(part[0] for part in name.split()[:2]).upper() or "?"
 
 
-def build_employee_settings_view(page, *, profile, change_password, edit_profile, api=None):
+def build_employee_settings_view(page, *, profile, change_password, edit_profile, api=None, files=None, reload=None):
     """`profile` is GET /auth/me. `change_password()` and `edit_profile()` open the existing dialogs.
-    With `api` the page also offers the system's link and QR code to share."""
+    With `api` the page also offers the system's link and QR code to share, and with `files` (a PickerFiles)
+    and `reload()` (rebuilds Settings) the profile picture and email verification."""
     ui = TrackingWidgets(page)
     return _settings_page(ui, "Your profile, password and preferences.", left=[
         _profile_card(ui, profile, edit_profile,
-                      note="Your role, office and permissions are managed by a Super Administrator."),
+                      note="Your role, office and permissions are managed by a Super Administrator.",
+                      account=_Account(page, api, files, reload) if api and files and reload else None),
         _preferences_card(ui),
     ], right=[
         _card(ui, "Change Password", "Keep your account secure.", ft.Icons.LOCK_RESET, [
@@ -73,13 +77,15 @@ def build_employee_settings_view(page, *, profile, change_password, edit_profile
     ])
 
 
-def build_super_admin_settings_view(page, *, api, profile, change_password, edit_profile, two_step, open_page, pages):
+def build_super_admin_settings_view(page, *, api, profile, change_password, edit_profile, two_step, open_page, pages,
+                                    files=None, reload=None):
     """`api(method, path, **kwargs)` returns parsed JSON or raises with the backend's detail.
-    `two_step` is the two-step login row. `open_page(label)` opens a sidebar page; `pages` are the labels this user has."""
+    `two_step` is the two-step login row. `open_page(label)` opens a sidebar page; `pages` are the labels this user has.
+    `files` (a PickerFiles) and `reload()` (rebuilds Settings) add the profile picture and email verification."""
     ui = TrackingWidgets(page)
     links = [entry for entry in ADMIN_PAGES if entry[3] in pages]
     return _settings_page(ui, "Your account, administration and system configuration.", left=[
-        _profile_card(ui, profile, edit_profile),
+        _profile_card(ui, profile, edit_profile, account=_Account(page, api, files, reload) if files and reload else None),
         _card(ui, "Security & Sessions", "Your password, two-step login and sign-ins.", ft.Icons.SHIELD_OUTLINED, [
             _row(ui, "Password", ft.OutlinedButton("Change password", icon=ft.Icons.LOCK_RESET, on_click=lambda _: change_password())),
             two_step,
@@ -153,25 +159,137 @@ def _note(ui, text, icon=ft.Icons.INFO_OUTLINE):
     )
 
 
-def _profile_card(ui, profile, edit_profile, note=None):
+def profile_picture(profile, size=72):
+    """The profile picture as a circle, or the name's initials when there is none."""
+    if profile.get("avatar"):
+        return ft.Container(
+            content=ft.Image(src_base64=profile["avatar"], width=size, height=size, fit=ft.ImageFit.COVER),
+            width=size, height=size, border_radius=size / 2, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        )
+    return ft.Container(
+        content=ft.Text(initials(profile), size=round(size / 3), weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+        width=size, height=size, border_radius=size / 2,
+        alignment=ft.Alignment(0, 0),
+        gradient=ft.LinearGradient(begin=ft.Alignment(-1, -1), end=ft.Alignment(1, 1), colors=["#1A56B5", "#0E3A86"]),
+    )
+
+
+class _Account:
+    """Changing your profile picture and verifying your email with Google, from the profile card."""
+
+    def __init__(self, page, api, files, reload):
+        self.page, self.api, self.files, self.reload = page, api, files, reload
+        self.message = ft.Text("", size=12, visible=False)
+
+    def say(self, text, error=True):
+        self.message.value, self.message.visible = text, bool(text)
+        self.message.color = ft.Colors.RED_700 if error else ft.Colors.GREEN_700
+        self.page.update()
+
+    def pick_picture(self, _=None):
+        self.files.pick(False, self.picked, extensions=["jpg", "jpeg", "png"])
+
+    def picked(self, chosen):
+        if not chosen:
+            return
+        item = chosen[0]
+        try:
+            created = self.api("POST", "/documents/uploads/create_tmp_uploads",
+                               json={"purpose": "avatar", "files": [{"filename": item["name"], "size": item["size"]}]})
+        except Exception as exc:
+            self.say(f"The picture could not be prepared for upload: {error_detail(exc)[0]}")
+            return
+        staged = (created.get("files") or [{}])[0]
+        if not staged.get("ok"):
+            self.say("Use a JPG or PNG picture.")
+            return
+        self.say("Uploading…", error=False)
+        done = []
+
+        def on_progress(name, value, error):
+            if done:
+                return
+            if error:
+                done.append(True)
+                self.say(f"The upload failed: {error}")
+            elif upload_finished(value):
+                done.append(True)
+                self.save_picture(staged["tmp_name"])
+
+        self.files.upload([(item["name"], staged["upload_url"])], on_progress)
+
+    def save_picture(self, tmp_name):
+        try:
+            self.api("POST", "/auth/me/avatar", json={"tmp_name": tmp_name})
+        except Exception as exc:
+            self.say(f"Unable to save the picture: {error_detail(exc)[0]}")
+            return
+        self.reload()
+
+    def remove_picture(self, _=None):
+        try:
+            self.api("DELETE", "/auth/me/avatar")
+        except Exception as exc:
+            self.say(f"Unable to remove the picture: {error_detail(exc)[0]}")
+            return
+        self.reload()
+
+    def verify_with_google(self, _=None):
+        try:
+            link = self.api("POST", "/auth/me/email/google")["url"]
+        except Exception as exc:
+            self.say(error_detail(exc)[0])
+            return
+        self.page.launch_url(link)
+        self.say("Finish signing in to Google in the new tab, then press Check again.", error=False)
+
+
+def _email_status(ui, profile):
+    if profile.get("email_temporary"):
+        return ui.chip("Temporary", ft.Colors.RED_700)
+    if profile.get("email_verified"):
+        return ui.chip("Verified", ft.Colors.GREEN_700)
+    return ui.chip("Not verified", ft.Colors.AMBER_800)
+
+
+def _verify_email_box(ui, profile, account):
+    """What the user still has to do to verify their email, with the buttons to do it."""
+    if profile.get("email_temporary"):
+        text = ("Your account was made with a temporary email. Press Edit profile and change it to your own Gmail or Google "
+                "email, then verify it here with Google.")
+    else:
+        text = "Prove this email is yours: press Verify with Google and sign in to Google with this email."
+    return ft.Column([
+        _note(ui, text, ft.Icons.MARK_EMAIL_UNREAD_OUTLINED),
+        ft.Row([
+            ft.FilledButton("Verify with Google", icon=ft.Icons.VERIFIED_USER_OUTLINED, on_click=account.verify_with_google,
+                            disabled=bool(profile.get("email_temporary"))),
+            ft.OutlinedButton("Check again", icon=ft.Icons.REFRESH, on_click=lambda _: account.reload()),
+        ], spacing=8, wrap=True),
+    ], spacing=10)
+
+
+def _profile_card(ui, profile, edit_profile, note=None, account=None):
     hint = "You can change your name and email."
     if note:
         hint = f"{hint} {note}"
     chips = [ui.chip(profile.get("role") or "No role", ft.Colors.BLUE_700)]
     chips.append(ui.chip(profile.get("office") or "Not assigned", ft.Colors.TEAL_700 if profile.get("office") else ft.Colors.BLUE_GREY_500))
+    picture_buttons = []
+    if account:
+        picture_buttons = [ft.Row([
+            ft.TextButton("Change picture", icon=ft.Icons.PHOTO_CAMERA_OUTLINED, on_click=account.pick_picture),
+            *([ft.TextButton("Remove", icon=ft.Icons.DELETE_OUTLINE, on_click=account.remove_picture)] if profile.get("avatar") else []),
+        ], spacing=0, wrap=True)]
     identity = ft.Row(
         [
-            ft.Container(
-                content=ft.Text(initials(profile), size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                width=72, height=72, border_radius=36,
-                alignment=ft.Alignment(0, 0),
-                gradient=ft.LinearGradient(begin=ft.Alignment(-1, -1), end=ft.Alignment(1, 1), colors=["#1A56B5", "#0E3A86"]),
-            ),
+            profile_picture(profile),
             ft.Column(
                 [
                     ft.Text(profile.get("full_name") or "Not provided", size=19, weight=ft.FontWeight.BOLD, color=ui.link_color()),
                     ft.Text(f"@{profile.get('username') or 'Not provided'}", size=13, color=ui.muted_color()),
                     ft.Row(chips, spacing=6, wrap=True),
+                    *picture_buttons,
                 ],
                 spacing=4,
                 expand=True,
@@ -188,7 +306,10 @@ def _profile_card(ui, profile, edit_profile, note=None):
             ft.Divider(height=1, color=ui.line_color()),
             _row(ui, "Full name", _value(ui, profile.get("full_name") or "Not provided")),
             _row(ui, "Username", _value(ui, profile.get("username") or "Not provided")),
-            _row(ui, "Email", _value(ui, profile.get("email") or "Not provided")),
+            _row(ui, "Email", ft.Row([_value(ui, profile.get("email") or "Not provided"), _email_status(ui, profile)],
+                                     spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)),
+            *([_verify_email_box(ui, profile, account)] if account and not profile.get("email_verified") else []),
+            *([account.message] if account else []),
             _row(ui, "Role", _value(ui, profile.get("role") or "Not provided")),
             _row(ui, "Office", _value(ui, profile.get("office") or "Not assigned")),
             _row(ui, "Account created", _value(ui, format_datetime(profile.get("created_at")))),

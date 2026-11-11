@@ -96,7 +96,8 @@ def render_shell(
     `panel_title` is the line under "SB Tolosa" in the sidebar header.
 
     `account` describes the signed-in user for the profile menu:
-    {"name", "role", "office", "on_change_password"}; missing keys fall back to `current_user`.
+    {"name", "role", "office", "avatar", "on_change_password", "notice"}; missing keys fall back to `current_user`.
+    "avatar" is the profile picture (base64 JPEG); "notice" a control shown above every page.
     `notifications` adds a bell: {"load": () -> {"unread", "items"}, "seen": () -> None, "open": item -> None}.
     """
     account = account or {}
@@ -197,8 +198,10 @@ def render_shell(
             view.expand = False
         return view
 
+    # A message above every page, such as the reminder to verify your email.
+    notice = [account["notice"]] if account.get("notice") is not None else []
     content_scroll = ft.Column(
-        controls=[natural_height_view(content_view)] if content_view is not None else [],
+        controls=[*notice, natural_height_view(content_view)] if content_view is not None else notice,
         expand=True,
         scroll=ft.ScrollMode.AUTO,
         on_scroll_interval=30,  # a pull past the top is followed closely; plain scrolling sends little
@@ -285,7 +288,7 @@ def render_shell(
                 border_radius=8,
             )
 
-        content_scroll.controls = [next_view]
+        content_scroll.controls = [*notice, next_view]
 
         try:
             page.update()
@@ -654,7 +657,10 @@ def render_shell(
         name = account.get("name") or current_user or "Signed in"
         muted = ft.Colors.BLUE_GREY_300 if is_dark else ft.Colors.BLUE_GREY_500
 
-        avatar = ft.CircleAvatar(
+        avatar = ft.Container(
+            content=ft.Image(src_base64=account["avatar"], width=32, height=32, fit=ft.ImageFit.COVER),
+            width=32, height=32, border_radius=16, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        ) if account.get("avatar") else ft.CircleAvatar(
             content=ft.Text(initials(name), size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
             bgcolor=ft.Colors.BLUE_700,
             radius=16,

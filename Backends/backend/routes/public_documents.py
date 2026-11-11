@@ -11,6 +11,7 @@ from ..core import LGU_TIMEZONE, lgu_today
 from ..database import get_db
 from ..tracking_numbers import tracking_numbers_for_query
 from .measure_stages import stage_summary
+from .settings import require_public_portal
 
 
 def _as_lgu(value):
@@ -18,9 +19,10 @@ def _as_lgu(value):
     return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(LGU_TIMEZONE)
 
 
-router = APIRouter(prefix="/public/documents", tags=["public"])
+# Both close while Public Portal Enabled is off.
+router = APIRouter(prefix="/public/documents", tags=["public"], dependencies=[Depends(require_public_portal)])
 # Public figures that are not about one document, such as the homepage counts.
-stats_router = APIRouter(prefix="/public", tags=["public"])
+stats_router = APIRouter(prefix="/public", tags=["public"], dependencies=[Depends(require_public_portal)])
 
 
 def _public_pdf(db: Session, document_id: int) -> models.Attachment | None:

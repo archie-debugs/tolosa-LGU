@@ -17,7 +17,7 @@ from ..auth_jwt import create_download_token, create_preview_token, decode_downl
 from ..authentication import authenticate_access_token, bearer_token, ensure_active_user, get_current_user, reject_sb_members
 from .measure_stages import add_stage_change, registration_stage, stage_summary
 from ..retention import MAX_EXTENSION_MONTHS, extend_retention, retain_until
-from .settings import retention_months
+from .settings import max_upload_bytes, retention_months, too_large
 from ..tracking_numbers import DOCUMENT_TYPES, file_name_type_problem, next_tracking_number, standard_document_type, tracking_numbers_for_query
 import uuid
 import threading
@@ -64,7 +64,8 @@ LEGISLATIVE_NUMBER_PATTERN = re.compile(r"(?i)\b(?:ordinance|resolution)\s+(?:no
 # bulk registration settings
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 ALLOWED_MIME_TYPES = {"application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB per file
+# The most Max Upload Size may be set to; the setting itself is the limit (max_upload_bytes).
+MAX_FILE_SIZE = 100 * 1024 * 1024
 # Photos or scans of a document's pages. The web app stages them like documents, and they are stored
 # as PDFs (_images_to_pdf), so everything after registering sees an ordinary PDF.
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
@@ -116,6 +117,9 @@ def _is_allowed_file(filename: str, content_type: str | None) -> tuple[bool, lis
         # don't treat mime mismatch as fatal if extension is correct, but warn
         errors.append("Unexpected MIME type")
     return (len(errors) == 0), errors
+
+
+AVATAR_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
 def _tmp_meta(safe_name: str) -> dict:
@@ -175,8 +179,9 @@ async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Q
             if not auth_user:
                 raise HTTPException(status_code=401, detail="Upload token user not found")
             ensure_active_user(auth_user)
-            # enforce permission for resolved user
-            _require_upload_permission(auth_user)
+            # enforce permission for resolved user; a profile picture needs none (create_tmp_uploads checked its type)
+            if meta.get("purpose") != "avatar":
+                _require_upload_permission(auth_user)
         else:
             # fallback to Authorization/JWT path
             auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
@@ -212,8 +217,8 @@ async def upload_tmp_file(tmp_name: str, request: Request, token: str | None = Q
         size = len(body)
         if size == 0:
             raise HTTPException(status_code=400, detail="Empty upload")
-        if size > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
+        if size > max_upload_bytes(db):
+            raise HTTPException(status_code=413, detail=too_large(db))
 
         os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
         dest_path = os.path.join(TEMP_UPLOAD_DIR, safe_name)
@@ -283,8 +288,8 @@ def validate_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(
             size = os.path.getsize(path)
             if size == 0:
                 errors.append("Empty file")
-            if size > MAX_FILE_SIZE:
-                errors.append("File exceeds maximum allowed size")
+            if size > max_upload_bytes(db):
+                errors.append(too_large(db))
             _, ext = os.path.splitext(safe_name.lower())
             if ext not in STAGED_EXTENSIONS:
                 errors.append("Unsupported file extension")
@@ -307,9 +312,12 @@ def create_tmp_uploads(payload: dict = Body(...), db: Session = Depends(get_db),
     """Create server-side temporary upload entries and return per-file upload URLs with short-lived upload tokens.
     Payload: {"files": [{"filename": "...", "size": 123}, ...]}
     """
-    _require_upload_permission(current_user)
+    # Everyone may upload their own profile picture (POST /auth/me/avatar); documents need an upload permission.
+    avatar = payload.get("purpose") == "avatar"
+    if not avatar:
+        _require_upload_permission(current_user)
     files = payload.get("files") or []
-    if not isinstance(files, list) or not files:
+    if not isinstance(files, list) or not files or (avatar and len(files) != 1):
         raise HTTPException(status_code=400, detail="files list required")
 
     os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
@@ -318,7 +326,7 @@ def create_tmp_uploads(payload: dict = Body(...), db: Session = Depends(get_db),
         filename = f.get("filename") or ""
         safe_basename = os.path.basename(filename)
         _, ext = os.path.splitext(safe_basename.lower())
-        if ext not in STAGED_EXTENSIONS:
+        if ext not in (AVATAR_EXTENSIONS if avatar else STAGED_EXTENSIONS):
             results.append({"filename": filename, "ok": False, "reason": "Unsupported extension"})
             continue
         # generate tmp name and upload token
@@ -334,6 +342,7 @@ def create_tmp_uploads(payload: dict = Body(...), db: Session = Depends(get_db),
             "expires_at": expires_at,
             "consumed_at": None,
             "consumed_by": None,
+            "purpose": "avatar" if avatar else "document",
         }
         meta_path = os.path.join(TEMP_UPLOAD_DIR, f"{tmp_name}.meta.json")
         try:
@@ -465,8 +474,8 @@ def confirm_bulk_register_tmp(payload: dict = Body(...), db: Session = Depends(g
             size = len(content)
             if size == 0:
                 raise Exception("Empty file")
-            if size > MAX_FILE_SIZE:
-                raise Exception("File exceeds maximum allowed size")
+            if size > max_upload_bytes(db):
+                raise Exception(too_large(db))
             checksum = hashlib.sha256(content).hexdigest()
             duplicate_documents = _documents_with_checksum(db, checksum)
             if duplicate_documents:
@@ -589,8 +598,8 @@ def validate_bulk_register(files: list[UploadFile] = File(...), db: Session = De
             is_allowed, errors = _is_allowed_file(filename, content_type)
             if size == 0:
                 errors.append("Empty file")
-            if size > MAX_FILE_SIZE:
-                errors.append("File exceeds maximum allowed size")
+            if size > max_upload_bytes(db):
+                errors.append(too_large(db))
             valid = len(errors) == 0 and is_allowed
             if valid:
                 valid_count += 1
@@ -661,8 +670,8 @@ def confirm_bulk_register(files: list[UploadFile] = File(...),
             is_allowed, errors = _is_allowed_file(filename, content_type)
             if size == 0:
                 errors.append("Empty file")
-            if size > MAX_FILE_SIZE:
-                errors.append("File exceeds maximum allowed size")
+            if size > max_upload_bytes(db):
+                errors.append(too_large(db))
             if not is_allowed or errors:
                 raise Exception("; ".join(errors))
             checksum = hashlib.sha256(content).hexdigest()
@@ -2222,8 +2231,8 @@ def register_document(
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status_code=400, detail="Unsupported file type. Upload a PDF, DOC, or DOCX file.")
         uploaded_content = file.file.read(MAX_FILE_SIZE + 1)
-        if len(uploaded_content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
+        if len(uploaded_content) > max_upload_bytes(db):
+            raise HTTPException(status_code=413, detail=too_large(db))
         uploaded_checksum = hashlib.sha256(uploaded_content).hexdigest()
         duplicate_documents = _documents_with_checksum(db, uploaded_checksum)
         if duplicate_documents:
@@ -3750,8 +3759,8 @@ def _checked_upload(db: Session, current_user, file: UploadFile | None, tmp_name
 
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File exceeds maximum allowed size")
+    if len(content) > max_upload_bytes(db):
+        raise HTTPException(status_code=413, detail=too_large(db))
 
     checksum = hashlib.sha256(content).hexdigest()
     duplicate = db.query(models.Attachment).filter(models.Attachment.checksum == checksum)

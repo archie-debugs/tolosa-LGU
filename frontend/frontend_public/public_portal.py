@@ -54,6 +54,8 @@ def load_public_documents(page=1, page_size=10, search="", document_type="All Ty
         if year and year != "All Years":
             params["year"] = year
         response = requests.get(f"{BACKEND_URL}/public/documents", params=params, timeout=5)
+        if response.status_code == 503:
+            return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1, "closed": True}
         response.raise_for_status()
         payload = response.json()
         if isinstance(payload, dict) and isinstance(payload.get("items"), list):
@@ -178,7 +180,8 @@ def _reference(document) -> str:
 
 def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Column:
     """`search` fills the search box, for a search started on the homepage."""
-    from frontend.Frontend_Homepage.page import NARROW_WIDTH
+    from frontend.Frontend_Homepage.page import NARROW_WIDTH, PORTAL_CLOSED, load_site
+    site = load_site()
 
     is_dark = False
     if page is not None:
@@ -522,13 +525,14 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
             last=last,
         )
 
-    def empty_state():
+    def empty_state(closed=None):
+        """No documents; `closed` is the message shown instead while the public portal is closed."""
         return ft.Container(
             content=ft.Column(
                 [
-                    icon_badge(ft.Icons.FOLDER_OPEN_OUTLINED, size=56),
-                    ft.Text("No documents found", size=16, weight=ft.FontWeight.BOLD, color=navy),
-                    ft.Text("Try a different keyword, or clear the filters to see every public document.", size=13, color=muted, text_align=ft.TextAlign.CENTER),
+                    icon_badge(ft.Icons.LOCK_OUTLINE if closed else ft.Icons.FOLDER_OPEN_OUTLINED, size=56),
+                    ft.Text("Public records are closed" if closed else "No documents found", size=16, weight=ft.FontWeight.BOLD, color=navy),
+                    ft.Text(closed or "Try a different keyword, or clear the filters to see every public document.", size=13, color=muted, text_align=ft.TextAlign.CENTER),
                 ],
                 spacing=8,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -568,7 +572,7 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
         table_rows.controls = [
             document_row(document, last=index == len(visible_documents) - 1)
             for index, document in enumerate(visible_documents)
-        ] or [empty_state()]
+        ] or [empty_state(PORTAL_CLOSED if payload.get("closed") else None)]
         table_header.visible = bool(visible_documents)
         last_document = min(first_document + len(visible_documents) - 1, total_documents) if total_documents else 0
         result_count.value = (
@@ -682,8 +686,8 @@ def build_public_portal(page: ft.Page | None = None, search: str = "") -> ft.Col
                 ft.Container(
                     content=ft.Column(
                         [
-                            theme.brand(subtitle="Municipality of Tolosa", on_blue=True, seal_size=40),
-                            ft.Text("Legislative Document Tracking Management System", size=12, color=theme.ON_BLUE_MUTED),
+                            theme.brand(subtitle=site["organization_name"], on_blue=True, seal_size=40),
+                            ft.Text(site["system_name"], size=12, color=theme.ON_BLUE_MUTED),
                         ],
                         spacing=10,
                     ),
