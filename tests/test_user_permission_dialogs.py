@@ -43,8 +43,14 @@ def fire(control, event_name, value=None):
             fn(event)
 
 
-def open_users_page(monkeypatch):
+def open_users_page(monkeypatch, extra=()):
     reset_db()
+    with SessionLocal() as db:
+        office_id = db.query(models.Office.id).scalar()
+        for username, role, permissions, in_office in extra:
+            db.add(models.User(username=username, hashed_password="x", role=role, full_name=username.title(), email=f"{username}@example.com",
+                               permissions=str(permissions), status="Active", is_active=True, office_id=office_id if in_office else None))
+        db.commit()
     monkeypatch.setattr(admin_app.requests, "Session", BackendSession)
     page = AppPage()
     admin_app.main(page, session=login(TestClient(main.app), "admin"))
@@ -74,14 +80,20 @@ def saved_permissions(username):
         return ast.literal_eval(db.query(models.User).filter_by(username=username).one().permissions)
 
 
-def test_create_user_starts_with_nothing_on_and_saves_only_what_was_turned_on(monkeypatch):
+BASE = ["View Documents", "Search Documents", "Filter Documents", "View Document Details", "Download Documents", "Print Documents"]
+BASE_KEYS = ["download_documents", "filter_documents", "print_documents", "search_documents", "view_document_details", "view_documents"]
+
+
+def test_create_user_starts_with_only_the_basic_document_permissions_on_and_saves_what_was_turned_on(monkeypatch):
     page = open_users_page(monkeypatch)
     click(button(page.controls[0], "Create User"))
     form = dialog(page)
 
     listed = switches(form)
     assert "Register Documents" in listed and "View Users" in listed
-    assert not any(switch.value for switch in listed.values())
+    # The basic document permissions are on and can't be switched off; nothing else is on.
+    assert all(listed[label].value and listed[label].disabled for label in BASE)
+    assert not any(switch.value for label, switch in listed.items() if label not in BASE)
     assert "Add new documents and upload their files." in texts(form)
 
     fire(listed["Register Documents"], "on_change", True)
@@ -90,7 +102,7 @@ def test_create_user_starts_with_nothing_on_and_saves_only_what_was_turned_on(mo
         field.value = value
     click(button(form, "Create Account"))
 
-    assert saved_permissions("newclerk") == ["register_documents"]
+    assert saved_permissions("newclerk") == sorted(BASE_KEYS + ["register_documents"])
 
 
 def test_choosing_an_office_adds_office_permissions_all_on_above_the_general_ones(monkeypatch):
@@ -139,4 +151,62 @@ def test_edit_user_keeps_general_permissions_when_an_office_is_assigned(monkeypa
     click(button(dialog(page), "Save Changes"))
     office = ["view_office_documents", "search_office_documents", "view_office_document_details", "scan_qr",
               "pass_office_documents", "confirm_document_receipt", "view_office_history"]
-    assert saved_permissions("clerk") == sorted(set(office) | {"view_documents", "delete_documents", "register_documents"})
+    assert saved_permissions("clerk") == sorted(set(office) | set(BASE_KEYS) | {"delete_documents", "register_documents"})
+
+
+def dropdown(page, name):
+    return next(c for c in walk(page.controls[0]) if isinstance(c, ft.Dropdown) and c.data == name)
+
+
+def listed_usernames(page):
+    table = next(c for c in walk(page.controls[0]) if isinstance(c, ft.DataTable) and c.rows and "Username" in texts(c.columns[2].label))
+    return [texts(row.cells[2].content)[0] for row in table.rows]
+
+
+def test_the_user_table_shows_10_at_a_time_and_filters_by_office_user_and_permission(monkeypatch):
+    extra = [("desk", "Employee", ["scan_qr", "pass_office_documents"], True)]
+    extra += [(f"emp{number:02}", "Employee", BASE_KEYS, False) for number in range(12)]
+    page = open_users_page(monkeypatch, extra)
+
+    assert len(listed_usernames(page)) == 10 and "Showing 10 of 15 users" in texts(page.controls[0])
+    fire(dropdown(page, "Show"), "on_change", "All")
+    assert len(listed_usernames(page)) == 15
+
+    fire(dropdown(page, "Role"), "on_change", "Office User")
+    assert listed_usernames(page) == ["desk"]
+    assert "Office User" in [c.value for c in walk_tables(page.controls[0]) if isinstance(c, ft.Text)]
+    fire(dropdown(page, "Role"), "on_change", "All")
+
+    # Accounts store permission keys; the filter matches them by label. Typing in it shows the text.
+    permission = dropdown(page, "Permission")
+    assert permission.editable and permission.enable_filter
+    fire(permission, "on_change", "Delete Documents")
+    assert listed_usernames(page) == ["clerk"]
+
+
+def test_an_office_user_can_only_be_given_office_permissions(monkeypatch):
+    page = open_users_page(monkeypatch, [("desk", "Employee", ["scan_qr"], True)])
+    row = next(r for c in walk_tables(page.controls[0]) for r in getattr(c, "rows", None) or []
+               if "desk" in [t for cell in r.cells for t in texts(cell.content)])
+    next(c for cell in row.cells for c in walk(cell.content) if isinstance(c, ft.PopupMenuItem) and texts(c) == ["Edit"]).on_click(None)
+    form = dialog(page)
+
+    listed = switches(form)
+    assert "Register Documents" not in listed and "View Documents" not in listed and listed["Scan QR"].value
+    office = next(c for c in walk(form) if isinstance(c, ft.Dropdown) and c.value == "Records Office")
+    assert "Unassigned" not in [option.key or option.text for option in office.options]
+    fire(listed["Pass Office Documents"], "on_change", True)
+    click(button(dialog(page), "Save Changes"))
+    assert saved_permissions("desk") == ["pass_office_documents", "scan_qr"]
+
+    # The backend refuses employee permissions for an office user too.
+    client = TestClient(main.app)
+    with SessionLocal() as db:
+        desk = db.query(models.User).filter_by(username="desk").one()
+        desk_id, office_id = desk.id, desk.office_id
+    token = client.post("/auth/login", data={"username": "admin", "password": "pw123"}).json()["access_token"]
+    refused = client.put(f"/auth/users/{desk_id}", headers={"Authorization": f"Bearer {token}"}, json={
+        "full_name": "Desk", "username": "desk", "email": "desk@example.com", "role": "Employee", "status": "Active",
+        "office_id": office_id, "permissions": ["scan_qr", "register_documents"],
+    })
+    assert refused.status_code == 400 and "office permissions" in refused.json()["detail"]

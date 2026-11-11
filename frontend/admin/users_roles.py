@@ -1,5 +1,6 @@
 import flet as ft
 
+from frontend.admin.permission_picker import permission_key
 from frontend.admin.tracking_ui import TrackingWidgets, local_time
 
 
@@ -80,6 +81,24 @@ SB_MEMBER_PERMISSIONS = [
     "Print Documents",
 ]
 
+# Every employee except an office user has these, and they cannot be turned off (the backend adds them).
+EMPLOYEE_BASE_PERMISSIONS = list(SB_MEMBER_PERMISSIONS)
+EMPLOYEE_BASE_KEYS = frozenset(permission_key(label) for label in EMPLOYEE_BASE_PERMISSIONS)
+OFFICE_PERMISSION_KEYS = frozenset(permission_key(label) for labels in OFFICE_EMPLOYEE_PERMISSION_GROUP.values() for label in labels)
+OFFICE_USER = "Office User"
+
+
+def is_office_user(user):
+    """An Employee with an office and only office permissions (Create Office User Account).
+    Same rule as is_office_user in Backends/backend/core.py."""
+    return (user.get("role") == "Employee" and user.get("office_id") not in (None, "")
+            and {permission_key(item) for item in (user.get("permissions") or [])} <= OFFICE_PERMISSION_KEYS)
+
+
+def display_role(user):
+    """The role shown and filtered on: office users are told apart from other employees."""
+    return OFFICE_USER if is_office_user(user) else user.get("role", "Employee")
+
 
 # Both tables: a tinted heading row and light lines between the rows.
 TABLE_STYLE = {
@@ -115,6 +134,10 @@ def _role_badge(role):
         color = ft.Colors.PURPLE_50
         border = ft.Colors.PURPLE_100
         text_color = ft.Colors.PURPLE_800
+    elif role_text == OFFICE_USER:
+        color = ft.Colors.TEAL_50
+        border = ft.Colors.TEAL_100
+        text_color = ft.Colors.TEAL_800
     return ft.Container(
         content=ft.Text(role_text, size=11, weight=ft.FontWeight.W_600, color=text_color),
         padding=ft.Padding(left=10, top=5, right=10, bottom=5),
@@ -216,7 +239,7 @@ def _user_card(user, actions):
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.START,
                 ),
-                ft.Row([_role_badge(user.get("role", "Employee")), _account_status_cell(user, status)], spacing=6, run_spacing=6, wrap=True),
+                ft.Row([_role_badge(display_role(user)), _account_status_cell(user, status)], spacing=6, run_spacing=6, wrap=True),
                 ft.Text(f"Office: {office} · Last login: {_format_timestamp(user.get('last_login'))}", size=11, color=ft.Colors.BLUE_GREY_600),
             ],
             spacing=6,
@@ -273,7 +296,7 @@ def build_users_roles_table(
                         )
                     ),
                     ft.DataCell(ft.Text(username, size=12)),
-                    ft.DataCell(_role_badge(role)),
+                    ft.DataCell(_role_badge(display_role(user))),
                     ft.DataCell(ft.Text(user.get("department") or "-", size=12)),
                     ft.DataCell(_account_status_cell(user, status)),
                     ft.DataCell(ft.Text(_permission_summary(user), size=12, color=ft.Colors.BLUE_GREY_700)),
@@ -406,6 +429,8 @@ def build_users_roles_view(
     office_table_holder=None,
     create_employee=None,
     unlock_user=None,
+    page_size_filter=None,
+    count_text=None,
 ):
     user_rows = []
     for user in users_data:
@@ -502,6 +527,8 @@ def build_users_roles_view(
         no_users = no_users_notice
 
     widgets = TrackingWidgets(page)
+    if count_text is not None:
+        count_text.size, count_text.color = 13, widgets.body_color()
     if no_users_notice is not None and no_users_notice.content is None:
         no_users_notice.content = widgets.empty_box("No users found. Try another search or change the filters.")
     widgets.style_field(search_field, hint="Search users by name, username, role or office...")
@@ -511,9 +538,16 @@ def build_users_roles_view(
     # A phone gives each filter the card's full width: a dropdown is as wide as its longest
     # option, so a narrower box pushes the arrow outside it.
     phone_width = (page.width or 0) - 72 if widgets.phone else None
-    for control in (role_filter, status_filter, office_filter, permission_filter):
+    filters = [(role_filter, 200), (status_filter, 200), (office_filter, 220), (permission_filter, 260)]
+    if page_size_filter is not None:
+        filters.append((page_size_filter, 110))
+    for control, _ in filters:
         widgets.style_field(control)
         control.width = phone_width
+    # Typing in the permission filter shows the typed text and narrows the list to matching permissions.
+    permission_filter.editable = True
+    permission_filter.enable_filter = True
+    permission_filter.menu_height = 320
     pill = ft.StadiumBorder()
 
     filter_card = surface_card(
@@ -521,8 +555,7 @@ def build_users_roles_view(
             [
                 ft.Row([widgets.labelled(search_field)]),
                 ft.Row(
-                    [widgets.labelled(control, width=phone_width or width)
-                     for control, width in ((role_filter, 200), (status_filter, 200), (office_filter, 220), (permission_filter, 260))],
+                    [widgets.labelled(control, width=phone_width or width) for control, width in filters],
                     spacing=16,
                     run_spacing=12,
                     wrap=True,
@@ -539,7 +572,13 @@ def build_users_roles_view(
                 widgets.card_title(
                     "User Accounts", ft.Icons.PEOPLE_ALT_OUTLINED,
                     subtitle="Use the ⋮ button on a user to view, edit, reset the password or delete.",
-                    trailing=ft.Text(f"{len(user_rows)} user{'s' if len(user_rows) != 1 else ''}", size=13, color=widgets.body_color()),
+                    trailing=ft.Row([
+                        count_text or ft.Text(f"{len(user_rows)} user{'s' if len(user_rows) != 1 else ''}", size=13),
+                        ft.FilledButton(
+                            "Create User", icon=ft.Icons.PERSON_ADD, on_click=open_create_user_dialog, height=40,
+                            style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE),
+                        ),
+                    ], spacing=14, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ),
                 table_container,
                 no_users,
@@ -550,13 +589,7 @@ def build_users_roles_view(
         expand=False,
     )
     sections = [
-        widgets.banner(
-            "Users & Roles", "Manage system accounts, roles, permissions, and account status.", ft.Icons.MANAGE_ACCOUNTS,
-            actions=[ft.FilledButton(
-                "Create User", icon=ft.Icons.PERSON_ADD, on_click=open_create_user_dialog, height=44,
-                style=ft.ButtonStyle(shape=pill, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLUE_800, padding=ft.Padding(18, 0, 18, 0)),
-            )],
-        ),
+        widgets.banner("Users & Roles", "Manage system accounts, roles, permissions, and account status.", ft.Icons.MANAGE_ACCOUNTS),
         filter_card,
         users_card,
     ]

@@ -215,6 +215,15 @@ OFFICE_WORKFLOW_PERMISSIONS = {
     "confirm_document_receipt",
     "view_office_history",
 }
+# Every employee except an office user has these, and they cannot be turned off.
+EMPLOYEE_BASE_PERMISSIONS = frozenset({
+    "view_documents",
+    "search_documents",
+    "filter_documents",
+    "view_document_details",
+    "download_documents",
+    "print_documents",
+})
 VALID_PERMISSIONS = {
     permission
     for permissions in DEFAULT_ROLE_PERMISSIONS.values()
@@ -324,6 +333,13 @@ def validate_permissions(value) -> list[str]:
 def get_default_permissions_for_role(role: str | None) -> list[str]:
     normalized = normalize_user_role(role)
     return list(DEFAULT_ROLE_PERMISSIONS.get(normalized, []))
+
+
+def is_office_user(role, office_id, permissions) -> bool:
+    """An office user account: an Employee with an office and nothing beyond the office workflow
+    permissions (made by Create Office User Account). It may only ever hold office permissions."""
+    return (normalize_user_role(role) == "Employee" and office_id not in (None, "")
+            and normalize_permissions(permissions) <= OFFICE_WORKFLOW_PERMISSIONS)
 
 
 def user_has_permission(user: models.User, permission: str) -> bool:
