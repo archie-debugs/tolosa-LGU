@@ -431,6 +431,7 @@ def build_users_roles_view(
     unlock_user=None,
     page_size_filter=None,
     count_text=None,
+    pager=None,
 ):
     user_rows = []
     for user in users_data:
@@ -582,6 +583,7 @@ def build_users_roles_view(
                 ),
                 table_container,
                 no_users,
+                *([pager] if pager is not None else []),
             ],
             spacing=16,
         ),
