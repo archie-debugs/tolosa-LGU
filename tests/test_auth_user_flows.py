@@ -46,7 +46,7 @@ def reset_db():
         db.query(models.DocumentType).delete()
         db.query(models.RegistrationRequest).delete()
         db.add_all([
-            models.Office(name="SB Secretariat"),
+            models.Office(name="SB Secretariat", is_main=True),
             models.Office(name="Office of the Mayor"),
             models.DocumentType(name="Ordinance"),
         ])
@@ -733,23 +733,28 @@ def test_user_offices_support_assignment_update_and_unassigned_users():
     # An office employee keeps general permissions as well as office ones, and the basic document ones every employee has.
     assert set(office_permissions) == {"register_documents", "manage_permissions", "view_office_documents"} | EMPLOYEE_BASE_PERMISSIONS
 
-    updated = client.put(
-        f"/auth/users/{office_user['id']}",
-        headers=admin_headers,
-        json={
-            "full_name": "Office User",
-            "username": "officeuser",
-            "email": "office@example.com",
-            "role": "Employee",
-            "status": "Active",
-            "permissions": office_permissions,
-            "office_id": mayor_id,
-        },
-    )
+    def move_to_mayor(permissions):
+        return client.put(
+            f"/auth/users/{office_user['id']}",
+            headers=admin_headers,
+            json={
+                "full_name": "Office User",
+                "username": "officeuser",
+                "email": "office@example.com",
+                "role": "Employee",
+                "status": "Active",
+                "permissions": permissions,
+                "office_id": mayor_id,
+            },
+        )
+
+    # The Mayor's office is an outside office: only office permissions go with the account.
+    assert move_to_mayor(office_permissions).status_code == 400
+    updated = move_to_mayor(["view_office_documents"])
     assert updated.status_code == 200, updated.text
     updated_user = next(item for item in client.get("/auth/users", headers=admin_headers).json() if item["username"] == "officeuser")
     assert updated_user["department"] == "Office of the Mayor"
-    assert updated_user["permissions"] == office_permissions
+    assert updated_user["permissions"] == ["view_office_documents"]
     with SessionLocal() as db:
         assert db.query(models.AuditLog).filter(
             models.AuditLog.action == "USER_OFFICE_CHANGED",
@@ -1335,7 +1340,7 @@ def test_non_super_admin_cannot_manage_offices_or_assign_office():
     client = TestClient(main.app)
     admin_headers = bearer_headers(client)
     with SessionLocal() as db:
-        office = models.Office(name="Planning Office", office_code="PLAN")
+        office = models.Office(name="Planning Office", office_code="PLAN", is_main=True)
         manager = models.User(
             username="officemanager",
             hashed_password=get_password_hash("managerpass"),

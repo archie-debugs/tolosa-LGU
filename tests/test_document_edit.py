@@ -18,7 +18,7 @@ def client(tmp_path, monkeypatch):
     with SessionLocal() as db:
         for table in reversed(models.Base.metadata.sorted_tables):
             db.execute(table.delete())
-        records = models.Office(name="Records Office")
+        records = models.Office(name="Records Office", is_main=True)
         db.add_all([
             records,
             models.Office(name="Office of the Mayor"),

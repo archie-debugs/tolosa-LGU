@@ -19,7 +19,7 @@ def setup_documents():
     with SessionLocal() as db:
         for table in reversed(models.Base.metadata.sorted_tables):
             db.execute(table.delete())
-        offices = {code: models.Office(name=f"Office {code}", office_code=f"OFF{code}") for code in "AB"}
+        offices = {code: models.Office(name=f"Office {code}", office_code=f"OFF{code}", is_main=code == "A") for code in "AB"}
         db.add_all(offices.values())
         db.commit()
         db.add_all([

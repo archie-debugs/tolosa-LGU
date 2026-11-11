@@ -25,6 +25,7 @@ from ..core import (
     is_temporary_email,
     temporary_email,
     is_office_user,
+    is_outside_office,
     require_permission,
     require_user_management_permission,
     user_has_permission,
@@ -34,6 +35,8 @@ from ..auth_jwt import create_access_token, create_refresh_token, decode_access_
 from .council import POSITIONS as COUNCIL_POSITIONS
 
 router = APIRouter()
+
+OUTSIDE_OFFICE_ONLY = "Accounts in an outside office can only have office permissions."
 
 
 class UserUpdate(BaseModel):
@@ -150,6 +153,18 @@ async def register_user(
     if existing_user:
         raise HTTPException(status_code=409, detail=f"Username '{username}' already exists")
 
+    office = None
+    if office_id not in (None, ""):
+        if normalize_user_role(current_admin.role) != "Super Administrator":
+            raise HTTPException(status_code=403, detail="Only a Super Administrator can assign an office")
+        try:
+            office = db.query(models.Office).filter(models.Office.id == int(office_id)).first()
+        except (TypeError, ValueError):
+            office = None
+        if not office or not office.is_active:
+            raise HTTPException(status_code=400, detail="An active office is required")
+    outside_office = normalized_role == "Employee" and is_outside_office(office)
+
     office_assignment_requested = office_id not in (None, "")
     if "permissions" in data:
         permission_list = validate_permissions(permissions)
@@ -164,19 +179,11 @@ async def register_user(
         if normalize_user_role(current_admin.role) != "Super Administrator":
             raise HTTPException(status_code=403, detail="Only a Super Administrator can create a Super Administrator")
         permission_list = ["*"]
+    elif outside_office:
+        if not set(permission_list) <= OFFICE_WORKFLOW_PERMISSIONS:
+            raise HTTPException(status_code=400, detail=OUTSIDE_OFFICE_ONLY)
     elif normalized_role == "Employee" and not is_office_user(normalized_role, office_id, permission_list):
         permission_list = sorted(set(permission_list) | EMPLOYEE_BASE_PERMISSIONS)
-
-    office = None
-    if office_id not in (None, ""):
-        if normalize_user_role(current_admin.role) != "Super Administrator":
-            raise HTTPException(status_code=403, detail="Only a Super Administrator can assign an office")
-        try:
-            office = db.query(models.Office).filter(models.Office.id == int(office_id)).first()
-        except (TypeError, ValueError):
-            office = None
-        if not office or not office.is_active:
-            raise HTTPException(status_code=400, detail="An active office is required")
 
     if normalized_role != "Super Administrator" and "permissions" in data:
         _check_grantable(current_admin, normalized_role, permission_list, already=EMPLOYEE_BASE_PERMISSIONS)
@@ -277,7 +284,7 @@ def list_user_offices(
     current_admin: models.User = Depends(require_user_management_permission("view_users")),
 ):
     return [
-        {"id": office.id, "name": office.name, "office_code": office.office_code}
+        {"id": office.id, "name": office.name, "office_code": office.office_code, "is_main": bool(office.is_main)}
         for office in db.query(models.Office)
         .filter(models.Office.is_active.is_(True))
         .order_by(models.Office.name.asc())
@@ -324,9 +331,10 @@ def update_user(
     next_office_id = payload.office_id if office_id_supplied else user.office_id
     requested_permissions = validate_permissions(payload.permissions)
     if not target_is_super_admin and normalized_role == "Employee":
-        if is_office_user(user.role, user.office_id, user.permissions) and next_office_id is not None:
+        next_office = db.get(models.Office, next_office_id) if next_office_id is not None else None
+        if is_outside_office(next_office):
             if not set(requested_permissions) <= OFFICE_WORKFLOW_PERMISSIONS:
-                raise HTTPException(status_code=400, detail="An office user account can only have office permissions.")
+                raise HTTPException(status_code=400, detail=OUTSIDE_OFFICE_ONLY)
         else:
             requested_permissions = sorted(set(requested_permissions) | EMPLOYEE_BASE_PERMISSIONS)
     if not target_is_super_admin and set(requested_permissions) != normalize_permissions(user.permissions):

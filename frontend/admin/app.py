@@ -2740,7 +2740,6 @@ def main(page: ft.Page, session=None):
             edit_office=open_edit_office_dialog,
             view_office_users=open_view_office_users_dialog,
             office_table_holder=office_table_holder,
-            create_employee=lambda _: open_create_user_dialog(employee_only=True),
             unlock_user=unlock_user if current_user_role == "Super Administrator" else None,
             page_size_filter=user_page_size,
             count_text=user_count_text,
@@ -2765,6 +2764,10 @@ def main(page: ft.Page, session=None):
             value="Active" if not editing or office.get("is_active") else "Inactive",
             **field_style,
         )
+        office_main = ft.Switch(
+            label="Main office: its employees can see every document. Other offices only see documents passed to them.",
+            value=bool((office or {}).get("is_main")),
+        )
         error_message = _Notice()
 
         def save_office(_):
@@ -2776,6 +2779,7 @@ def main(page: ft.Page, session=None):
                 "name": office_name.value.strip(),
                 "office_code": office_code.value.strip(),
                 "is_active": office_status.value == "Active",
+                "is_main": bool(office_main.value),
             }
             try:
                 response = http.put(
@@ -2811,6 +2815,7 @@ def main(page: ft.Page, session=None):
                     _labelled(widgets, office_code, "Office code", ft.Icons.TAG, required=True, col=half),
                     _labelled(widgets, office_status, "Status", ft.Icons.TOGGLE_ON_OUTLINED, col=half),
                 ], spacing=14, run_spacing=12),
+                office_main,
             ]),
             error_message.box,
         ], spacing=14, tight=True)
@@ -2889,14 +2894,14 @@ def main(page: ft.Page, session=None):
         dialog.open = True
         page.update()
 
-    def open_create_user_dialog(employee_only=False):
+    def open_create_user_dialog(_=None):
         widgets = TrackingWidgets(page)
         field_style = _field_style(widgets)
         full_name = ft.TextField(hint_text="e.g. Juan Dela Cruz", autofocus=True, **field_style)
         username = ft.TextField(hint_text="Used to sign in", **field_style)
         password = ft.TextField(hint_text="Temporary password", password=True, can_reveal_password=True, **field_style)
         confirm_password = ft.TextField(hint_text="Type it again", password=True, can_reveal_password=True, **field_style)
-        role_choice = None if employee_only else ft.Dropdown(
+        role_choice = ft.Dropdown(
             options=[
                 ft.dropdown.Option("Employee"),
                 ft.dropdown.Option("SB Member"),
@@ -2904,7 +2909,7 @@ def main(page: ft.Page, session=None):
             value="Employee",
             **field_style,
         )
-        office_placeholder = "Select an office" if employee_only else "Unassigned"
+        office_placeholder = "Unassigned"
         office_choice = ft.Dropdown(
             options=[ft.dropdown.Option(office_placeholder)] + [
                 ft.dropdown.Option(item["name"])
@@ -2915,7 +2920,7 @@ def main(page: ft.Page, session=None):
             **field_style,
         )
         half = {"xs": 12, "sm": 6}
-        office_block = _labelled(widgets, office_choice, "Department/Office", ft.Icons.APARTMENT, required=employee_only, col=None if employee_only else half)
+        office_block = _labelled(widgets, office_choice, "Department/Office", ft.Icons.APARTMENT, col=half)
         # Saved on the account so Members & Committees can add this person to a term without retyping it.
         sb_position_choice = ft.Dropdown(options=[ft.dropdown.Option(item) for item in SB_POSITIONS], hint_text="Select a position", **field_style)
         sb_position_block = _labelled(widgets, sb_position_choice, "SB position", ft.Icons.EVENT_SEAT_OUTLINED, required=True, col=half)
@@ -2926,34 +2931,29 @@ def main(page: ft.Page, session=None):
         office_permission_labels = OFFICE_EMPLOYEE_PERMISSION_GROUP["Office Workflow"]
 
         def selected_role():
-            return "Employee" if employee_only else role_choice.value
+            return role_choice.value
 
         def has_office():
             return office_choice.value != office_placeholder
 
+        def outside_office_chosen():
+            chosen = next((item for item in office_options if item.get("name") == office_choice.value), None)
+            return chosen is not None and not chosen.get("is_main")
+
         def create_permission_groups():
+            # An outside office only ever gets office permissions, as the backend enforces.
+            if outside_office_chosen():
+                return dict(OFFICE_EMPLOYEE_PERMISSION_GROUP)
             # Office permissions only work with an office, so they are listed only for office employees.
             return {**OFFICE_EMPLOYEE_PERMISSION_GROUP, **EMPLOYEE_PERMISSION_GROUPS} if has_office() else dict(EMPLOYEE_PERMISSION_GROUPS)
 
         def render_permission_section():
             permission_area.controls.clear()
-            office_block.visible = employee_only or selected_role() == "Employee"
+            office_block.visible = selected_role() == "Employee"
             if not office_block.visible:
                 office_choice.value = office_placeholder
             sb_position_block.visible = selected_role() == "SB Member"
-            if employee_only:
-                permission_area.controls.append(widgets.hint(
-                    "This employee will automatically receive access to:" if has_office() else "Select an office to automatically assign the standard office permissions.",
-                ))
-                if has_office():
-                    permission_area.controls.append(ft.Column([
-                        ft.Row([
-                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.GREEN_600),
-                            ft.Text(label, size=12, color=widgets.body_color()),
-                        ], spacing=8)
-                        for label in office_permission_labels
-                    ], spacing=4))
-            elif selected_role() == "Employee":
+            if selected_role() == "Employee":
                 if has_office():
                     office_keys = {permission_key(label) for label in office_permission_labels}
                     # Choosing an office starts with all office permissions on.
@@ -2966,11 +2966,13 @@ def main(page: ft.Page, session=None):
                 else:
                     permission_area.controls.append(widgets.hint("Turn on what this employee may do."))
                 permission_area.controls.append(widgets.hint(
+                    "This is an outside office, so the account can only have office permissions."
+                    if outside_office_chosen() else
                     "Viewing, searching, filtering, opening, downloading and printing documents are always on for employees."
                 ))
                 permission_area.controls.append(build_permission_list(
                     widgets, selected_create_permissions, create_permission_groups(), render_permission_section, picker_state,
-                    locked=EMPLOYEE_BASE_KEYS,
+                    locked=frozenset() if outside_office_chosen() else EMPLOYEE_BASE_KEYS,
                 ))
             else:
                 permission_area.controls.append(widgets.hint("SB Members get read-only access:"))
@@ -2980,8 +2982,7 @@ def main(page: ft.Page, session=None):
                 permission_area.controls.append(widgets.hint("SB Members do not have QR Tracking, registration, editing, or user-management access."))
             page.update()
 
-        if role_choice is not None:
-            role_choice.on_change = lambda _: render_permission_section()
+        role_choice.on_change = lambda _: render_permission_section()
         office_choice.on_change = lambda _: render_permission_section()
         render_permission_section()
 
@@ -3007,10 +3008,6 @@ def main(page: ft.Page, session=None):
                 ),
                 None,
             )
-            if employee_only and selected_office is None:
-                error_message.value = "Please select a Department/Office."
-                page.update()
-                return
 
             if selected_role() == "SB Member" and not sb_position_choice.value:
                 error_message.value = "Please select the SB Member's position."
@@ -3044,7 +3041,7 @@ def main(page: ft.Page, session=None):
             }
             permissions = sorted(selected_create_permissions & available_permissions)
             # Always sent for an employee, so turning nothing on means no permissions.
-            if not employee_only and selected_role() == "Employee":
+            if selected_role() == "Employee":
                 payload["permissions"] = permissions
 
             try:
@@ -3087,7 +3084,7 @@ def main(page: ft.Page, session=None):
 
         error_message = _Notice()
 
-        role_row = [office_block] if employee_only else [
+        role_row = [
             _labelled(widgets, role_choice, "Role", ft.Icons.BADGE_OUTLINED, required=True, col=half),
             office_block,
             sb_position_block,
@@ -3105,7 +3102,7 @@ def main(page: ft.Page, session=None):
                     _labelled(widgets, confirm_password, "Confirm password", ft.Icons.KEY, required=True, col=half),
                 ], spacing=14, run_spacing=12),
             ]),
-            _section(widgets, ft.Icons.SHIELD_OUTLINED, "Office access" if employee_only else "Role and access", [
+            _section(widgets, ft.Icons.SHIELD_OUTLINED, "Role and access", [
                 ft.ResponsiveRow(role_row, spacing=14, run_spacing=12),
                 permission_area,
             ]),
@@ -3114,14 +3111,14 @@ def main(page: ft.Page, session=None):
 
         dialog = ft.AlertDialog()
         _style_dialog(
-            dialog, widgets, "Create Office User Account" if employee_only else "Create User Account", content,
+            dialog, widgets, "Create User Account", content,
             [
                 ft.TextButton("Cancel", on_click=lambda _: close_dialog(dialog)),
                 _primary_button("Create Account", ft.Icons.PERSON_ADD, create_account),
             ],
             _dialog_width(page, False),
-            subtitle="Add an employee and give them their office's standard access." if employee_only else "Add an employee or SB Member and choose what they can access.",
-            icon=ft.Icons.BADGE_OUTLINED if employee_only else ft.Icons.PERSON_ADD,
+            subtitle="Add an employee or SB Member and choose what they can access.",
+            icon=ft.Icons.PERSON_ADD,
             on_close=lambda: close_dialog(dialog),
         )
         page.overlay.append(dialog)
@@ -3241,8 +3238,13 @@ def main(page: ft.Page, session=None):
         def edit_has_office():
             return role_choice.value == "Employee" and office_choice.value not in (None, "", "Unassigned")
 
+        def outside_office_chosen():
+            chosen = next((item for item in edit_office_options if item.get("name") == office_choice.value), None)
+            return chosen is not None and not chosen.get("is_main")
+
         def staying_office_user():
-            return office_user and role_choice.value == "Employee"
+            # The office decides: an outside office only has office permissions, the main office can have any.
+            return role_choice.value == "Employee" and outside_office_chosen()
 
         def edit_permission_groups():
             # An office user account can only have office permissions.
@@ -3265,7 +3267,7 @@ def main(page: ft.Page, session=None):
                 locked = frozenset() if staying_office_user() else EMPLOYEE_BASE_KEYS
                 selected_permissions.update(locked)
                 if staying_office_user():
-                    permission_cards.controls.append(widgets.hint("This is an office user account, so it can only have office permissions."))
+                    permission_cards.controls.append(widgets.hint("This account is in an outside office, so it can only have office permissions."))
                 else:
                     permission_cards.controls.append(widgets.hint(
                         "Viewing, searching, filtering, opening, downloading and printing documents are always on for employees."
