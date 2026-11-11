@@ -32,6 +32,7 @@ from .routes.order_of_business import router as order_of_business_router
 from .routes.measure_stages import router as measure_stages_router
 from .routes.print_list import router as print_list_router
 from .routes.temporary_documents import router as temporary_documents_router
+from .routes.profile import router as profile_router
 
 refresh_development_public_urls()
 
@@ -106,6 +107,7 @@ app.include_router(order_of_business_router)
 app.include_router(measure_stages_router)
 app.include_router(print_list_router)
 app.include_router(temporary_documents_router)
+app.include_router(profile_router)
 
 
 @app.on_event("startup")

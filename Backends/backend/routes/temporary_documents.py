@@ -26,8 +26,9 @@ from ..authentication import ensure_active_user, get_current_user
 from ..core import TEMP_UPLOAD_DIR, UPLOAD_DIR, lgu_today, record_audit_log, require_permission
 from ..database import get_db
 from ..tracking_numbers import standard_document_type
+from .settings import max_upload_bytes, too_large
 from .documents import (
-    ALLOWED_EXTENSIONS, MAX_FILE_SIZE, _images_to_pdf, _is_image, _pdf_name, _public_base_url, _remove_staged, _staged_name,
+    ALLOWED_EXTENSIONS, _images_to_pdf, _is_image, _pdf_name, _public_base_url, _remove_staged, _staged_name,
     _staged_pages,
 )
 
@@ -173,8 +174,10 @@ def add_moa(payload: MoaEntry, db: Session = Depends(get_db), current_user: mode
     except Exception:
         raise HTTPException(status_code=404, detail="Uploaded file not found. Upload it again.")
     size = os.path.getsize(tmp_path)
-    if size == 0 or size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="The file is empty or larger than 25 MB")
+    if size == 0:
+        raise HTTPException(status_code=400, detail="The file is empty")
+    if size > max_upload_bytes(db):
+        raise HTTPException(status_code=400, detail=too_large(db))
     os.makedirs(TEMPORARY_DIR, exist_ok=True)
     if page_paths or _is_image(original_filename):
         # Photos or scans are stored as one PDF, as when registering a document.

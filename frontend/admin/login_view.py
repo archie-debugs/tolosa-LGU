@@ -64,7 +64,7 @@ def _label(text):
     )
 
 
-def _brand_panel():
+def _brand_panel(system_name):
     copy_box = ft.Container(
         content=ft.Column(
             [
@@ -78,7 +78,7 @@ def _brand_panel():
                         text_align=ft.TextAlign.CENTER),
                 ft.Container(width=78, height=5, bgcolor=ACCENT, margin=ft.margin.only(top=24, bottom=20)),
                 ft.Container(
-                    ft.Text("Document Tracking Management System", size=18, weight=ft.FontWeight.W_600,
+                    ft.Text(system_name, size=18, weight=ft.FontWeight.W_600,
                             color=ft.Colors.WHITE, text_align=ft.TextAlign.CENTER),
                     padding=ft.padding.only(bottom=12),
                 ),
@@ -157,8 +157,10 @@ def field_height(page):
     return 57 if (page.width or 1024) <= 720 else 62
 
 
-def build_login_view(page, *, username_field, password_field, code_box, error_text, on_login, on_back):
-    """code_box is field_box(code_field, field_height(page)); the caller shows it when the second step is needed."""
+def build_login_view(page, *, username_field, password_field, code_box, error_text, on_login, on_back,
+                     system_name="Legislative Document Tracking Management System"):
+    """code_box is field_box(code_field, field_height(page)); the caller shows it when the second step is needed.
+    `system_name` is the name set in Settings."""
     width = page.width or 1024
     compact = width <= 720
     brand_share, form_share = (544, 456) if width > 1000 else (44, 56)
@@ -236,7 +238,7 @@ def build_login_view(page, *, username_field, password_field, code_box, error_te
 
     return ft.Row(
         [
-            ft.Container(content=_brand_panel(), expand=brand_share),
+            ft.Container(content=_brand_panel(system_name), expand=brand_share),
             ft.Container(content=_ribbon_background(card, compact=False), expand=form_share),
         ],
         spacing=0,

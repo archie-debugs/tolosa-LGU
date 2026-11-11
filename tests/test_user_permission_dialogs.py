@@ -98,7 +98,7 @@ def test_create_user_starts_with_only_the_basic_document_permissions_on_and_save
 
     fire(listed["Register Documents"], "on_change", True)
     fields = [c for c in walk(form) if isinstance(c, ft.TextField)]
-    for field, value in zip(fields, ["New Clerk", "newclerk", "new@example.com", "longenough", "longenough"]):
+    for field, value in zip(fields, ["New Clerk", "newclerk", "longenough", "longenough"]):
         field.value = value
     click(button(form, "Create Account"))
 

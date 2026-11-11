@@ -2145,6 +2145,8 @@ def main(page: ft.Page, session=None):
                                       label_color=TrackingWidgets(page).muted_color()),
                 open_page=open_nav_page,
                 pages={item[1] for item in nav_items},
+                files=registration_files,
+                reload=lambda: open_nav_page("Settings"),
             )
         if is_employee():
             return build_employee_settings_view(
@@ -2153,6 +2155,8 @@ def main(page: ft.Page, session=None):
                 profile=profile,
                 change_password=open_change_password,
                 edit_profile=lambda: open_profile_dialog(page, edit_profile_dialog, backend_api, profile, on_saved=settings_profile_saved),
+                files=registration_files,
+                reload=lambda: open_nav_page("Settings"),
             )
         return ft.Column([ft.Text("Settings are not available for this account.")])
 
@@ -2886,7 +2890,6 @@ def main(page: ft.Page, session=None):
         field_style = _field_style(widgets)
         full_name = ft.TextField(hint_text="e.g. Juan Dela Cruz", autofocus=True, **field_style)
         username = ft.TextField(hint_text="Used to sign in", **field_style)
-        email = ft.TextField(hint_text="name@example.com", **field_style)
         password = ft.TextField(hint_text="Temporary password", password=True, can_reveal_password=True, **field_style)
         confirm_password = ft.TextField(hint_text="Type it again", password=True, can_reveal_password=True, **field_style)
         role_choice = None if employee_only else ft.Dropdown(
@@ -2979,8 +2982,8 @@ def main(page: ft.Page, session=None):
         render_permission_section()
 
         def create_account(_):
-            if not full_name.value or not username.value or not email.value:
-                error_message.value = "Full name, username, and email are required."
+            if not full_name.value or not username.value:
+                error_message.value = "Full name and username are required."
                 page.update()
                 return
 
@@ -3024,7 +3027,6 @@ def main(page: ft.Page, session=None):
                 "username": username.value.strip(),
                 "password": password.value,
                 "full_name": full_name.value.strip(),
-                "email": email.value.strip(),
                 "role": selected_role(),
             }
             if selected_office:
@@ -3061,7 +3063,7 @@ def main(page: ft.Page, session=None):
                     "id": body.get("id"),
                     "full_name": full_name.value,
                     "username": body.get("username", username.value.strip()),
-                    "email": email.value,
+                    "email": body.get("email"),
                     "role": body.get("role") or selected_role(),
                     "office_id": body.get("office_id"),
                     "sb_position": body.get("sb_position"),
@@ -3089,10 +3091,9 @@ def main(page: ft.Page, session=None):
         content = ft.Column([
             _section(widgets, ft.Icons.PERSON_OUTLINE, "Account details", [
                 _labelled(widgets, full_name, "Full name", ft.Icons.PERSON, required=True),
-                ft.ResponsiveRow([
-                    _labelled(widgets, username, "Username", ft.Icons.ALTERNATE_EMAIL, required=True, col=half),
-                    _labelled(widgets, email, "Email", ft.Icons.EMAIL_OUTLINED, required=True, col=half),
-                ], spacing=14, run_spacing=12),
+                _labelled(widgets, username, "Username", ft.Icons.ALTERNATE_EMAIL, required=True),
+                # No email here: the account gets a temporary one, which the user replaces and verifies in Settings.
+                widgets.hint("The account gets a temporary email. The user changes it to their own and verifies it with Google in Settings."),
             ]),
             _section(widgets, ft.Icons.LOCK_OUTLINE, "Password", [
                 ft.ResponsiveRow([
@@ -3553,6 +3554,25 @@ def main(page: ft.Page, session=None):
                 pass
         return current_profile
 
+    def email_notice(profile):
+        """Above every page until the email is verified: what to do, and a way to Settings."""
+        has_settings = any(item[1] == "Settings" for item in nav_items)
+        if not profile or profile.get("email_verified") or not has_settings:
+            return None
+        text = ("Your account has a temporary email. Change it to your own and verify it with Google in Settings."
+                if profile.get("email_temporary") else "Your email isn't verified yet. Verify it with Google in Settings.")
+        return ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.MARK_EMAIL_UNREAD_OUTLINED, color=ft.Colors.AMBER_900, size=20),
+                ft.Text(text, size=13, color=ft.Colors.AMBER_900, weight=ft.FontWeight.W_500, expand=True),
+                ft.TextButton("Open Settings", on_click=lambda _: open_nav_page("Settings")),
+            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(14, 6, 8, 6),
+            bgcolor=ft.Colors.AMBER_50,
+            border=ft.border.all(1, ft.Colors.AMBER_200),
+            border_radius=10,
+        )
+
     def show_shell(view, initial_selected_index=0):
         if not runtime_token and not AUTH_TOKEN:
             return  # the session ended while this screen was being built; stay on the login screen
@@ -3565,7 +3585,9 @@ def main(page: ft.Page, session=None):
                 "name": profile.get("full_name") or current_user,
                 "role": profile.get("role") or current_user_role,
                 "office": profile.get("office"),
+                "avatar": profile.get("avatar"),
                 "on_change_password": open_change_password,
+                "notice": email_notice(profile),
             },
             notifications={
                 # The bell keeps checking every 30s; once signed out it has nothing to ask for.
@@ -4094,9 +4116,20 @@ def main(page: ft.Page, session=None):
                 error_text=login_error,
                 on_login=attempt_login,
                 on_back=go_back,
+                system_name=site_name(),
             )
         )
         page.update()
+
+    def site_name():
+        """The system's name from Settings, which also titles the browser tab."""
+        try:
+            name = http.get(f"{BACKEND_URL}/public/site", verify=False, timeout=5).json().get("system_name")
+        except Exception:
+            name = None
+        name = name or "Legislative Document Tracking Management System"
+        page.title = name
+        return name
 
     office_dashboard_refresh = lambda: None
 

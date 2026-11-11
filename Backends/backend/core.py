@@ -238,8 +238,9 @@ DEFAULT_HOMEPAGE_ANNOUNCEMENTS = [
 ]
 
 DEFAULT_SYSTEM_SETTINGS = {
-    "organization_name": "LGU Tolosa",
-    "system_name": "LGU Tolosa Legislative Document Tracking System",
+    # Shown on the login page, the public pages' footer and the browser tab.
+    "organization_name": "Municipality of Tolosa",
+    "system_name": "Legislative Document Tracking Management System",
     "public_portal_enabled": True,
     "maintenance_mode": False,
     "session_timeout_minutes": 60,
@@ -333,6 +334,19 @@ def validate_permissions(value) -> list[str]:
 def get_default_permissions_for_role(role: str | None) -> list[str]:
     normalized = normalize_user_role(role)
     return list(DEFAULT_ROLE_PERMISSIONS.get(normalized, []))
+
+
+# A new account gets a placeholder email the user replaces with their own and verifies with Google
+# in Settings. ".invalid" is reserved (RFC 2606), so mail to it can never reach anyone.
+TEMPORARY_EMAIL_DOMAIN = "temporary.sbtolosa.invalid"
+
+
+def temporary_email(username: str) -> str:
+    return f"{re.sub(r'[^A-Za-z0-9._-]', '-', username)}@{TEMPORARY_EMAIL_DOMAIN}"
+
+
+def is_temporary_email(email) -> bool:
+    return str(email or "").strip().lower().endswith("@" + TEMPORARY_EMAIL_DOMAIN)
 
 
 def is_office_user(role, office_id, permissions) -> bool:

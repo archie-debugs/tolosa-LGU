@@ -277,7 +277,7 @@ class TemporaryDocuments:
     def moa_area(self):
         chosen, pages = self.state["file"], self.state["pages"]
         controls = [
-            self.widgets.hint("PDF or Word, up to 25 MB, or photos or scans (JPG, PNG) of its pages, saved as one PDF. "
+            self.widgets.hint("PDF or Word, or photos or scans (JPG, PNG) of its pages, saved as one PDF. "
                               "It stays for this day, then is archived for 30 days."),
             ft.Row([
                 ft.OutlinedButton("Choose file…", icon=ft.Icons.ATTACH_FILE, on_click=lambda _: self.pick_file(), disabled=self.state["busy"]),

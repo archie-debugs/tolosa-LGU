@@ -5,7 +5,8 @@ Every service and every role- or permission-specific dependency builds on
 registered session) cannot drift apart between them again.
 """
 
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
@@ -30,6 +31,31 @@ class AccountNotAuthenticated(HTTPException):
         super().__init__(status_code=401, detail=detail)
 
 
+DEFAULT_IDLE_MINUTES = 60
+
+
+def idle_minutes(db: Session) -> int:
+    """The Session Timeout setting: minutes without any request after which a session ends."""
+    raw = db.query(models.SystemSetting.value).filter(models.SystemSetting.key == "session_timeout_minutes").scalar()
+    try:
+        return max(5, int(json.loads(raw))) if raw is not None else DEFAULT_IDLE_MINUTES
+    except (TypeError, ValueError):
+        return DEFAULT_IDLE_MINUTES
+
+
+def end_if_idle(db: Session, session: models.UserSession, now: datetime) -> None:
+    """Revoke `session` and refuse the request when it has been unused for longer than the Session Timeout."""
+    last = session.last_activity
+    if last is None:
+        return
+    last = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+    minutes = idle_minutes(db)
+    if now - last > timedelta(minutes=minutes):
+        session.revoked_at, session.revoke_reason = now, "idle timeout"
+        db.commit()
+        raise HTTPException(status_code=401, detail=f"Signed out after {minutes} minutes without activity. Log in again.")
+
+
 def validate_registered_session(db: Session, payload: dict, user: models.User) -> None:
     # Every access token must belong to a registered session, so logout, deactivation and
     # administrator revocation always take effect.
@@ -44,6 +70,7 @@ def validate_registered_session(db: Session, payload: dict, user: models.User) -
     expires_at = session.expires_at.replace(tzinfo=timezone.utc) if session and session.expires_at and session.expires_at.tzinfo is None else (session.expires_at if session else None)
     if not session or session.revoked_at or not expires_at or expires_at <= now:
         raise HTTPException(status_code=401, detail="Session is no longer active")
+    end_if_idle(db, session, now)
     session.last_activity = now
 
 

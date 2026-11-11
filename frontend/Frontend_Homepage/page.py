@@ -32,6 +32,29 @@ if hasattr(ft, "Alignment") and hasattr(ft, "alignment"):
             setattr(ft.Alignment, alignment_name, alignment_value)
 
 
+SITE_DEFAULTS = {
+    "organization_name": "Municipality of Tolosa",
+    "system_name": "Legislative Document Tracking Management System",
+    "public_portal_enabled": True,
+}
+
+
+def load_site():
+    """GET /public/site: the names set in Settings and whether the public portal is open; the defaults if unreachable."""
+    try:
+        response = requests.get(f"{BACKEND_URL}/public/site", timeout=5)
+        response.raise_for_status()
+        site = response.json()
+        if isinstance(site, dict):
+            return {**SITE_DEFAULTS, **{key: site[key] for key in SITE_DEFAULTS if key in site}}
+    except (requests.RequestException, ValueError):
+        pass
+    return dict(SITE_DEFAULTS)
+
+
+PORTAL_CLOSED = "The public portal is closed for now. Staff can still log in."
+
+
 def load_homepage_announcements():
     """The announcements a Super Administrator set in Settings, or the defaults if the backend is unreachable."""
     try:
@@ -220,7 +243,9 @@ def build_homepage_view(page=None):
             shadow=soft_shadow,
         )
 
-    stats = load_homepage_stats()
+    site = load_site()
+    portal_open = site["public_portal_enabled"]
+    stats = load_homepage_stats() if portal_open else None
     stat_row = ft.Row(
         [
             stat_card(ft.Icons.DESCRIPTION_OUTLINED, stats.get("public_documents"), "Public Documents"),
@@ -334,10 +359,10 @@ def build_homepage_view(page=None):
             shadow=soft_shadow,
         )
 
-    announcement_items = load_homepage_announcements()
+    announcement_items = load_homepage_announcements() if portal_open else []
     announcement_rows = [announcement_row(item) for item in announcement_items] or [
         ft.Container(
-            ft.Text("There are no announcements right now.", size=14, color=muted),
+            ft.Text("There are no announcements right now." if portal_open else PORTAL_CLOSED, size=14, color=muted),
             padding=20,
             bgcolor=surface,
             border=ft.border.all(1, line),
@@ -426,8 +451,8 @@ def build_homepage_view(page=None):
                 ft.Container(
                     content=ft.Column(
                         [
-                            theme.brand(subtitle="Municipality of Tolosa", on_blue=True, seal_size=40),
-                            ft.Text("Legislative Document Tracking Management System", size=12, color=theme.ON_BLUE_MUTED),
+                            theme.brand(subtitle=site["organization_name"], on_blue=True, seal_size=40),
+                            ft.Text(site["system_name"], size=12, color=theme.ON_BLUE_MUTED),
                         ],
                         spacing=10,
                     ),

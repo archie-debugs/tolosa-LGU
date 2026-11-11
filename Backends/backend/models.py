@@ -390,6 +390,10 @@ class User(Base):
     role = Column(String, nullable=False, default="Employee")
     full_name = Column(String, nullable=True)
     email = Column(String, nullable=True, index=True)
+    # When the user proved this email is theirs by signing in to Google with it; cleared when the email changes.
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    # Profile picture: a 256×256 JPEG, base64. Kept in the database so every computer shows it.
+    avatar = Column(Text, nullable=True)
     office_id = Column(Integer, ForeignKey("offices.id"), nullable=True, index=True)
     office = relationship("Office", foreign_keys=[office_id], back_populates="users")
     # SB Member accounts only: their seat on the SB, used to fill in the member roster (routes/council.py).
