@@ -301,6 +301,11 @@ def main(page: ft.Page, session=None):
             pass
         return None
 
+    def in_scan_session():
+        """This browser tab was opened from a QR code (see frontend/app.py): it receives and passes
+        documents on the scan screens and never opens the workspace."""
+        return isinstance(page.data, dict) and bool(page.data.get("scan_session"))
+
     def forget_scanned_code():
         """The scan has its answer, so the browser stops remembering the code: otherwise every later
         visit to the workspace in this browser would open that document again."""
@@ -4027,7 +4032,22 @@ def main(page: ft.Page, session=None):
         code_box = login_view.field_box(code_field, login_view.field_height(page))
         login_error = ft.Text("", size=12, color=ft.Colors.RED_700)
 
-        def attempt_login(_):
+        # The phone's Go key and a tap on Log in can both send the form: only the first login counts.
+        # A second one used to find the scanned code already used and open the workspace over the document.
+        login_attempt = {"busy": False, "done": False}
+        login_lock = threading.Lock()
+
+        def attempt_login(e):
+            with login_lock:
+                if login_attempt["busy"] or login_attempt["done"]:
+                    return
+                login_attempt["busy"] = True
+            try:
+                send_login(e)
+            finally:
+                login_attempt["busy"] = False
+
+        def send_login(_):
             nonlocal current_user, current_user_role, current_user_permissions, runtime_token, refresh_token
             username = (username_field.value or "").strip()
             password = password_field.value or ""
@@ -4059,8 +4079,12 @@ def main(page: ft.Page, session=None):
                     current_user = payload.get("username")
                     current_user_role = role
                     current_user_permissions = payload.get("permissions") or []
+                    login_attempt["done"] = True
                     save_session_state()
                     if show_qr_authenticated_state():
+                        return
+                    if in_scan_session():
+                        leave_qr_document()
                         return
                     if role == "SB Member":
                         from frontend.sb_member.app import main as sb_member_main
@@ -4277,10 +4301,12 @@ def main(page: ft.Page, session=None):
                 current_user_permissions = json.loads(saved_permissions) if saved_permissions else []
             except Exception:
                 current_user_permissions = []
-            if get_pending_qr_token():
+            if get_pending_qr_token() or in_scan_session():
                 refresh_runtime_token_if_needed(force=True)
-                if runtime_token:
-                    show_qr_authenticated_state()
+                if not runtime_token:
+                    return False  # the saved login ran out: ask to log in
+                if not show_qr_authenticated_state():
+                    leave_qr_document()
                 return True
             if current_user_role.strip().lower() == "sb member":
                 from frontend.sb_member.app import main as sb_member_main
@@ -4308,9 +4334,9 @@ def main(page: ft.Page, session=None):
         current_user_role = session.get("role") or "Employee"
         current_user_permissions = session.get("permissions") or []
         refresh_runtime_token_if_needed(force=True)
-        if get_pending_qr_token():
-            if runtime_token:
-                show_qr_authenticated_state()
+        if get_pending_qr_token() or in_scan_session():
+            if runtime_token and not show_qr_authenticated_state():
+                leave_qr_document()
             return
         nav_items[:] = build_nav_items()
         initial_view = nav_items[0][2]() if nav_items else ft.Column([ft.Text("No available modules for this account.")])
